@@ -112,10 +112,15 @@ In the Replit workspace shell, after the code is in the Repl:
    (32+ random characters, e.g. from `python -c "import secrets; print(secrets.token_urlsafe(48))"`).
 3. Run:
    ```bash
-   pip install -r requirements.txt
+   sh scripts/replit-setup.sh         # installs the packages into .venv
+   . .venv/bin/activate               # once per new Shell tab
    flask --app wsgi db upgrade
    flask --app wsgi db current        # expect: 0002 (head)
    ```
+   Don't use a plain `pip install` on Replit: its Python is read-only and set
+   up for `--user` installs, so it fails with "Permission denied" or "Can not
+   perform a '--user' install". The Run button and the deployment build run
+   the same setup script.
 4. Start the app (Run) and open `/healthz`: `"status": "ok"` and
    `"database_env_matches": true` mean the database is ready and belongs to
    this environment.
@@ -136,7 +141,7 @@ Notes:
 
 ## Deploy (Replit Reserved VM)
 
-`.replit` runs gunicorn on port 5000. Secrets: `APP_ENV`, `SECRET_KEY`,
+`.replit` builds with `scripts/replit-setup.sh` and runs gunicorn from `.venv` on port 5000. Secrets: `APP_ENV`, `SECRET_KEY`,
 `PUBLIC_BASE_URL` (Replit provides `DATABASE_URL`). Run the database steps
 above before the first publish.
 
