@@ -130,9 +130,13 @@ Notes:
   so a staging app pointed at the production database shows up as a mismatch
   on `/healthz`.
 - Replit's published app uses its own production database, separate from the
-  workspace one. Run the same `db upgrade` against it before the first
-  publish and after every release that adds a migration (check Replit's
-  Database tool for how to reach the production database from the shell).
+  workspace one. The published app runs `flask db upgrade` on that database
+  every time it starts (see `.replit`), so publishing applies new migrations
+  by itself.
+- **When publishing, don't approve Replit's "database changes" prompt.**
+  Replit offers to copy the workspace tables to production with its own SQL,
+  which skips the extensions and fails (`type "citext" does not exist`).
+  Cancel or skip it; the app's own migrations do that job.
 - The schema needs the PostgreSQL extensions `citext`, `pg_trgm` and
   `btree_gist`; the first migration installs them. If the upgrade stops with
   "permission denied to create extension", the database user can't install
