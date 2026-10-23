@@ -50,7 +50,7 @@ You need Python 3.12+ and PostgreSQL 16.
 
 ```bash
 python -m venv .venv && . .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements/app.txt
 
 createdb nbc
 cp .env.example .env              # set DATABASE_URL=postgresql:///nbc
@@ -120,7 +120,9 @@ In the Replit workspace shell, after the code is in the Repl:
    Don't use a plain `pip install` on Replit: its Python is read-only and set
    up for `--user` installs, so it fails with "Permission denied" or "Can not
    perform a '--user' install". The Run button and the deployment build run
-   the same setup script.
+   the same setup script. The package list is `requirements/app.txt`; there is
+   deliberately no `requirements.txt` at the root, because Replit's publish
+   step would run its own failing `pip install` on it.
 4. Start the app (Run) and open `/healthz`: `"status": "ok"` and
    `"database_env_matches": true` mean the database is ready and belongs to
    this environment.

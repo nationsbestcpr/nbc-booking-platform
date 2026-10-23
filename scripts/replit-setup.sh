@@ -5,6 +5,10 @@
 # "--user" installs, so a plain `pip install` fails there. A project .venv
 # avoids both. Safe to run again: it only installs what's missing.
 #
+# The package list is requirements/app.txt, not requirements.txt at the root:
+# Replit's publish step runs its own `pip install -r requirements.txt` when it
+# finds that file, and that fails the same way.
+#
 #   sh scripts/replit-setup.sh
 #   . .venv/bin/activate            # then `flask`, `pytest` etc. use .venv
 set -e
@@ -14,5 +18,5 @@ if [ ! -x .venv/bin/python ]; then
   echo "Creating .venv ..."
   python3 -m venv .venv
 fi
-.venv/bin/python -m pip install --quiet -r requirements.txt
+.venv/bin/python -m pip install --quiet -r requirements/app.txt
 echo "Python packages ready in .venv"

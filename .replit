@@ -11,6 +11,13 @@ deploymentTarget = "vm"
 run = ["sh", "-c", ".venv/bin/flask --app wsgi db upgrade && exec .venv/bin/gunicorn --bind 0.0.0.0:5000 --workers 2 --access-logfile - wsgi:app"]
 build = ["sh", "scripts/replit-setup.sh"]
 
+# Replit's own package installer is kept out of the way: no requirements.txt
+# at the root (packages are in requirements/app.txt) and no guessing on Run.
+[packager.features]
+guessImports = false
+packageSearch = false
+enabledForHosting = false
+
 [[ports]]
 localPort = 5000
 externalPort = 80
