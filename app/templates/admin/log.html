@@ -1,0 +1,26 @@
+{% extends "dash/layout.html" %}
+{% block title %}Action log{% endblock %}
+{% block heading %}Action <span class="accent">Log</span>{% endblock %}
+{% block subhead %}<p>Every staff action, newest first. Entries can never be changed or deleted.</p>{% endblock %}
+{% block panel %}
+<section class="panel">
+  <form class="toolbar" method="get" action="{{ url_for('admin.log') }}" role="search">
+    <div class="field"><label for="q">Who</label><input type="search" id="q" name="q" value="{{ q }}" placeholder="Staff or affected person"></div>
+    <div class="field"><label for="area">Kind</label><select id="area" name="area"><option value="">Everything</option>{% for a in areas %}<option value="{{ a }}"{{ ' selected' if a == area }}>{{ {'user': 'People and roles', 'role': 'Role permissions', 'settings': 'Business settings'}.get(a, a|capitalize) }}</option>{% endfor %}</select></div>
+    <button class="pill plain" type="submit">Show</button>
+  </form>
+  {% if rows %}
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>When</th><th>Who</th><th>What</th></tr></thead>
+    <tbody>{% for r in rows %}
+      <tr><td class="num small">{{ r.occurred_at|office_time }}</td>
+        <td>{% if r.actor %}<strong>{{ r.actor }}</strong><br><span class="muted small">as {{ role_names.get(r.acting_role, r.acting_role) }}</span>{% else %}<span class="muted">System</span>{% endif %}</td>
+        <td>{{ r.text }}{% if r.reason %}<br><span class="muted small">{{ r.reason }}</span>{% endif %}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% if more %}<p class="muted small">Showing the latest 200.</p>{% endif %}
+  {% else %}
+  <div class="empty">Nothing logged{% if q or area %} for this search{% endif %} yet.</div>
+  {% endif %}
+</section>
+{% endblock %}

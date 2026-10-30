@@ -1,0 +1,26 @@
+{% extends "dash/layout.html" %}
+{% block title %}Pay{% endblock %}
+{% block heading %}Your <span class="accent">Pay</span>{% endblock %}
+{% block subhead %}<p>One pay record per completed class, at the set rate for your job in that class.</p>{% endblock %}
+{% block panel %}
+{% set labels = {'pending': ('wait', 'Waiting for approval'), 'approved': ('ok', 'Approved'), 'exported': ('ok', 'Sent to bookkeeping'), 'paid': ('ok', 'Paid'), 'void': ('off', 'Void')} %}
+{% if totals %}
+<div class="stats">{% for k, v in totals.items() if k != 'void' %}<div class="stat"><strong class="num">{{ v|money }}</strong><span>{{ labels[k][1] }}</span></div>{% endfor %}</div>
+{% endif %}
+<section class="panel">
+  {% if not linked %}
+    <p class="muted">Your instructor profile isn't linked to this account yet. Ask the operations team.</p>
+  {% elif rows %}
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>Class</th><th>Your job</th><th>Amount</th><th>Status</th></tr></thead>
+    <tbody>{% for r in rows %}
+      <tr><td><strong>{{ r.course_name }}</strong><br><span class="muted small num">{{ class_date(r.starts_at, r.time_zone) }} · {{ r.site_name }}</span></td>
+        <td>{{ 'Lead instructor' if r.role == 'lead' else 'Helper instructor' }}</td><td class="num">{{ r.amount_cents|money }}</td>
+        <td><span class="status {{ labels[r.status][0] }}">{{ labels[r.status][1] }}</span></td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}
+    <p class="muted">No pay records yet. One is created after each class you complete.</p>
+  {% endif %}
+</section>
+{% endblock %}

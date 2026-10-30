@@ -53,6 +53,30 @@ def office_time(value: datetime | None) -> str:
     return d.strftime("%b %-d, %Y %-I:%M %p").replace("AM", "am").replace("PM", "pm") + " ET"
 
 
+_STAFF_WORDS = [("Co-instructor", "Helper instructor"), ("co-instructor", "helper instructor"),
+                ("co instructor", "helper instructor"), ("HUB metros", "Hub cities"), ("metros", "cities"),
+                ("metro", "city"), ("ghl", "GHL"), ("otl", "OTL")]
+
+
+def plain(value: str | None) -> str:
+    """Staff-facing wording for text that comes from the database (setting
+    descriptions): 'helper instructor', not 'co-instructor'; 'city', not 'metro'."""
+    out = value or ""
+    for old, new in _STAFF_WORDS:
+        out = out.replace(old, new)
+    return out
+
+
+def setting_label(key: str) -> str:
+    """'co_instructor_pay_cents' -> 'Helper instructor pay'."""
+    words = key.replace("_", " ")
+    for suffix in (" cents",):
+        if words.endswith(suffix):
+            words = words[: -len(suffix)]
+    words = plain(words)
+    return words[:1].upper() + words[1:]
+
+
 _CERT_WORDS = {"ARC": "Red Cross", "BLS": "BLS", "FA": "First Aid", "CPR": "CPR", "AED": "AED",
                "INSTRUCTOR": "instructor", "TRAINER": "trainer"}
 
@@ -68,6 +92,8 @@ def init_app(app: Flask) -> None:
     app.add_template_filter(cert_label)
     app.add_template_filter(money)
     app.add_template_filter(office_time)
+    app.add_template_filter(plain)
+    app.add_template_filter(setting_label)
     app.add_template_global(local_dt)
     app.add_template_global(class_date)
     app.add_template_global(class_time)

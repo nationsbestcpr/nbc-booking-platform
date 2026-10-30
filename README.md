@@ -178,14 +178,33 @@ Your `.venv`, secrets and databases aren't touched.
 
 `/dashboard` opens the area for the signed-in account, worked out from its
 roles (`app/areas.py`): staff roles → **Admin**, the instructor role →
-**Instructor**, everyone else → **My account** (students and users). Every
-area has Dashboard, Profile and Settings. The admin area adds **Users**
-(`user.manage`), **Roles & permissions** (view with `user.manage` or
-`role.manage`, change with `role.manage`) and **Integrations**
-(`system.health_view`); a tab shows only to accounts holding its permission.
-Every admin change is written to the action log. The database refuses role
+**Instructor**, everyone else → **My account** (students and users). Each area
+has a sidebar; an item shows only to accounts holding its permission, and a
+role limited to one city only sees that city's records.
+
+| Area | Sidebar | Permission |
+|---|---|---|
+| Admin | Dashboard (counts, next classes, recent actions) | any staff role |
+| | Classes, one class (class list, waiting list, prices, instructors) | `class.view`; contact details `student.view`; amounts `payment.view`; access codes `class.packet_view` |
+| | Bookings | `student.view` |
+| | Waiting lists | `waitlist.view` |
+| | Locations (cities, sites, rooms) | `class.view` |
+| | Users (give/remove roles, suspend) | `user.manage` |
+| | Instructors | `instructor.view` |
+| | Roles & permissions | view `user.manage` or `role.manage`; change `role.manage` |
+| | Integrations | `system.health_view` |
+| | Action log | `audit.view` |
+| | Business settings (`app_settings`) | `settings.manage` |
+| Instructor | Dashboard, Certifications, Pay | `own.classes_view`, `own.certs_view`, `own.pay_view` |
+| My account | Dashboard (upcoming, waiting, past classes) | any account |
+| Every area | Profile, Password | any account |
+
+Everything is read live from the schema. The only changes made from these
+pages are role grants, account status, role permissions and business
+settings; each is written to the action log. The database refuses role
 grants by people who aren't allowed to make them, and never lets the last
-active admin be removed or suspended.
+active admin be removed or suspended. `environment` and
+`airtable_writeback_enabled` can't be changed from the screen.
 
 ## Deploy (Replit Reserved VM)
 

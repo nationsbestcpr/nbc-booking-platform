@@ -1,0 +1,32 @@
+{% extends "dash/layout.html" %}
+{% block title %}Classes{% endblock %}
+{% block heading %}Classes <span class="accent">and Seats</span>{% endblock %}
+{% block subhead %}<p>Every class from the schedule, with live seat numbers. Seats count sold, held and Enrollware seats.</p>{% endblock %}
+{% block panel %}
+<section class="panel">
+  <form class="toolbar" method="get" action="{{ url_for('admin.classes') }}">
+    <div class="field"><label for="when">When</label><select id="when" name="when">{% for v, l in [('upcoming', 'Upcoming'), ('past', 'Past'), ('all', 'All')] %}<option value="{{ v }}"{{ ' selected' if f.when == v }}>{{ l }}</option>{% endfor %}</select></div>
+    <div class="field"><label for="city">City</label><select id="city" name="city"><option value="">All cities</option>{% for c in cities %}<option value="{{ c.slug }}"{{ ' selected' if f.city == c.slug }}>{{ c.name }}, {{ c.state_code }}</option>{% endfor %}</select></div>
+    <div class="field"><label for="course">Course</label><select id="course" name="course"><option value="">All courses</option>{% for c in courses %}<option value="{{ c.code }}"{{ ' selected' if f.course == c.code }}>{{ c.name }}</option>{% endfor %}</select></div>
+    <div class="field"><label for="status">Status</label><select id="status" name="status">{% for v, l in [('', 'Any status'), ('on_sale', 'On sale'), ('not_published', 'Not published'), ('cancelled', 'Cancelled'), ('completed', 'Completed')] %}<option value="{{ v }}"{{ ' selected' if f.status == v }}>{{ l }}</option>{% endfor %}</select></div>
+    <button class="pill plain" type="submit">Show</button>
+  </form>
+  <p class="muted small num">{{ rows|length }}{{ '+' if more }} class{{ 'es' if rows|length != 1 }}{% if more %} · showing 200: narrow the filters{% endif %}</p>
+  {% if rows %}
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>Date</th><th>Class</th><th>Where</th><th>Seats</th><th>Waiting</th><th>Lead instructor</th><th>Status</th></tr></thead>
+    <tbody>{% for c in rows %}
+      <tr><td class="num">{{ class_date(c.starts_at, c.time_zone) }}<br><span class="muted small">{{ class_time(c.starts_at, c.ends_at, c.time_zone) }}</span></td>
+        <td><a href="{{ url_for('admin.classes_detail', sid=c.id) }}">{{ c.course_name }}</a><br><span class="muted small">{{ c.delivery_mode|capitalize }}</span></td>
+        <td>{{ c.site_name }}<br><span class="muted small">{{ c.city_name }}</span></td>
+        <td class="num">{{ c.sold_seats + c.external_seats }} / {{ c.seat_limit }}{% if c.held_seats %}<br><span class="muted small">{{ c.held_seats }} on hold</span>{% endif %}</td>
+        <td class="num">{{ c.waitlist_count or '—' }}</td>
+        <td>{{ c.lead or '—' }}</td>
+        <td>{% if c.status == 'cancelled' %}<span class="status off">Cancelled</span>{% elif c.status == 'completed' %}<span class="status off">Completed</span>{% elif not c.is_published %}<span class="status wait">Not published</span>{% elif c.seats_left <= 0 %}<span class="status bad">Full</span>{% else %}<span class="status ok">On sale</span>{% endif %}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}
+  <div class="empty">No classes match. Classes come in from the Airtable sync.</div>
+  {% endif %}
+</section>
+{% endblock %}

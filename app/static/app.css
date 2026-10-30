@@ -176,9 +176,33 @@ fieldset.field { border: 0; padding: 0; margin: 0; }
 .site-footer .fine { grid-column: 1 / -1; max-width: none; border-top: 1px solid rgba(255,255,255,0.15); padding-top: 16px; font-size: 0.8125rem; }
 @media (max-width: 720px) { .site-footer .wrap { grid-template-columns: 1fr; } }
 
-/* Dashboards: same brand language. A navy header strip with the area name,
-   pill tabs (navy when current, like the city filter), white cards. */
-.dash { padding-block: 24px 56px; display: flex; flex-direction: column; gap: 20px; }
+/* Dashboards: same brand language. A navy sidebar with "| label |" section
+   names and the current page as a red pill (like the main menu), a navy
+   header strip, white cards. On phones the sidebar folds into a Menu button. */
+.dash-shell { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 24px; align-items: start; padding-block: 24px 56px; }
+.dash { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.side { background: var(--navy); color: var(--white); border-radius: var(--radius-hero); padding: 18px 14px; position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow-y: auto; }
+.side > summary { display: none; }
+.side nav { display: flex; flex-direction: column; gap: 16px; }
+.side-title { color: var(--white); text-decoration: none; font-weight: 800; font-size: 1.15rem; padding: 4px 12px 0; }
+.side-section { display: flex; flex-direction: column; gap: 4px; }
+.side-label { color: #ffb3b8; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.04em; padding: 0 12px; }
+.side-label::before { content: "| "; } .side-label::after { content: " |"; }
+.side ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.side ul a { display: block; color: #e1e1f2; text-decoration: none; font-weight: 600; font-size: 0.9375rem; padding: 8px 12px; border-radius: 999px; }
+.side ul a:hover { background: rgba(255,255,255,0.1); color: var(--white); }
+.side ul a[aria-current="page"] { background: var(--red); color: var(--white); }
+@media (max-width: 900px) {
+  .dash-shell { grid-template-columns: 1fr; gap: 16px; padding-top: 12px; }
+  .side { position: static; max-height: none; padding: 0; }
+  .side > summary { display: flex; align-items: center; gap: 8px; list-style: none; cursor: pointer; padding: 14px 20px; font-weight: 700; }
+  .side > summary::-webkit-details-marker { display: none; }
+  .side > summary::before { content: "☰"; font-size: 1.1rem; }
+  .side > summary .muted { color: #cfcfe8; }
+  .side[open] > summary { border-bottom: 1px solid rgba(255,255,255,0.15); }
+  .side nav { padding: 14px; }
+  .side-title { display: none; }
+}
 .dash-head { background: var(--navy); color: var(--white); border-radius: var(--radius-hero); padding: clamp(22px, 4vw, 36px); display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: end; justify-content: space-between; position: relative; overflow: hidden; }
 .dash-head::after { content: ""; position: absolute; right: -90px; top: -110px; width: 300px; height: 300px; border-radius: 50%; border: 46px solid rgba(255,255,255,0.05); }
 .dash-head .stack { display: flex; flex-direction: column; gap: 8px; position: relative; z-index: 1; min-width: 0; }
@@ -187,10 +211,6 @@ fieldset.field { border: 0; padding: 0; margin: 0; }
 .dash-head h1 .accent { color: #ffb3b8; display: block; }
 .dash-head p { color: #d9d9ee; }
 .dash-head .role-badge { position: relative; z-index: 1; background: var(--white); color: var(--navy); }
-.tabs { display: flex; flex-wrap: wrap; gap: 8px; }
-.tabs a { border: 1.5px solid var(--navy); color: var(--navy); border-radius: 999px; padding: 8px 18px; text-decoration: none; font-weight: 600; font-size: 0.9375rem; }
-.tabs a:hover { background: var(--mist); }
-.tabs a[aria-current="page"] { background: var(--navy); color: var(--white); }
 .notice { border-radius: 12px; padding: 12px 16px; font-weight: 600; font-size: 0.9375rem; max-width: none; }
 .notice.ok { background: #e3f3ea; color: var(--ok); }
 .notice.error { background: #fdeceb; color: var(--red-deep); }

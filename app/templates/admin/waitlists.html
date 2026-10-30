@@ -1,0 +1,26 @@
+{% extends "dash/layout.html" %}
+{% block title %}Waiting lists{% endblock %}
+{% block heading %}Waiting <span class="accent">Lists</span>{% endblock %}
+{% block subhead %}<p>Everyone waiting for a seat in an upcoming class, in queue order.</p>{% endblock %}
+{% block panel %}
+<section class="panel">
+  <form class="toolbar" method="get" action="{{ url_for('admin.waitlists') }}">
+    <div class="field"><label for="city">City</label><select id="city" name="city"><option value="">All cities</option>{% for c in cities %}<option value="{{ c.slug }}"{{ ' selected' if f.city == c.slug }}>{{ c.name }}, {{ c.state_code }}</option>{% endfor %}</select></div>
+    <div class="field"><label for="status">Status</label><select id="status" name="status"><option value="">Any status</option>{% for k, v in wait_status.items() %}<option value="{{ k }}"{{ ' selected' if f.status == k }}>{{ v[1] }}</option>{% endfor %}</select></div>
+    <button class="pill plain" type="submit">Show</button>
+  </form>
+  {% if rows %}
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>Class</th><th>Place</th><th>Who</th><th>Status</th><th>Joined</th></tr></thead>
+    <tbody>{% for w in rows %}{% set st = wait_status.get(w.status, ('off', w.status)) %}
+      <tr><td><a href="{{ url_for('admin.classes_detail', sid=w.session_id) }}">{{ w.course_name }}</a><br><span class="muted small num">{{ class_date(w.starts_at, w.time_zone) }} · {{ w.site_name }} · {{ w.seats_left if w.seats_left > 0 else 0 }} seats left</span></td>
+        <td class="num">{{ w.position or '—' }}</td>
+        <td><strong>{{ w.first_name }} {{ w.last_name }}</strong>{% if w.party_size > 1 %} · party of {{ w.party_size }}{% endif %}{% if show_contact %}<br><span class="muted small">{{ w.email }}</span>{% endif %}</td>
+        <td><span class="status {{ st[0] }}">{{ st[1] }}</span></td><td class="num small">{{ w.joined_at|office_time }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}
+  <div class="empty">Nobody is waiting for an upcoming class.</div>
+  {% endif %}
+</section>
+{% endblock %}

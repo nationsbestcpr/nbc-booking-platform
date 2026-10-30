@@ -1,25 +1,45 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="wrap dash">
-  <header class="dash-head">
-    <div class="stack">
-      <span class="eyebrow">{{ area_title }}</span>
-      <h1>{% block heading %}{% endblock %}</h1>
-      {% block subhead %}{% endblock %}
-    </div>
-    <span class="role-badge">{{ current_user.main_role.name }}</span>
-  </header>
+<div class="wrap dash-shell">
+  <details class="side" id="side-menu" open>
+    <summary>Menu <span class="muted small">· {{ area_title }}</span></summary>
+    <nav aria-label="{{ area_title }}">
+      <a class="side-title" href="{{ url_for(area_home) }}">{{ area_title }}</a>
+      {% for section in nav %}
+      <div class="side-section">
+        <span class="side-label">{{ section.label }}</span>
+        <ul>
+          {% for item in section["items"] %}
+          <li><a href="{{ url_for(item.endpoint) }}"{% if item.current %} aria-current="page"{% endif %}>{{ item.label }}</a></li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endfor %}
+    </nav>
+  </details>
+  <script>
+    /* Phones: start with the menu closed. Wider screens: always open. */
+    (function () { var d = document.getElementById("side-menu");
+      try { if (window.matchMedia("(max-width: 900px)").matches) d.removeAttribute("open"); } catch (e) {} })();
+  </script>
 
-  <nav class="tabs" aria-label="{{ area_title }} sections">
-    {% for t in tabs %}<a href="{{ url_for(t.endpoint) }}"{% if t.current %} aria-current="page"{% endif %}>{{ t.label }}</a>{% endfor %}
-  </nav>
+  <div class="dash">
+    <header class="dash-head">
+      <div class="stack">
+        <span class="eyebrow">{% block eyebrow %}{{ area_title }}{% endblock %}</span>
+        <h1>{% block heading %}{% endblock %}</h1>
+        {% block subhead %}{% endblock %}
+      </div>
+      <span class="role-badge">{{ current_user.main_role.name }}</span>
+    </header>
 
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% for category, message in messages %}
-    <p class="notice {{ category }}" role="{{ 'alert' if category == 'error' else 'status' }}">{{ message }}</p>
-    {% endfor %}
-  {% endwith %}
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+      <p class="notice {{ category }}" role="{{ 'alert' if category == 'error' else 'status' }}">{{ message }}</p>
+      {% endfor %}
+    {% endwith %}
 
-  {% block panel %}{% endblock %}
+    {% block panel %}{% endblock %}
+  </div>
 </div>
 {% endblock %}

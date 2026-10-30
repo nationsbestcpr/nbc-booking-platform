@@ -22,7 +22,7 @@ def create_app(overrides: dict | None = None) -> Flask:
     filters.init_app(app)
     cli.init_app(app)
 
-    from .blueprints import account, admin, health, me, public, teach, webhooks
+    from .blueprints import account, admin, admin_records, health, me, public, teach, webhooks  # noqa: F401
 
     app.register_blueprint(health.bp)
     app.register_blueprint(webhooks.bp)

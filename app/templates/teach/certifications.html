@@ -1,0 +1,23 @@
+{% extends "dash/layout.html" %}
+{% block title %}Certifications{% endblock %}
+{% block heading %}Your <span class="accent">Certifications</span>{% endblock %}
+{% block subhead %}<p>To lead or help in a class you need a valid certification for it on the class date.</p>{% endblock %}
+{% block panel %}
+<section class="panel">
+  {% if not linked %}
+    <p class="muted">Your instructor profile isn't linked to this account yet. Ask the operations team.</p>
+  {% elif certs %}
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>Certification</th><th>Number</th><th>Issued</th><th>Expires</th><th>Checked by the office</th></tr></thead>
+    <tbody>{% for c in certs %}
+      <tr><td><strong>{{ c.cert_type|cert_label }}</strong></td><td class="num">{{ c.cert_number or '—' }}</td>
+        <td class="num">{{ c.issued_on.strftime('%b %-d, %Y') if c.issued_on else '—' }}</td>
+        <td class="num">{{ c.expires_on.strftime('%b %-d, %Y') }}<br>{% if c.days_left < 0 %}<span class="status bad">Expired</span>{% elif c.days_left < 60 %}<span class="status wait">{{ c.days_left }} days left</span>{% else %}<span class="status ok">Valid</span>{% endif %}</td>
+        <td class="small">{% if c.verified_at %}{{ c.verified_by or 'Office' }}<br><span class="num">{{ c.verified_at|office_time }}</span>{% else %}<span class="muted">Not yet</span>{% endif %}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}
+    <p class="muted">No certifications on file. Send yours to the operations team.</p>
+  {% endif %}
+</section>
+{% endblock %}

@@ -53,6 +53,9 @@ def describe(entry: dict, role_names: dict[str, str], account_name: str | None =
         return f"Suspended the account{who}"
     if action == "user.reactivate":
         return f"Reactivated the account{who}"
+    if action == "settings.change":
+        from ..filters import setting_label
+        return f"Changed the business setting “{setting_label(after.get('key', ''))}” from {before.get('value')} to {after.get('value')}"
     if action == "role.permissions_change":
         name = role_names.get(after.get("role"), after.get("role"))
         return (f"Changed the {name} role's permissions: "
@@ -85,6 +88,21 @@ def home():
           (SELECT count(*) FROM integration_issues WHERE resolved_at IS NULL) AS open_problems,
           (SELECT count(*) FROM unsynced_items) AS unsynced
     """)
+    next_classes = []
+    if user.has_permission("class.view"):
+        next_classes = db.fetch_all("""
+            SELECT s.id, s.starts_at, s.ends_at, s.time_zone, cf.name AS course_name, si.name AS site_name,
+                   av.sold_seats, av.seat_limit, av.waitlist_count,
+                   EXISTS (SELECT 1 FROM assignments a WHERE a.session_id = s.id AND a.role = 'lead'
+                             AND a.status = 'assigned') AS has_lead
+              FROM sessions s
+              JOIN sites si ON si.id = s.site_id
+              JOIN course_families cf ON cf.id = s.course_family_id
+              JOIN session_availability av ON av.session_id = s.id
+             WHERE s.status = 'scheduled' AND s.starts_at > now()
+               AND user_has_permission(:uid, 'class.view', s.metro_id)
+             ORDER BY s.starts_at LIMIT 6
+        """, uid=user.id)
     recent = []
     if user.has_permission("audit.view"):
         recent = db.fetch_all("""
@@ -98,7 +116,8 @@ def home():
         names = _role_names()
         for r in recent:
             r["text"] = describe(r, names, r["target"])
-    return render_template("admin/home.html", stats=stats, recent=recent, tabs=areas.tabs_for(user))
+    return render_template("admin/home.html", stats=stats, recent=recent, next_classes=next_classes,
+                           tabs=areas.tabs_for(user))
 
 
 # --- Users ---------------------------------------------------------------------------

@@ -1,0 +1,30 @@
+{% extends "dash/layout.html" %}
+{% block title %}Locations{% endblock %}
+{% block heading %}Cities and <span class="accent">Training Sites</span>{% endblock %}
+{% block subhead %}<p>From the planning base: each city, whether it books here or in Enrollware, and its sites and rooms.</p>{% endblock %}
+{% block panel %}
+{% for city in cities %}
+<section class="panel" aria-labelledby="city-{{ city.id }}">
+  <div class="panel-head">
+    <h2 id="city-{{ city.id }}">{{ city.name }}, {{ city.state_code }}</h2>
+    <span>{% if city.booking_system == 'engine' %}<span class="status ok">Books here since {{ city.cutover_at.strftime('%b %-d, %Y') if city.cutover_at else '—' }}</span>{% else %}<span class="status off">Still on Enrollware</span>{% endif %}
+      {% if city.is_hub %}<span class="status wait">Hub city</span>{% endif %}{% if not city.is_active %}<span class="status off">Inactive</span>{% endif %}</span>
+  </div>
+  {% if city.sites %}
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>Site</th><th>Address</th><th>Rooms (max students)</th><th>Upcoming classes</th></tr></thead>
+    <tbody>{% for s in city.sites %}
+      <tr><td><strong>{{ s.name }}</strong>{% if not s.is_active %} <span class="status off">Inactive</span>{% endif %}{% if not s.has_parking %}<br><span class="muted small">No public parking notes</span>{% endif %}</td>
+        <td class="small">{{ s.address_line1 }}{% if s.address_line2 %}, {{ s.address_line2 }}{% endif %}<br>{{ s.city }}, {{ s.state_code }} {{ s.postal_code }}</td>
+        <td class="small">{% for r in s.rooms or [] %}{{ r.name }} ({{ r.max }}){{ ', ' if not loop.last }}{% else %}—{% endfor %}</td>
+        <td class="num">{{ s.upcoming }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}
+  <p class="muted small">No sites yet.</p>
+  {% endif %}
+</section>
+{% else %}
+<div class="empty">No cities yet. They come in from the Airtable sync.</div>
+{% endfor %}
+{% endblock %}

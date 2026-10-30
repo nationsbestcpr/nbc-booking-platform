@@ -1,0 +1,36 @@
+{% extends "dash/layout.html" %}
+{% block title %}Business settings{% endblock %}
+{% block heading %}Business <span class="accent">Settings</span>{% endblock %}
+{% block subhead %}<p>Numbers the booking rules use. A change applies at once, without a new release, and is written to the action log.</p>{% endblock %}
+{% block panel %}
+<section class="panel">
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>Setting</th><th>Value</th><th>Last changed</th></tr></thead>
+    <tbody>{% for r in rows %}
+      <tr id="s-{{ r.key }}"><td><strong>{{ r.key|setting_label }}</strong><br><span class="muted small">{{ r.description|plain }}</span></td>
+        <td style="min-width:220px">
+        {% if r.kind == 'fixed' %}
+          <code class="small">{{ r.json }}</code><br>
+          <span class="muted small">{% if r.key in locked %}Set for this database by the deployment.{% else %}Changed with the build that uses it.{% endif %}</span>
+        {% else %}
+          <form class="toolbar" method="post" action="{{ url_for('admin.settings') }}">
+            {{ csrf_input() }}<input type="hidden" name="key" value="{{ r.key }}">
+            <div class="field" style="flex:1 1 110px">
+              <label class="sr-only" for="v-{{ r.key }}">{{ r.key }}</label>
+              {% if r.kind == 'yesno' %}
+                <select id="v-{{ r.key }}" name="value"><option value="yes"{{ ' selected' if r.value }}>Yes</option><option value="no"{{ ' selected' if not r.value }}>No</option></select>
+              {% elif r.kind == 'money' %}
+                <input type="text" inputmode="decimal" id="v-{{ r.key }}" name="value" value="{{ '%.2f'|format(r.value / 100) if r.value is not none else '' }}" placeholder="{{ 'Not set' if r.value is none }}" style="font:400 1rem var(--font);padding:9px 12px;border-radius:12px;border:1.5px solid var(--line)">
+                <span class="hint">Dollars{% if r.key in ['large_refund_threshold_cents'] %} · leave empty if not decided{% endif %}</span>
+              {% else %}
+                <input type="text" inputmode="numeric" id="v-{{ r.key }}" name="value" value="{{ r.value if r.value is not none else '' }}" style="font:400 1rem var(--font);padding:9px 12px;border-radius:12px;border:1.5px solid var(--line)">
+              {% endif %}
+            </div>
+            <button class="btn-small" type="submit">Save</button>
+          </form>
+        {% endif %}</td>
+        <td class="small num">{% if r.updated_by %}{{ r.updated_by }}<br>{% endif %}{{ r.updated_at|office_time }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+</section>
+{% endblock %}

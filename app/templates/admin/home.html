@@ -13,18 +13,23 @@
   <div class="stat{{ ' alert-stat' if stats.unsynced }}"><strong class="num">{{ stats.unsynced }}</strong><span>Changes not synced yet</span></div>
 </div>
 <div class="cols">
-  <section class="panel" aria-labelledby="go-title">
-    <h2 id="go-title">Go to</h2>
+  <section class="panel" aria-labelledby="next-title">
+    <div class="panel-head"><h2 id="next-title">Next classes</h2>
+      {% if current_user.has_permission('class.view') %}<a href="{{ url_for('admin.classes') }}" style="color:var(--navy);font-weight:600">All classes →</a>{% endif %}</div>
+    {% if not current_user.has_permission('class.view') %}
+      <p class="muted small">Classes are visible to roles with the "see every class" permission.</p>
+    {% elif next_classes %}
     <ul class="list">
-      {% for t in tabs if t.endpoint != 'admin.home' %}
-      <li><a href="{{ url_for(t.endpoint) }}" style="color:var(--navy);font-weight:700">{{ t.label }}</a>
-        <span class="meta">{{ {'admin.users': 'Find people; give and remove roles; suspend accounts.',
-                               'admin.roles': 'What each role can do.',
-                               'admin.integrations': 'Airtable, Stripe, GHL and sign-in: set up, working, or needing attention.',
-                               'me.profile': 'Your name and account.',
-                               'me.settings': 'Your password.'}.get(t.endpoint, '') }}</span></li>
+      {% for c in next_classes %}
+      <li><span><a href="{{ url_for('admin.classes_detail', sid=c.id) }}" style="color:var(--navy);font-weight:700">{{ c.course_name }}</a><br>
+        <span class="meta num">{{ class_date(c.starts_at, c.time_zone) }} · {{ class_time(c.starts_at, c.ends_at, c.time_zone) }} · {{ c.site_name }}</span></span>
+        <span class="small num" style="margin-left:auto;text-align:right">{{ c.sold_seats }} / {{ c.seat_limit }} sold{% if c.waitlist_count %} · {{ c.waitlist_count }} waiting{% endif %}<br>
+          {% if c.has_lead %}<span class="status ok">Instructor set</span>{% else %}<span class="status bad">No instructor yet</span>{% endif %}</span></li>
       {% endfor %}
     </ul>
+    {% else %}
+    <div class="empty">No upcoming classes. They appear here once the Airtable sync brings them in.</div>
+    {% endif %}
   </section>
   <section class="panel" aria-labelledby="log-title">
     <h2 id="log-title">Recent actions</h2>

@@ -1,0 +1,29 @@
+{% extends "dash/layout.html" %}
+{% block title %}Bookings{% endblock %}
+{% block heading %}Bookings <span class="accent">One Row per Seat</span>{% endblock %}
+{% block subhead %}<p>Every seat booked, newest first. Find a student by name or email.</p>{% endblock %}
+{% block panel %}
+<section class="panel">
+  <form class="toolbar" method="get" action="{{ url_for('admin.bookings') }}" role="search">
+    <div class="field"><label for="q">Student or buyer</label><input type="search" id="q" name="q" value="{{ f.q }}" placeholder="Name or email"></div>
+    <div class="field"><label for="status">Status</label><select id="status" name="status"><option value="">Any status</option>{% for k, v in reg_status.items() %}<option value="{{ k }}"{{ ' selected' if f.status == k }}>{{ v[1] }}</option>{% endfor %}</select></div>
+    <div class="field"><label for="city">City</label><select id="city" name="city"><option value="">All cities</option>{% for c in cities %}<option value="{{ c.slug }}"{{ ' selected' if f.city == c.slug }}>{{ c.name }}, {{ c.state_code }}</option>{% endfor %}</select></div>
+    <button class="pill plain" type="submit">Search</button>
+  </form>
+  <p class="muted small num">{{ rows|length }}{{ '+' if more }} booking{{ 's' if rows|length != 1 }}{% if more %} · showing 200: narrow the search{% endif %}</p>
+  {% if rows %}
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>Student</th><th>Class</th><th>Status</th>{% if show_money %}<th>Paid</th>{% endif %}<th>Booked</th></tr></thead>
+    <tbody>{% for r in rows %}{% set st = reg_status.get(r.status, ('off', r.status)) %}
+      <tr><td><strong>{{ r.attendee_first_name }} {{ r.attendee_last_name }}</strong><br><span class="muted small">{{ r.attendee_email }}{% if r.buyer_email != r.attendee_email %} · booked by {{ r.buyer_email }}{% endif %}</span></td>
+        <td><a href="{{ url_for('admin.classes_detail', sid=r.session_id) }}">{{ r.course_name }}</a> · {{ r.short_name }}<br><span class="muted small num">{{ class_date(r.starts_at, r.time_zone) }} · {{ r.site_name }}, {{ r.city_name }}</span></td>
+        <td><span class="status {{ st[0] }}">{{ st[1] }}</span></td>
+        {% if show_money %}<td class="num">{{ r.amount_paid_cents|money }}{% if r.amount_refunded_cents %}<br><span class="muted small">{{ r.amount_refunded_cents|money }} refunded</span>{% endif %}</td>{% endif %}
+        <td class="num small">{{ r.created_at|office_time }}<br><span class="muted">{{ {'web': 'Website', 'phone': 'Phone', 'invoice': 'Invoice', 'waitlist_offer': 'Waiting list offer', 'transfer_adjustment': 'Transfer', 'admin': 'Office'}.get(r.channel, r.channel) }}</span></td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}
+  <div class="empty">No bookings match.</div>
+  {% endif %}
+</section>
+{% endblock %}

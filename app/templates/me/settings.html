@@ -1,6 +1,6 @@
 {% extends "dash/layout.html" %}
-{% block title %}Settings{% endblock %}
-{% block heading %}Account <span class="accent">Settings</span>{% endblock %}
+{% block title %}Password{% endblock %}
+{% block heading %}Your <span class="accent">Password</span>{% endblock %}
 {% block panel %}
 <div class="cols">
   <section class="panel" aria-labelledby="pw-title">
@@ -22,13 +22,6 @@
     {% else %}
     <p class="muted">Your account doesn't sign in with a password, so there's nothing to change here.</p>
     {% endif %}
-  </section>
-  <section class="panel" aria-labelledby="more-title">
-    <h2 id="more-title">Coming next</h2>
-    <ul class="list">
-      <li><span><strong>Email and text preferences</strong><br><span class="meta">Choose how we remind you about classes.</span></span><span class="status off">Later</span></li>
-      {% if current_user.is_staff %}<li><span><strong>Microsoft 365 sign-in</strong><br><span class="meta">Staff will sign in with their NBC Microsoft accounts.</span></span><span class="status off">Later</span></li>{% endif %}
-    </ul>
   </section>
 </div>
 {% endblock %}

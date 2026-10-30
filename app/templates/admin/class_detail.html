@@ -1,0 +1,65 @@
+{% extends "dash/layout.html" %}
+{% block title %}{{ c.course_name }} · {{ class_date(c.starts_at, c.time_zone) }}{% endblock %}
+{% block heading %}{{ c.course_name }} <span class="accent">{{ class_date(c.starts_at, c.time_zone) }}</span>{% endblock %}
+{% block subhead %}<p>{{ class_time(c.starts_at, c.ends_at, c.time_zone) }} · {{ c.site_name }}, {{ c.city_name }} · {{ c.room_name }}</p>{% endblock %}
+{% block panel %}
+<p><a href="{{ url_for('admin.classes') }}" style="color:var(--navy);font-weight:600">← All classes</a></p>
+<div class="stats">
+  <div class="stat"><strong class="num">{{ c.sold_seats }}</strong><span>Sold here</span></div>
+  <div class="stat"><strong class="num">{{ c.external_seats }}</strong><span>Sold in Enrollware</span></div>
+  <div class="stat"><strong class="num">{{ c.held_seats }}</strong><span>On hold at checkout</span></div>
+  <div class="stat{{ ' alert-stat' if c.seats_left <= 0 }}"><strong class="num">{{ c.seats_left }}</strong><span>Left of {{ c.seat_limit }}</span></div>
+  <div class="stat"><strong class="num">{{ c.waitlist_count }}</strong><span>Waiting</span></div>
+</div>
+<div class="cols">
+  <section class="panel" aria-labelledby="roster-title">
+    <h2 id="roster-title">Class list</h2>
+    {% if roster %}
+    <div class="scroll-x"><table class="table">
+      <thead><tr><th>Student</th><th>Course</th><th>Status</th>{% if show_money %}<th>Paid</th>{% endif %}</tr></thead>
+      <tbody>{% for r in roster %}{% set st = reg_status.get(r.status, ('off', r.status)) %}
+        <tr><td><strong>{{ r.attendee_first_name }} {{ r.attendee_last_name }}</strong>{% if show_contact %}<br><span class="muted small">{{ r.attendee_email }}</span>{% endif %}</td>
+          <td>{{ r.short_name }}</td><td><span class="status {{ st[0] }}">{{ st[1] }}</span>{% if r.checked_in_at %}<br><span class="muted small">Checked in</span>{% endif %}</td>
+          {% if show_money %}<td class="num">{{ r.amount_paid_cents|money }}</td>{% endif %}</tr>
+      {% endfor %}</tbody>
+    </table></div>
+    {% else %}
+    <p class="muted small">Nobody has booked this class yet.</p>
+    {% endif %}
+
+    {% if waiting is not none %}
+    <h3>Waiting list</h3>
+    {% if waiting %}
+    <ul class="list">{% for w in waiting %}{% set st = wait_status.get(w.status, ('off', w.status)) %}
+      <li><span><strong class="num">{{ w.position }}.</strong> {{ w.first_name }} {{ w.last_name }}{% if w.party_size > 1 %} · party of {{ w.party_size }}{% endif %}<br><span class="meta num">Joined {{ w.joined_at|office_time }}</span></span><span class="status {{ st[0] }}">{{ st[1] }}</span></li>
+    {% endfor %}</ul>
+    {% else %}
+    <p class="muted small">Nobody is waiting.</p>
+    {% endif %}
+    {% endif %}
+  </section>
+
+  <section class="panel" aria-labelledby="info-title">
+    <h2 id="info-title">About this class</h2>
+    <dl class="kv">
+      <dt>Status</dt><dd>{% if c.status == 'cancelled' %}<span class="status off">Cancelled</span>{% elif not c.is_published %}<span class="status wait">Not published</span>{% else %}<span class="status ok">On sale</span>{% endif %}</dd>
+      <dt>Prices</dt><dd>{% for p in products %}{{ p.short_name }} <strong class="num">{{ p.price_cents|money }}</strong>{% if not p.is_offered %} (not offered){% endif %}{{ ', ' if not loop.last }}{% else %}—{% endfor %}</dd>
+      <dt>Instructors</dt><dd>{% for t in teachers %}{{ t.first_name }} {{ t.last_name }} ({{ 'lead' if t.role == 'lead' else 'helper' }}){{ ', ' if not loop.last }}{% else %}{{ c.airtable_lead_instructor or 'None yet' }}{% endfor %}</dd>
+      <dt>Seat limit</dt><dd class="num">{{ c.capacity }}{% if c.override_seats %} + {{ c.override_seats }} added by a manager{% endif %} · room holds {{ c.room_max_student_count }}</dd>
+      <dt>Address</dt><dd>{{ c.address_line1 }}{% if c.address_line2 %}, {{ c.address_line2 }}{% endif %}, {{ c.site_city }}, {{ c.state_code }} {{ c.postal_code }}</dd>
+      <dt>Parking</dt><dd>{{ c.parking_notes_public or '—' }}</dd>
+      <dt>From the schedule</dt><dd class="num">{{ c.source_synced_at|office_time }}</dd>
+    </dl>
+    {% if private %}
+    <h3>Private class details</h3>
+    <dl class="kv">
+      <dt>Access code</dt><dd>{{ private.access_code or '—' }}</dd>
+      <dt>Getting in</dt><dd>{{ private.access_instructions or '—' }}</dd>
+      <dt>On-site contact</dt><dd>{{ private.poc_override or private.poc_name or '—' }}{% if private.poc_phone %} · {{ private.poc_phone }}{% endif %}</dd>
+      <dt>Emergency</dt><dd>{{ private.emergency_contact or '—' }}</dd>
+      <dt>Instructor notes</dt><dd>{{ private.instructor_notes or '—' }}</dd>
+    </dl>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

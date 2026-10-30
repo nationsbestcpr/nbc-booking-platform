@@ -315,3 +315,156 @@ def test_make_admin_command(app, new_account, query):
 def test_header_links_to_the_dashboard(client, sign_in):
     sign_in("riley.brooks@example.test")
     assert 'href="/dashboard"' in client.get("/").get_data(as_text=True)
+
+
+# --- Sidebar and the records sections --------------------------------------------------
+
+def sidebar(page: str) -> str:
+    return page.split('<details class="side"', 1)[1].split("</details>", 1)[0]
+
+
+def test_sidebar_sections_follow_permissions(client, sign_in):
+    sign_in("cs@example.test")
+    nav = sidebar(client.get("/admin").get_data(as_text=True))
+    for shown in (">Classes</a>", ">Bookings</a>", ">Waiting lists</a>", ">Integrations</a>", ">Password</a>"):
+        assert shown in nav
+    for hidden in (">Users</a>", ">Instructors</a>", ">Action log</a>", ">Business settings</a>"):
+        assert hidden not in nav
+    sign_in("marcus.hale@example.test")
+    nav = sidebar(client.get("/teach").get_data(as_text=True))
+    assert ">Certifications</a>" in nav and ">Pay</a>" in nav and ">Classes</a>" not in nav
+    sign_in("alder1@example.test")
+    nav = sidebar(client.get("/my").get_data(as_text=True))
+    assert ">Dashboard</a>" in nav and ">Profile</a>" in nav and "Teaching" not in nav
+
+
+def test_current_page_is_marked_in_the_sidebar(client, sign_in, query):
+    sign_in("admin@example.test")
+    sid = query("SELECT id FROM sessions WHERE slug = '2027-01-16-henrico' ORDER BY id LIMIT 1")[0]["id"]
+    nav = sidebar(client.get(f"/admin/classes/{sid}").get_data(as_text=True))
+    assert 'href="/admin/classes" aria-current="page"' in nav
+
+
+def test_classes_list_and_detail_come_from_the_schedule(client, sign_in, query):
+    sign_in("cs@example.test")
+    page = text_of(client.get("/admin/classes"))
+    assert "Henrico (Three Chopt)" in page and "Dana Whitfield" in page and "Full" in page
+    assert "Galleria" not in text_of(client.get("/admin/classes?city=richmond-va"))
+    sid = query("SELECT s.id FROM sessions s JOIN course_families cf ON cf.id = s.course_family_id "
+                "WHERE s.slug = '2027-01-16-henrico' AND cf.code = 'FA_CPR_AED'")[0]["id"]
+    page = text_of(client.get(f"/admin/classes/{sid}"))
+    assert "Student Alder 1" in page and "alder1@example.test" in page     # class list with contact (student.view)
+    assert "Jordan Waiter" in page                                         # waiting list (waitlist.view)
+    assert "Private class details" not in page                             # needs class.packet_view
+
+
+def test_private_class_details_need_their_permission(app, client, sign_in, query):
+    with app.app_context(), db.transaction() as conn:
+        conn.execute(text("""
+            INSERT INTO site_private_details (site_id, access_code) SELECT id, 'DOOR-7731' FROM sites WHERE slug = 'henrico'
+            ON CONFLICT (site_id) DO UPDATE SET access_code = 'DOOR-7731'
+        """))
+    try:
+        sid = query("SELECT id FROM sessions WHERE slug = '2027-01-16-henrico' ORDER BY id LIMIT 1")[0]["id"]
+        sign_in("cs@example.test")
+        assert "DOOR-7731" not in text_of(client.get(f"/admin/classes/{sid}"))
+        sign_in("manager@example.test")
+        assert "DOOR-7731" in text_of(client.get(f"/admin/classes/{sid}"))
+    finally:
+        with app.app_context(), db.transaction() as conn:
+            conn.execute(text("DELETE FROM site_private_details"))
+
+
+def test_a_role_limited_to_one_city_sees_only_that_city(client, new_account, sign_in, post_action, query):
+    uid, email = new_account("Hou")
+    houston = query("SELECT id FROM metros WHERE slug = 'houston-tx'")[0]["id"]
+    sign_in("admin@example.test")
+    post_action(f"/admin/users/{uid}/roles", {"role_code": "customer_service", "city_id": str(houston)})
+    sign_in(email, "long-enough-1")
+    page = text_of(client.get("/admin/classes?when=all"))
+    assert "Henrico (Three Chopt)" not in page
+    sid = query("SELECT id FROM sessions WHERE slug = '2027-01-16-henrico' ORDER BY id LIMIT 1")[0]["id"]
+    assert client.get(f"/admin/classes/{sid}").status_code == 403
+    assert "alder1@example.test" not in text_of(client.get("/admin/bookings"))
+    assert "Jordan Waiter" not in text_of(client.get("/admin/waitlists"))
+
+
+def test_bookings_waitlists_locations_instructors(client, sign_in):
+    sign_in("admin@example.test")
+    page = text_of(client.get("/admin/bookings?q=alder1"))
+    assert "Student Alder 1" in page and "Booked" in page and "$108" in page and "Student Birch 1" not in page
+    page = text_of(client.get("/admin/waitlists"))
+    assert "Jordan Waiter" in page and "party of 2" in page
+    page = text_of(client.get("/admin/locations"))
+    assert "Henrico (Three Chopt)" in page and "Still on Enrollware" in page and "Books here since" in page
+    page = text_of(client.get("/admin/instructors"))
+    assert "Marcus Hale" in page and "as helper" in page
+
+
+def test_instructor_certifications_and_pay(client, sign_in):
+    sign_in("marcus.hale@example.test")
+    page = text_of(client.get("/teach/certifications"))
+    assert "Red Cross BLS instructor" in page and "Jun 30, 2027" in page
+    page = text_of(client.get("/teach/pay"))
+    assert "No pay records yet" in page
+
+
+# --- Business settings ------------------------------------------------------------------
+
+def setting(query, key):
+    return query("SELECT value FROM app_settings WHERE key = :k", k=key)[0]["value"]
+
+
+def test_business_settings_are_changed_and_logged(client, sign_in, post_form, query):
+    sign_in("admin@example.test")
+    before = setting(query, "checkout_hold_minutes")
+    try:
+        res = post_form("/admin/settings", {"key": "checkout_hold_minutes", "value": str(before + 5)}, follow_redirects=True)
+        assert "Saved: Checkout hold minutes." in text_of(res)
+        assert setting(query, "checkout_hold_minutes") == before + 5
+        assert f"from {before} to {before + 5}" in text_of(client.get("/admin/log?area=settings"))
+    finally:
+        post_form("/admin/settings", {"key": "checkout_hold_minutes", "value": str(before)})
+    assert setting(query, "checkout_hold_minutes") == before
+
+
+def test_money_settings_are_entered_in_dollars(sign_in, post_form, query):
+    sign_in("admin@example.test")
+    before = setting(query, "co_instructor_pay_cents")
+    try:
+        post_form("/admin/settings", {"key": "co_instructor_pay_cents", "value": "$120.50"})
+        assert setting(query, "co_instructor_pay_cents") == 12050
+    finally:
+        post_form("/admin/settings", {"key": "co_instructor_pay_cents", "value": f"{before / 100:.2f}"})
+    assert setting(query, "co_instructor_pay_cents") == before
+
+
+def test_an_open_setting_can_be_set_and_cleared(sign_in, post_form, query):
+    sign_in("admin@example.test")
+    post_form("/admin/settings", {"key": "large_refund_threshold_cents", "value": "500"})
+    assert setting(query, "large_refund_threshold_cents") == 50000
+    post_form("/admin/settings", {"key": "large_refund_threshold_cents", "value": ""})
+    assert setting(query, "large_refund_threshold_cents") is None
+
+
+def test_bad_setting_values_are_refused(sign_in, post_form, query):
+    sign_in("admin@example.test")
+    before = setting(query, "waitlist_offer_hours")
+    for bad in ("two", "-1", ""):
+        res = post_form("/admin/settings", {"key": "waitlist_offer_hours", "value": bad}, follow_redirects=True)
+        assert "Nothing was changed" in text_of(res)
+    assert setting(query, "waitlist_offer_hours") == before
+    assert post_form("/admin/settings", {"key": "environment", "value": "1"}).status_code == 400
+    assert post_form("/admin/settings", {"key": "airtable_writeback_enabled", "value": "yes"}).status_code == 400
+
+
+def test_business_settings_need_their_permission(client, sign_in):
+    sign_in("manager@example.test")
+    assert client.get("/admin/settings").status_code == 403
+
+
+def test_staff_pages_use_plain_words(client, sign_in):
+    sign_in("admin@example.test")
+    page = text_of(client.get("/admin/settings")).lower()
+    assert "co-instructor" not in page and "co instructor" not in page and "metro" not in page
+    assert "helper instructor pay" in page

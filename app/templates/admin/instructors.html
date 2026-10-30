@@ -1,0 +1,23 @@
+{% extends "dash/layout.html" %}
+{% block title %}Instructors{% endblock %}
+{% block heading %}Instructor <span class="accent">Profiles</span>{% endblock %}
+{% block subhead %}<p>Who teaches, where, their certifications and upcoming classes.</p>{% endblock %}
+{% block panel %}
+<section class="panel">
+  {% if rows %}
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>Instructor</th><th>Home city</th><th>Certifications</th><th>Upcoming classes</th><th>Account</th><th>Status</th></tr></thead>
+    <tbody>{% for i in rows %}
+      <tr><td><strong>{{ i.first_name }} {{ i.last_name }}</strong><br><span class="muted small">{{ i.email }}{% if i.phone_e164 %} · {{ i.phone_e164 }}{% endif %}</span></td>
+        <td>{{ i.home_city or '—' }}{% if i.hub_city %}<br><span class="muted small">{{ i.hub_city }} hub, {{ i.hub_priority }}</span>{% endif %}</td>
+        <td class="num">{{ i.valid_certs }} valid{% if i.next_expiry %}<br><span class="muted small">next expires {{ i.next_expiry.strftime('%b %-d, %Y') }}</span>{% endif %}</td>
+        <td class="num">{{ i.upcoming }}{% if i.upcoming_helper %}<br><span class="muted small">{{ i.upcoming_helper }} as helper</span>{% endif %}</td>
+        <td>{% if i.user_account_id %}{% if can_users %}<a href="{{ url_for('admin.users_detail', uid=i.user_account_id) }}">Linked</a>{% else %}Linked{% endif %}{% else %}<span class="muted">Not invited yet</span>{% endif %}</td>
+        <td><span class="status {{ {'active': 'ok', 'onboarding': 'wait', 'suspended': 'bad'}.get(i.status, 'off') }}">{{ i.status|capitalize }}</span></td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}
+  <div class="empty">No instructors yet.</div>
+  {% endif %}
+</section>
+{% endblock %}

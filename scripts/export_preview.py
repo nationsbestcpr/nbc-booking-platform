@@ -48,26 +48,37 @@ SIGNED_IN = {
 # tabs link to its own copies of Profile and Settings.
 DASHBOARDS = {
     "admin": ("admin@example.test", [
-        ("/admin", "admin.html", "Admin: dashboard", "Counts at a glance and recent actions."),
+        ("/admin", "admin.html", "Admin: dashboard", "Counts, next classes and recent actions."),
+        ("/admin/classes", "admin-classes.html", "Admin: classes", "Every class with live seats, waiting and lead instructor."),
+        ("/admin/classes/{session:2027-01-16-henrico}", "admin-class.html", "Admin: one class",
+         "Class list, waiting list, prices, instructors, private details."),
+        ("/admin/bookings", "admin-bookings.html", "Admin: bookings", "One row per seat; search by student."),
+        ("/admin/waitlists", "admin-waitlists.html", "Admin: waiting lists", "Who is waiting, in queue order."),
+        ("/admin/locations", "admin-locations.html", "Admin: locations", "Cities, sites and rooms."),
         ("/admin/users", "admin-users.html", "Admin: users", "Find people; filter by role and status."),
         ("/admin/users/{riley.brooks@example.test}", "admin-user.html", "Admin: one user",
          "Give and remove roles, suspend, history."),
+        ("/admin/instructors", "admin-instructors.html", "Admin: instructors", "Profiles, certifications, upcoming classes."),
         ("/admin/roles", "admin-roles.html", "Admin: roles and permissions", "Every role, who has it, what it can do."),
         ("/admin/roles/customer_service", "admin-role.html", "Admin: one role", "Tick what the role can do."),
         ("/admin/integrations", "admin-integrations.html", "Admin: integrations",
          "Airtable, Stripe, GHL, Microsoft 365: set up, working or needing attention."),
+        ("/admin/log", "admin-log.html", "Admin: action log", "Every staff action, newest first."),
+        ("/admin/settings", "admin-settings.html", "Admin: business settings", "Hold minutes, offer window, pay rates."),
         ("/account/profile", "admin-profile.html", "Admin: profile", "Name, email, roles."),
-        ("/account/settings", "admin-settings.html", "Admin: settings", "Change password."),
+        ("/account/settings", "admin-settings-password.html", "Admin: password", "Change password."),
     ]),
     "instructor": ("marcus.hale@example.test", [
         ("/teach", "teach.html", "Instructor: dashboard", "Classes they teach (lead or helper), certifications."),
+        ("/teach/certifications", "teach-certifications.html", "Instructor: certifications", "Expiry dates and checks."),
+        ("/teach/pay", "teach-pay.html", "Instructor: pay", "One record per completed class."),
         ("/account/profile", "teach-profile.html", "Instructor: profile", "Account plus instructor profile."),
-        ("/account/settings", "teach-settings.html", "Instructor: settings", "Change password."),
+        ("/account/settings", "teach-settings.html", "Instructor: password", "Change password."),
     ]),
     "student": ("alder1@example.test", [
         ("/my", "my.html", "Student: dashboard", "Upcoming classes, waiting lists, past classes."),
         ("/account/profile", "my-profile.html", "Student: profile", "Name, email, roles."),
-        ("/account/settings", "my-settings.html", "Student: settings", "Change password."),
+        ("/account/settings", "my-settings.html", "Student: password", "Change password."),
     ]),
 }
 
@@ -85,8 +96,15 @@ def main(out_dir: Path) -> None:
     with app.app_context():
         ids = dict(db.connection().execute(text("SELECT email, id FROM user_accounts")).all())
 
+    with app.app_context():
+        sessions = dict(db.connection().execute(text(
+            "SELECT DISTINCT ON (slug) slug, id FROM sessions ORDER BY slug, id")).all())
+
     def real_path(path: str) -> str:
-        return re.sub(r"\{([^}]+)\}", lambda m: str(ids[m.group(1)]), path)
+        def sub(m: re.Match) -> str:
+            ref = m.group(1)
+            return str(sessions[ref.split(":", 1)[1]]) if ref.startswith("session:") else str(ids[ref])
+        return re.sub(r"\{([^}]+)\}", sub, path)
 
     public_files = {path: name for path, name, *_ in PUBLIC}
     public_files.update({f"/__as__/{k}": f"home-{k}.html" for k in SIGNED_IN})
@@ -185,7 +203,7 @@ def write_index(out_dir: Path, css: str) -> None:
     <div class="section-head"><div class="stack">
       <span class="eyebrow">Dashboards</span>
       <h2 class="title">Each Area, <span class="accent">As Its Owner Sees It</span></h2>
-      <p class="muted">Admin (Users, Roles &amp; permissions, Integrations), instructor and student areas, each with Profile and Settings. Which area opens is worked out from the account's roles.</p>
+      <p class="muted">A sidebar per area: admin (classes, bookings, waiting lists, locations, users, instructors, roles, integrations, action log, business settings), instructor and student. Each section shows only to roles allowed to see it.</p>
     </div></div>
     <div class="class-grid">{dash}</div>
   </section>
