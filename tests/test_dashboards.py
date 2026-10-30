@@ -468,3 +468,63 @@ def test_staff_pages_use_plain_words(client, sign_in):
     page = text_of(client.get("/admin/settings")).lower()
     assert "co-instructor" not in page and "co instructor" not in page and "metro" not in page
     assert "helper instructor pay" in page
+
+
+# --- Preset superadmin from the secrets ----------------------------------------------------
+
+def test_preset_superadmin_is_created_and_can_sign_in(app, client, sign_in, post_form, query, monkeypatch):
+    email = unique_email("super")
+    monkeypatch.setenv("SUPERADMIN_EMAIL", email.upper())
+    monkeypatch.setenv("SUPERADMIN_PASSWORD", "preset-admin-pass-1")
+    runner = app.test_cli_runner()
+    res = runner.invoke(args=["users", "ensure-superadmin"])
+    assert res.exit_code == 0 and "created" in res.output and "preset-admin-pass-1" not in res.output
+    assert sign_in(email, "preset-admin-pass-1").status_code == 302
+    assert client.get("/dashboard").headers["Location"].endswith("/admin")
+    assert client.get("/admin/settings").status_code == 200             # every permission
+    # Running again (every start) keeps a password changed in the app.
+    post_form("/account/settings", {"current_password": "preset-admin-pass-1", "new_password": "changed-in-app-22",
+                                     "confirm_password": "changed-in-app-22"})
+    res = runner.invoke(args=["users", "ensure-superadmin"])
+    assert res.exit_code == 0 and "already set up" in res.output
+    assert sign_in(email, "preset-admin-pass-1").status_code == 400
+    assert sign_in(email, "changed-in-app-22").status_code == 302
+    # If someone removed its Admin role, the next start gives it back.
+    uid = query("SELECT id FROM user_accounts WHERE email = :e", e=email)[0]["id"]
+    with app.app_context(), db.transaction() as conn:
+        conn.execute(text("""UPDATE user_roles SET revoked_at = now(),
+                                    revoked_by_user_id = (SELECT id FROM user_accounts WHERE email = 'admin@example.test')
+                              WHERE user_account_id = :u AND role_code = 'admin'"""), {"u": uid})
+    assert "given the Admin role" in runner.invoke(args=["users", "ensure-superadmin"]).output
+    # Leave one admin, as in the demo data.
+    with app.app_context(), db.transaction() as conn:
+        conn.execute(text("""UPDATE user_roles SET revoked_at = now(),
+                                    revoked_by_user_id = (SELECT id FROM user_accounts WHERE email = 'admin@example.test')
+                              WHERE user_account_id = :u AND role_code = 'admin' AND revoked_at IS NULL"""), {"u": uid})
+
+
+def test_preset_superadmin_needs_a_long_password(app, monkeypatch):
+    monkeypatch.setenv("SUPERADMIN_EMAIL", unique_email("super"))
+    monkeypatch.setenv("SUPERADMIN_PASSWORD", "short")
+    res = app.test_cli_runner().invoke(args=["users", "ensure-superadmin"])
+    assert res.exit_code != 0 and "12+ characters" in res.output
+
+
+def test_no_preset_superadmin_without_the_secret(app, monkeypatch):
+    monkeypatch.delenv("SUPERADMIN_EMAIL", raising=False)
+    res = app.test_cli_runner().invoke(args=["users", "ensure-superadmin"])
+    assert res.exit_code == 0 and "no preset admin account" in res.output
+
+
+# --- Sign-in and create account work end to end in the running app ----------------------
+
+def test_create_account_then_sign_out_and_back_in(client, post_form, sign_in):
+    email = unique_email("e2e")
+    res = post_form("/create-account", {"first_name": "Ena", "last_name": "End", "email": email,
+                                        "password": "end-to-end-1", "intent": "student"})
+    assert res.status_code == 302
+    assert client.get("/dashboard").headers["Location"].endswith("/my")
+    client.post("/sign-out", data={"csrf_token": csrf_from(client, "/")})
+    assert client.get("/my").status_code == 302                       # signed out
+    assert sign_in(email, "end-to-end-1").status_code == 302
+    assert "Hi, Ena" in text_of(client.get("/my"))

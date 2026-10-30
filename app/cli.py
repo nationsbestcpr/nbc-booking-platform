@@ -7,10 +7,13 @@
     flask --app wsgi db new "add x"      # start a new migration file
     flask --app wsgi db load-demo        # invented demo data, local development only
     flask --app wsgi users make-admin EMAIL   # first admin of a new database
+    flask --app wsgi users ensure-superadmin  # preset admin from SUPERADMIN_EMAIL / SUPERADMIN_PASSWORD
 """
 
 from __future__ import annotations
 
+import os
+import re
 from pathlib import Path
 
 import click
@@ -131,6 +134,76 @@ def make_admin(email: str, yes: bool) -> None:
             VALUES ('system', 'user.role_grant', 'user_account', :id, '{"role": "admin"}', 'flask users make-admin')
         """), {"id": account["id"]})
     click.echo(f"{account['display_name']} is now an admin. They see the admin dashboard after signing in.")
+
+
+SUPERADMIN_MIN_PASSWORD = 12
+
+
+@users_cli.command("ensure-superadmin")
+def ensure_superadmin() -> None:
+    """Make sure the preset admin account from the secrets exists and is an admin.
+
+    Reads SUPERADMIN_EMAIL, SUPERADMIN_PASSWORD (12+ characters) and optionally
+    SUPERADMIN_NAME. Runs on every start of the published app:
+      * no account with that email yet: creates it, with that password, active;
+      * the account exists: keeps its password (a password changed in the app
+        stays changed) and only makes sure it holds the Admin role;
+      * SUPERADMIN_EMAIL not set: does nothing.
+    The password is never printed or stored except as a scrypt hash. A
+    suspended preset account is left suspended.
+    """
+    from sqlalchemy import text
+    from werkzeug.security import generate_password_hash
+
+    from . import db
+    email = os.environ.get("SUPERADMIN_EMAIL", "").strip().lower()
+    password = os.environ.get("SUPERADMIN_PASSWORD", "")
+    name = " ".join(os.environ.get("SUPERADMIN_NAME", "").split()) or "Super Admin"
+    if not email:
+        click.echo("SUPERADMIN_EMAIL is not set: no preset admin account.")
+        return
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        raise click.ClickException("SUPERADMIN_EMAIL isn't an email address.")
+    with db.engine().begin() as conn:
+        account = conn.execute(text("SELECT id, status FROM user_accounts WHERE email = :e"),
+                               {"e": email}).mappings().first()
+        created = False
+        if account is None:
+            if len(password) < SUPERADMIN_MIN_PASSWORD:
+                raise click.ClickException(
+                    f"SUPERADMIN_PASSWORD must be set to {SUPERADMIN_MIN_PASSWORD}+ characters to create the preset admin account.")
+            uid = conn.execute(text("""
+                INSERT INTO user_accounts (email, display_name, status, email_verified_at)
+                VALUES (:e, :n, 'active', now()) RETURNING id
+            """), {"e": email, "n": name}).scalar_one()
+            conn.execute(text("""
+                INSERT INTO user_identities (user_account_id, provider, subject, password_hash, password_changed_at)
+                VALUES (:uid, 'password', :e, :h, now())
+            """), {"uid": uid, "e": email, "h": generate_password_hash(password)})
+            conn.execute(text("INSERT INTO user_roles (user_account_id, role_code) VALUES (:uid, 'user')"), {"uid": uid})
+            created = True
+        else:
+            uid = account["id"]
+            has_password = conn.execute(text("""SELECT 1 FROM user_identities
+                                                 WHERE user_account_id = :uid AND provider = 'password'"""),
+                                        {"uid": uid}).first()
+            if not has_password and len(password) >= SUPERADMIN_MIN_PASSWORD:
+                conn.execute(text("""
+                    INSERT INTO user_identities (user_account_id, provider, subject, password_hash, password_changed_at)
+                    VALUES (:uid, 'password', :e, :h, now())
+                """), {"uid": uid, "e": email, "h": generate_password_hash(password)})
+        is_admin = conn.execute(text("""SELECT 1 FROM user_roles WHERE user_account_id = :uid
+                                         AND role_code = 'admin' AND revoked_at IS NULL"""), {"uid": uid}).first()
+        if not is_admin:
+            conn.execute(text("INSERT INTO user_roles (user_account_id, role_code) VALUES (:uid, 'admin')"), {"uid": uid})
+            conn.execute(text("""
+                INSERT INTO audit_log (actor_type, action, entity_type, entity_id, after, reason)
+                VALUES ('system', 'user.role_grant', 'user_account', :uid, '{"role": "admin"}',
+                        'Preset admin account (SUPERADMIN_EMAIL)')
+            """), {"uid": uid})
+    status = "created" if created else ("given the Admin role" if not is_admin else "already set up")
+    note = "" if created or not account or account["status"] == "active" else f" (account is {account['status']})"
+    click.echo(f"Preset admin account {email}: {status}{note}.")
 
 
 def init_app(app: Flask) -> None:

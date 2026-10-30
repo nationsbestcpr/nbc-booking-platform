@@ -128,11 +128,15 @@ In the Replit workspace shell, after the code is in the Repl:
    the same setup script. The package list is `requirements/app.txt`; there is
    deliberately no `requirements.txt` at the root, because Replit's publish
    step would run its own failing `pip install` on it.
-4. Make the first admin: create an account at `/create-account`, then
-   ```bash
-   flask --app wsgi users make-admin you@nationsbestcpr.com
-   ```
-   From then on, admins give roles in the dashboard (Admin > Users).
+4. Preset admin login: in Secrets (workspace) and in the published app's
+   secrets (Publishing → Adjust settings → Secrets), set
+   `SUPERADMIN_EMAIL` (e.g. your NBC email) and `SUPERADMIN_PASSWORD`
+   (12+ characters, e.g. from `python -c "import secrets; print(secrets.token_urlsafe(18))"`).
+   Every start runs `flask --app wsgi users ensure-superadmin`: it creates that
+   account with that password the first time and makes sure it is an admin.
+   Change the password afterwards in the app (Password page); restarts keep it.
+   Without these secrets, make the first admin by hand: create an account at
+   `/create-account`, then `flask --app wsgi users make-admin you@nationsbestcpr.com`.
 5. Start the app (Run) and open `/healthz`: `"status": "ok"` and
    `"database_env_matches": true` mean the database is ready and belongs to
    this environment.
@@ -218,7 +222,7 @@ above before the first publish.
 |---|---|
 | Database schema, roles and permissions | Done (PR #1) |
 | App skeleton: sign-in, create account, landing page of classes | Done |
-| Dashboard skeletons: admin (users, roles & permissions, integrations), instructor, student | This branch |
+| Dashboards: admin (classes, bookings, waiting lists, locations, users, instructors, roles, integrations, action log, business settings), instructor, student; preset admin login | Done |
 | 1. Airtable sync | Next |
 | 2. Search pages and SEO | To do |
 | 3. Seat holds and Stripe Checkout | To do |

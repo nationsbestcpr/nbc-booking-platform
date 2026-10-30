@@ -69,6 +69,11 @@ step 60 $PY -c "import wsgi" || fail "the app could not load (see the error abov
 say "bringing the database up to date"
 step 120 $PY -m flask --app wsgi db upgrade || fail "the database update (see the error above)"
 
+# The preset admin account from the SUPERADMIN_EMAIL / SUPERADMIN_PASSWORD
+# secrets (does nothing when they aren't set).
+say "checking the preset admin account"
+step 30 $PY -m flask --app wsgi users ensure-superadmin || fail "the preset admin account (see the message above)"
+
 BINDS=""
 for p in $PORTS; do BINDS="$BINDS --bind 0.0.0.0:$p"; done
 say "starting the web server"
