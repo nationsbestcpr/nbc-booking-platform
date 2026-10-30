@@ -1,0 +1,70 @@
+{% extends "dash/layout.html" %}
+{% block title %}{{ account.display_name }}{% endblock %}
+{% block heading %}{{ account.display_name }}{% endblock %}
+{% block subhead %}<p>{{ account.email }}</p>{% endblock %}
+{% block panel %}
+<p><a href="{{ url_for('admin.users') }}" style="color:var(--navy);font-weight:600">← All users</a></p>
+<div class="cols">
+  <section class="panel" aria-labelledby="roles-title">
+    <h2 id="roles-title">Roles</h2>
+    {% if grants %}
+    <div class="scroll-x"><table class="table">
+      <thead><tr><th>Role</th><th>City</th><th>Given</th><th></th></tr></thead>
+      <tbody>
+      {% for g in grants %}
+        <tr><td><strong>{{ g.name }}</strong></td><td>{{ g.city or 'All cities' }}</td>
+          <td class="small"><span class="num">{{ g.granted_at|office_time }}</span><br><span class="muted">{{ g.granted_by or ('Automatically' if g.is_self_service else 'At set-up') }}</span></td>
+          <td>{% if g.is_self_service %}<span class="muted small">Automatic</span>{% else %}
+            <form class="inline" method="post" action="{{ url_for('admin.users_revoke', uid=account.id, grant_id=g.id) }}">{{ csrf_input() }}
+              <button class="btn-small danger" type="submit">Remove</button></form>{% endif %}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+    {% else %}
+    <p class="muted small">No roles.</p>
+    {% endif %}
+
+    <h3>Give a role</h3>
+    <form class="toolbar" method="post" action="{{ url_for('admin.users_grant', uid=account.id) }}">
+      {{ csrf_input() }}
+      <div class="field"><label for="role_code">Role</label>
+        <select id="role_code" name="role_code" required>
+          <option value="">Choose…</option>
+          {% for r in grantable %}<option value="{{ r.code }}">{{ r.name }}</option>{% endfor %}
+        </select></div>
+      <div class="field"><label for="city_id">City</label>
+        <select id="city_id" name="city_id"><option value="">All cities</option>{% for c in cities %}<option value="{{ c.id }}">{{ c.name }}, {{ c.state_code }}</option>{% endfor %}</select></div>
+      <button class="pill plain" type="submit">Give role</button>
+    </form>
+    <p class="muted small">Student and User are given automatically. Only an admin can give the Admin role. A city limits a staff role to that city's classes.</p>
+  </section>
+
+  <section class="panel" aria-labelledby="acct-title">
+    <h2 id="acct-title">Account</h2>
+    <dl class="kv">
+      <dt>Status</dt><dd><span class="status {{ {'active': 'ok', 'suspended': 'bad', 'invited': 'wait'}.get(account.status, 'off') }}">{{ account.status|capitalize }}</span></dd>
+      <dt>Signed up as</dt><dd>{{ (account.signup_intent or '—')|capitalize }}</dd>
+      <dt>Created</dt><dd class="num">{{ account.created_at|office_time }}</dd>
+      <dt>Last sign-in</dt><dd class="num">{{ account.last_sign_in_at|office_time }}</dd>
+    </dl>
+    {% if is_self %}
+      <p class="muted small">This is your own account.</p>
+    {% elif account.status == 'active' %}
+      <form method="post" action="{{ url_for('admin.users_status', uid=account.id) }}">{{ csrf_input() }}
+        <input type="hidden" name="action" value="suspend">
+        <button class="btn-small danger" type="submit">Suspend: stop them signing in</button></form>
+    {% elif account.status == 'suspended' %}
+      <form method="post" action="{{ url_for('admin.users_status', uid=account.id) }}">{{ csrf_input() }}
+        <input type="hidden" name="action" value="reactivate">
+        <button class="btn-small" type="submit">Reactivate</button></form>
+    {% endif %}
+
+    <h3>History</h3>
+    {% if history %}
+    <ul class="list">{% for h in history %}<li><span>{{ h.text }}<br><span class="meta num">{{ h.actor or 'System' }} · {{ h.occurred_at|office_time }}</span></span></li>{% endfor %}</ul>
+    {% else %}
+    <p class="muted small">No changes logged for this account yet.</p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

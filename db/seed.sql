@@ -105,6 +105,7 @@ INSERT INTO permissions (code, area, description, own_records_only) VALUES
   ('self.bookings_view',       'My account',  'See my bookings, receipts and certificates', true),
   -- Administration
   ('user.manage',              'Admin',       'Invite people; grant and revoke roles', false),
+  ('role.manage',              'Admin',       'Change which permissions each role grants', false),
   ('settings.manage',          'Admin',       'Change business settings (hold minutes, alert days, ...)', false),
   ('content.edit',             'Admin',       'Edit public page wording', false),
   ('content.approve',          'Admin',       'Approve public page wording', false),

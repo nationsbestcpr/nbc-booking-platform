@@ -1,0 +1,55 @@
+{% extends "dash/layout.html" %}
+{% block title %}Instructor dashboard{% endblock %}
+{% block heading %}Hi, {{ current_user.first_name }} <span class="accent">Your Teaching</span>{% endblock %}
+{% block subhead %}<p>The classes you teach, live seat numbers and your certifications.</p>{% endblock %}
+{% block panel %}
+{% if not instructor %}
+<section class="panel">
+  <h2>Your instructor profile isn't linked yet</h2>
+  <p class="muted">Your account has the instructor role, but no instructor profile is connected to it. Ask the operations team to link it; your classes and certifications will appear here.</p>
+</section>
+{% else %}
+{% set leads = classes|selectattr('role', 'equalto', 'lead')|list %}
+<div class="stats">
+  <div class="stat"><strong class="num">{{ classes|length }}</strong><span>Upcoming classes</span></div>
+  <div class="stat"><strong class="num">{{ leads|length }}</strong><span>As lead instructor</span></div>
+  <div class="stat"><strong class="num">{{ classes|length - leads|length }}</strong><span>As helper instructor</span></div>
+  {% set expiring = certs|selectattr('days_left', 'lt', 60)|list %}
+  <div class="stat{{ ' alert-stat' if expiring }}"><strong class="num">{{ expiring|length }}</strong><span>Certifications expiring within 60 days</span></div>
+</div>
+<div class="cols">
+  <section class="panel" aria-labelledby="cls-title">
+    <h2 id="cls-title">Upcoming classes</h2>
+    {% if classes %}
+    <ul class="list">
+      {% for c in classes %}
+      <li>
+        <span><strong>{{ c.course_name }}</strong><br>
+          <span class="meta num">{{ class_date(c.starts_at, c.time_zone) }} · {{ class_time(c.starts_at, c.ends_at, c.time_zone) }}</span><br>
+          <span class="meta">{{ c.site_name }}, {{ c.city_name }} · <span class="num">{{ c.sold_seats }} of {{ c.seat_limit }} seats sold</span>{% if c.waitlist_count %} · <span class="num">{{ c.waitlist_count }}</span> waiting{% endif %}</span></span>
+        <span class="status {{ 'ok' if c.role == 'lead' else 'wait' }}">{{ 'Lead instructor' if c.role == 'lead' else 'Helper instructor' }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <div class="empty">No upcoming classes assigned to you yet.</div>
+    {% endif %}
+  </section>
+  <section class="panel" aria-labelledby="cert-title">
+    <h2 id="cert-title">Certifications</h2>
+    {% if certs %}
+    <ul class="list">
+      {% for c in certs %}
+      <li><span><strong>{{ c.cert_type|cert_label }}</strong><br><span class="meta num">Expires {{ c.expires_on.strftime('%b %-d, %Y') }}</span></span>
+        {% if c.days_left < 0 %}<span class="status bad">Expired</span>
+        {% elif c.days_left < 60 %}<span class="status wait">{{ c.days_left }} days left</span>
+        {% else %}<span class="status ok">Valid</span>{% endif %}</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted small">No certifications on file. Send yours to the operations team.</p>
+    {% endif %}
+  </section>
+</div>
+{% endif %}
+{% endblock %}

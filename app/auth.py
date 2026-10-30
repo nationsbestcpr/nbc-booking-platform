@@ -37,7 +37,7 @@ class CurrentUser:
     email: str
     display_name: str
     signup_intent: str | None
-    roles: list[dict] = field(default_factory=list)   # [{code, name, is_staff, scope_metro_id}], main role first
+    roles: list[dict] = field(default_factory=list)   # [{code, name, is_staff, grants_all, dashboard_key, scope_metro_id}], main role first
     permissions: set[str] = field(default_factory=set)
 
     @property
@@ -56,6 +56,26 @@ class CurrentUser:
     def has_role(self, code: str) -> bool:
         return any(r["code"] == code for r in self.roles)
 
+    @property
+    def is_admin(self) -> bool:
+        """Holds a role that grants every permission."""
+        return any(r.get("grants_all") for r in self.roles)
+
+    @property
+    def area(self) -> str:
+        """Which dashboard area this account opens: 'admin' for staff roles,
+        'instructor' for a role whose dashboard is the instructor one, else
+        'student' (customers: users and students). Decided by role data."""
+        if self.is_staff:
+            return "admin"
+        if any(r.get("dashboard_key") == "instructor" for r in self.roles):
+            return "instructor"
+        return "student"
+
+    def has_permission(self, permission: str) -> bool:
+        """Holds the permission in at least one city area (use can() for an exact area)."""
+        return permission in self.permissions
+
     def can(self, permission: str, metro_id: int | None = None) -> bool:
         """Exact check in the database (honours city-area limits)."""
         return bool(db.fetch_value("SELECT user_has_permission(:uid, :perm, :metro)",
@@ -69,7 +89,7 @@ def load_user(user_id: int) -> CurrentUser | None:
     if not account:
         return None
     roles = db.fetch_all("""
-        SELECT r.code, r.name, r.is_staff, ur.scope_metro_id
+        SELECT r.code, r.name, r.is_staff, r.grants_all, r.dashboard_key, ur.scope_metro_id
           FROM user_roles ur JOIN roles r ON r.code = ur.role_code
          WHERE ur.user_account_id = :id AND ur.revoked_at IS NULL
          ORDER BY r.sort_order
@@ -220,6 +240,61 @@ def permission_required(permission: str) -> Callable:
             return view(*args, **kwargs)
         return wrapped
     return decorator
+
+
+def staff_required(view: Callable) -> Callable:
+    """Any office role (roles.is_staff)."""
+    @wraps(view)
+    @login_required
+    def wrapped(*args, **kwargs):
+        if not current_user().is_staff:
+            abort(403)
+        return view(*args, **kwargs)
+    return wrapped
+
+
+def any_permission_required(*permissions: str) -> Callable:
+    def decorator(view: Callable) -> Callable:
+        @wraps(view)
+        @login_required
+        def wrapped(*args, **kwargs):
+            if not any(p in current_user().permissions for p in permissions):
+                abort(403)
+            return view(*args, **kwargs)
+        return wrapped
+    return decorator
+
+
+def change_password(user_id: int, current: str, new: str, confirm: str) -> None:
+    """Change a password after checking the current one. Raises SignUpError
+    (field, message) so the settings form can show the problem by the field."""
+    if len(new) < current_app.config["PASSWORD_MIN_LENGTH"]:
+        raise SignUpError("new_password", f"Use at least {current_app.config['PASSWORD_MIN_LENGTH']} characters.")
+    if new != confirm:
+        raise SignUpError("confirm_password", "The two new passwords don't match.")
+    with db.transaction() as conn:
+        row = conn.execute(text("""
+            SELECT id, password_hash FROM user_identities
+             WHERE user_account_id = :uid AND provider = 'password'
+             FOR NO KEY UPDATE
+        """), {"uid": user_id}).mappings().first()
+        if row is None:
+            raise SignUpError("current_password", "This account doesn't sign in with a password.")
+        if not check_password_hash(row["password_hash"], current):
+            raise SignUpError("current_password", "That isn't your current password.")
+        if check_password_hash(row["password_hash"], new):
+            raise SignUpError("new_password", "Choose a password different from your current one.")
+        conn.execute(text("""
+            UPDATE user_identities SET password_hash = :h, password_changed_at = now(),
+                   failed_attempts = 0, locked_until = NULL
+             WHERE id = :id
+        """), {"h": generate_password_hash(new), "id": row["id"]})
+
+
+def has_password(user_id: int) -> bool:
+    return bool(db.fetch_value(
+        "SELECT EXISTS (SELECT 1 FROM user_identities WHERE user_account_id = :uid AND provider = 'password')",
+        uid=user_id))
 
 
 def safe_next(target: str | None) -> str:

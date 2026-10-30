@@ -45,8 +45,10 @@ Everyone who signs in has one `user_accounts` row: customers, instructors
 and office staff alike. There is one sign-in page and nobody picks a role:
 what a person may do comes only from the roles granted to them in
 `user_roles`. The role with the lowest `roles.sort_order` is their main one
-and decides what they see first. Each role will open its own dashboard
-(`roles.dashboard_key`); someone with several roles switches between them.
+and decides what they see first. Which dashboard area opens comes from the
+role data too: a staff role (`roles.is_staff`) opens the admin area, a role
+whose `dashboard_key` is `instructor` opens the instructor area, everyone else
+the student area. Inside the admin area each tab needs its own permission.
 
 - **How people get roles.**
   - **Every new account** starts as a regular **user**.
@@ -54,7 +56,10 @@ and decides what they see first. Each role will open its own dashboard
     `registrations` grants it when a booking under their email is confirmed.
     Someone who booked as a guest becomes a student when they create an
     account, via `grant_student_role_if_booked()`.
-  - **Instructor and staff roles** are granted by an admin only.
+  - **Instructor and staff roles** are granted from the admin dashboard by
+    someone with `user.manage`; only an admin can grant or revoke the Admin
+    role. The very first admin of a database is made from the shell with
+    `flask --app wsgi users make-admin EMAIL`.
   - **"I'm an instructor" at sign-up** is saved as
     `user_accounts.signup_intent` for the team to verify. It grants nothing
     on its own.
@@ -80,6 +85,9 @@ and decides what they see first. Each role will open its own dashboard
 - **History.** Revoking a role sets `revoked_at` (kept for history) and takes
   effect immediately. Suspending an account removes all its permissions. The
   audit log records the role each action was taken from.
+- **Changing what a role can do** is the Roles & permissions tab, which needs
+  `role.manage` (added in migration 0003). The Admin role always has every
+  permission, so it has nothing to tick.
 
 | Role | Dashboard for | Signs in with | Can do |
 |---|---|---|---|
@@ -94,7 +102,7 @@ and decides what they see first. Each role will open its own dashboard
 | Student | Customers who have booked (automatic) | Email + password | Their bookings, receipts and certificates; book more; manage their profile |
 | User | Every account (automatic) | Email + password | Book classes; manage their profile |
 
-The full permission list (49) and the role grants are in `db/seed.sql`, so
+The full permission list (50) and the role grants are in `db/seed.sql`, so
 changing who can do what is a data change, not a code change.
 
 ## Core relationships
@@ -193,6 +201,8 @@ These hold however the code is written. Each is covered by
 | Each webhook event processed once | Unique `(provider, event_id)` |
 | Customer messages always go through GHL | CHECK on `notifications` |
 | The audit log can't be changed | Triggers block UPDATE, DELETE, TRUNCATE |
+| Roles are granted and revoked only by people allowed to (`user.manage`); only an admin grants or revokes Admin; Student and User are never granted by hand | Trigger on `user_roles` (`trg_user_roles_guard`); grants with no granter are system grants (sign-up, paid seat, first-admin command) |
+| There is always at least one active admin | Triggers on `user_roles` revokes and `user_accounts` status changes (`trg_keep_an_admin`) |
 | Private class-packet data never reaches public queries | Kept in separate `*_private_details` tables |
 
 ## How the app uses it

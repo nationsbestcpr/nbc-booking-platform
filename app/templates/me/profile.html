@@ -1,0 +1,44 @@
+{% extends "dash/layout.html" %}
+{% block title %}Profile{% endblock %}
+{% block heading %}Your <span class="accent">Profile</span>{% endblock %}
+{% block panel %}
+<div class="cols">
+  <section class="panel" aria-labelledby="pf-title">
+    <h2 id="pf-title">Name and email</h2>
+    <form method="post" action="{{ url_for('me.profile') }}" class="stack" style="display:flex;flex-direction:column;gap:16px" novalidate>
+      {{ csrf_input() }}
+      <div class="field">
+        <label for="display_name">Name</label>
+        <input type="text" id="display_name" name="display_name" value="{{ name }}" autocomplete="name" required
+               {% if errors.display_name %}aria-invalid="true" aria-describedby="name-err"{% endif %}>
+        {% if errors.display_name %}<span class="error" id="name-err">{{ errors.display_name }}</span>{% endif %}
+        <span class="hint">Shown on your account. The name on a certificate is the one entered at booking.</span>
+      </div>
+      <div class="field">
+        <label for="email">Email</label>
+        <input type="email" id="email" value="{{ current_user.email }}" readonly>
+        <span class="hint">You sign in with this email. To change it, contact info@nationsbestcpr.com.</span>
+      </div>
+      <button class="pill red" type="submit" style="align-self:flex-start">Save <span class="arrow" aria-hidden="true">→</span></button>
+    </form>
+  </section>
+  <section class="panel" aria-labelledby="acc-title">
+    <h2 id="acc-title">Your account</h2>
+    <dl class="kv">
+      <dt>Roles</dt><dd>{% for r in current_user.roles %}<span class="role-badge{{ ' red' if r.is_staff }}" style="margin:0 4px 4px 0">{{ r.name }}</span>{% endfor %}</dd>
+      <dt>Member since</dt><dd class="num">{{ account.created_at|office_time }}</dd>
+      <dt>Last sign-in</dt><dd class="num">{{ account.last_sign_in_at|office_time }}</dd>
+    </dl>
+    {% if instructor %}
+    <h3>Instructor profile</h3>
+    <dl class="kv">
+      <dt>Name</dt><dd>{{ instructor.first_name }} {{ instructor.last_name }}</dd>
+      <dt>Contact email</dt><dd>{{ instructor.email }}</dd>
+      <dt>Phone</dt><dd class="num">{{ instructor.phone_e164 or '—' }}</dd>
+      <dt>Home city</dt><dd>{{ instructor.home_city ~ ', ' ~ instructor.home_state if instructor.home_city else '—' }}</dd>
+    </dl>
+    <p class="muted small">The operations team keeps your instructor profile up to date.</p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

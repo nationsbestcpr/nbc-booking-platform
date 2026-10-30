@@ -29,7 +29,11 @@ and `docs/database-architecture.md` before changing data or integrations.
   contacts) and never show payment details.
 - Check permissions with `auth.permission_required(...)` or
   `current_user().can(permission, metro_id)`. Roles and permissions are data
-  (`db/seed.sql`), not hard-coded role names.
+  (`db/seed.sql`), not hard-coded role names. New dashboard tabs go in
+  `app/areas.py` with the permission that shows them.
+- Every staff action writes `audit.record(conn, ...)` in the same transaction
+  as the change. Role grants from the app always set `granted_by_user_id` /
+  `revoked_by_user_id`, so the database can check them.
 - Secrets come from environment variables only. Never commit keys; `.env` is ignored.
 - Roles are never chosen at sign-in. New accounts get `user`; `student` is
   granted by the database when a seat is paid for; instructor and staff

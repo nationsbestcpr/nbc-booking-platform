@@ -14,9 +14,14 @@ app/                 Flask app
   db.py              one SQLAlchemy engine; plain SQL helpers; transaction()
   auth.py            accounts: create, sign in (email + password), work out the role
   security.py        form protection (CSRF token on every POST form)
+  areas.py           which dashboard area each account opens, and its tabs
+  audit.py           writes the action log (audit_log) inside the change's transaction
   blueprints/
     public.py        landing page: classes on sale, greeting by role
     account.py       /sign-in, /create-account, /sign-out
+    me.py            /dashboard (opens your area), /my (student area), /account/profile, /account/settings
+    teach.py         /teach: instructor area (classes taught, certifications)
+    admin.py         /admin: dashboard, users, roles & permissions, integrations
     webhooks.py      /webhooks/stripe, /webhooks/ghl (stubs until phases 3 and 4)
     health.py        /healthz
   templates/, static/app.css   styled after nationsbestcpr.com
@@ -93,7 +98,7 @@ The database is built and changed only through migrations in `migrations/`.
 | Command (from the repo root) | What it does |
 |---|---|
 | `flask --app wsgi db upgrade` | Creates or updates the database to the latest version. Safe to run again: it only runs what's missing. |
-| `flask --app wsgi db current` | Shows which version the database is on (`0002 (head)` = up to date). |
+| `flask --app wsgi db current` | Shows which version the database is on (`0003 (head)` = up to date). |
 | `flask --app wsgi db history` | Lists every migration. |
 | `flask --app wsgi db downgrade -1` | Undoes the last migration (asks first; `base` undoes all). |
 | `flask --app wsgi db new "what changes"` | Starts the next numbered migration file. |
@@ -115,7 +120,7 @@ In the Replit workspace shell, after the code is in the Repl:
    sh scripts/replit-setup.sh         # installs the packages into .venv
    . .venv/bin/activate               # once per new Shell tab
    flask --app wsgi db upgrade
-   flask --app wsgi db current        # expect: 0002 (head)
+   flask --app wsgi db current        # expect: 0003 (head)
    ```
    Don't use a plain `pip install` on Replit: its Python is read-only and set
    up for `--user` installs, so it fails with "Permission denied" or "Can not
@@ -123,7 +128,12 @@ In the Replit workspace shell, after the code is in the Repl:
    the same setup script. The package list is `requirements/app.txt`; there is
    deliberately no `requirements.txt` at the root, because Replit's publish
    step would run its own failing `pip install` on it.
-4. Start the app (Run) and open `/healthz`: `"status": "ok"` and
+4. Make the first admin: create an account at `/create-account`, then
+   ```bash
+   flask --app wsgi users make-admin you@nationsbestcpr.com
+   ```
+   From then on, admins give roles in the dashboard (Admin > Users).
+5. Start the app (Run) and open `/healthz`: `"status": "ok"` and
    `"database_env_matches": true` mean the database is ready and belongs to
    this environment.
 
@@ -151,6 +161,32 @@ Notes:
   extensions and the hosting settings need changing first.
 - Never run `db load-demo` there (it refuses anyway).
 
+## Updating a Replit project from GitHub
+
+Every publish adds a "Published your App" commit of Replit's own, so
+`git pull` stops with "Diverging branches". The Repl never holds changes of
+its own (all code comes from GitHub), so update it with:
+
+```bash
+git fetch origin
+git reset --hard origin/main
+```
+
+Your `.venv`, secrets and databases aren't touched.
+
+## Dashboards
+
+`/dashboard` opens the area for the signed-in account, worked out from its
+roles (`app/areas.py`): staff roles → **Admin**, the instructor role →
+**Instructor**, everyone else → **My account** (students and users). Every
+area has Dashboard, Profile and Settings. The admin area adds **Users**
+(`user.manage`), **Roles & permissions** (view with `user.manage` or
+`role.manage`, change with `role.manage`) and **Integrations**
+(`system.health_view`); a tab shows only to accounts holding its permission.
+Every admin change is written to the action log. The database refuses role
+grants by people who aren't allowed to make them, and never lets the last
+active admin be removed or suspended.
+
 ## Deploy (Replit Reserved VM)
 
 `.replit` builds with `scripts/replit-setup.sh` and runs gunicorn from `.venv` on port 5000. Secrets: `APP_ENV`, `SECRET_KEY`,
@@ -162,7 +198,8 @@ above before the first publish.
 | Phase | Status |
 |---|---|
 | Database schema, roles and permissions | Done (PR #1) |
-| App skeleton: sign-in, create account, landing page of classes | This branch |
+| App skeleton: sign-in, create account, landing page of classes | Done |
+| Dashboard skeletons: admin (users, roles & permissions, integrations), instructor, student | This branch |
 | 1. Airtable sync | Next |
 | 2. Search pages and SEO | To do |
 | 3. Seat holds and Stripe Checkout | To do |

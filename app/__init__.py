@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from flask import Flask, render_template
 
-from . import auth, cli, db, filters, security
+from . import areas, auth, cli, db, filters, security
 from .config import Config
 
 
@@ -18,15 +18,19 @@ def create_app(overrides: dict | None = None) -> Flask:
     db.init_app(app)
     security.init_app(app)
     auth.init_app(app)
+    areas.init_app(app)
     filters.init_app(app)
     cli.init_app(app)
 
-    from .blueprints import account, health, public, webhooks
+    from .blueprints import account, admin, health, me, public, teach, webhooks
 
     app.register_blueprint(health.bp)
     app.register_blueprint(webhooks.bp)
     app.register_blueprint(account.bp)
     app.register_blueprint(public.bp)
+    app.register_blueprint(me.bp)
+    app.register_blueprint(teach.bp)
+    app.register_blueprint(admin.bp)
 
     def error_page(code: int, title: str, message: str):
         return render_template("errors/error.html", code=code, title=title, message=message), code

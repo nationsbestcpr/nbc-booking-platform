@@ -1,0 +1,55 @@
+{% extends "dash/layout.html" %}
+{% block title %}Integrations{% endblock %}
+{% block heading %}Integrations <span class="accent">Status</span>{% endblock %}
+{% block subhead %}<p>Each connection to another platform: whether it's set up, whether it's working, and what needs a look.</p>{% endblock %}
+{% block panel %}
+<div class="int-grid">
+  {% for c in cards %}
+  <section class="panel int-card" aria-labelledby="int-{{ c.key }}">
+    <div class="panel-head"><h2 id="int-{{ c.key }}">{{ c.name }}</h2><span class="status {{ c.state }}">{{ c.label }}</span></div>
+    <p class="muted small">{{ c.what }}</p>
+    <dl class="kv">
+      <dt>Built in</dt><dd>{{ c.phase }}</dd>
+      <dt>Secrets</dt><dd><span class="secret-list">{% for s in c.secrets %}<span class="secret {{ 'missing' if s in c.missing else 'set' }}" title="{{ 'Missing' if s in c.missing else 'Set' }}">{{ s }}</span>{% endfor %}</span></dd>
+      {% if c.oauth %}<dt>Connection</dt><dd>{% if c.connection %}Installed in sub-account <code>{{ c.connection.account_ref }}</code> · renewed {{ c.connection.refreshed_at|office_time }}{% else %}Not installed yet{% endif %}</dd>{% endif %}
+      {% if c.runs %}<dt>Last run</dt><dd>{% if c.last_run %}{{ c.last_run.kind.replace('_', ' ')|capitalize }} · <span class="status {{ {'succeeded': 'ok', 'partial': 'wait', 'failed': 'bad', 'running': 'wait'}[c.last_run.status] }}">{{ c.last_run.status|capitalize }}</span> · <span class="num">{{ c.last_run.started_at|office_time }}</span>{% else %}Never{% endif %}</dd>{% endif %}
+      {% if c.webhook %}<dt>Last message in</dt><dd class="num">{{ c.last_webhook|office_time if c.last_webhook else 'None yet' }}</dd>{% endif %}
+      {% if c.issue_source %}<dt>Open problems</dt><dd class="num">{{ c.problems.open }}{% if c.problems.errors %} <span class="status bad">{{ c.problems.errors }} error{{ 's' if c.problems.errors != 1 }}</span>{% endif %}</dd>{% endif %}
+      {% if c.outbox %}<dt>Not synced</dt><dd class="num">{{ c.unsynced }}</dd>{% endif %}
+    </dl>
+  </section>
+  {% endfor %}
+</div>
+<p class="muted small">Secrets are checked by name only; their values are never shown. Add them in Replit's Secrets (staging) or the published app's secrets (production).</p>
+
+<section class="panel" aria-labelledby="prob-title">
+  <h2 id="prob-title">Open problems</h2>
+  {% if issues %}
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>Where</th><th>Problem</th><th>Seen</th><th>Last seen</th></tr></thead>
+    <tbody>{% for i in issues %}
+      <tr><td><span class="status {{ {'error': 'bad', 'warning': 'wait'}.get(i.severity, 'off') }}">{{ i.source|capitalize }}</span></td>
+        <td>{{ i.message }}<br><code class="muted small">{{ i.code }}</code></td><td class="num">{{ i.occurrences }}×</td><td class="num">{{ i.last_seen_at|office_time }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}
+  <p class="muted small">No open problems.</p>
+  {% endif %}
+</section>
+
+<section class="panel" aria-labelledby="runs-title">
+  <h2 id="runs-title">Recent background runs</h2>
+  {% if runs %}
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>Job</th><th>Started by</th><th>Result</th><th>Started</th></tr></thead>
+    <tbody>{% for r in runs %}
+      <tr><td>{{ r.kind.replace('_', ' ')|capitalize }}</td><td>{{ {'schedule': 'Schedule', 'button': 'Sync button', 'manual': 'By hand', 'webhook': 'Incoming message'}[r.trigger] }}</td>
+        <td><span class="status {{ {'succeeded': 'ok', 'partial': 'wait', 'failed': 'bad', 'running': 'wait'}[r.status] }}">{{ r.status|capitalize }}</span>{% if r.error %}<br><span class="small muted">{{ r.error }}</span>{% endif %}</td>
+        <td class="num">{{ r.started_at|office_time }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}
+  <p class="muted small">No background jobs have run yet. The first will be the Airtable sync.</p>
+  {% endif %}
+</section>
+{% endblock %}

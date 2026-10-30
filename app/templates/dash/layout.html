@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="wrap dash">
+  <header class="dash-head">
+    <div class="stack">
+      <span class="eyebrow">{{ area_title }}</span>
+      <h1>{% block heading %}{% endblock %}</h1>
+      {% block subhead %}{% endblock %}
+    </div>
+    <span class="role-badge">{{ current_user.main_role.name }}</span>
+  </header>
+
+  <nav class="tabs" aria-label="{{ area_title }} sections">
+    {% for t in tabs %}<a href="{{ url_for(t.endpoint) }}"{% if t.current %} aria-current="page"{% endif %}>{{ t.label }}</a>{% endfor %}
+  </nav>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+    <p class="notice {{ category }}" role="{{ 'alert' if category == 'error' else 'status' }}">{{ message }}</p>
+    {% endfor %}
+  {% endwith %}
+
+  {% block panel %}{% endblock %}
+</div>
+{% endblock %}

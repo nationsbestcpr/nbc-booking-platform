@@ -1,0 +1,43 @@
+{% extends "dash/layout.html" %}
+{% block title %}{{ role.name }} role{% endblock %}
+{% block heading %}{{ role.name }} <span class="accent">Role</span>{% endblock %}
+{% block subhead %}<p>{{ role.description }}</p>{% endblock %}
+{% block panel %}
+<p><a href="{{ url_for('admin.roles') }}" style="color:var(--navy);font-weight:600">← All roles</a></p>
+<div class="cols">
+  <section class="panel" aria-labelledby="perm-title">
+    <div class="panel-head"><h2 id="perm-title">What this role can do</h2>
+      {% if role.grants_all %}<span class="status ok">Everything</span>{% endif %}</div>
+    {% if role.grants_all %}
+      <p class="muted">This role always has every permission, including ones added later, so there's nothing to tick.</p>
+    {% elif not can_edit %}
+      <p class="muted small">You can see these permissions. Changing them needs the "change which permissions each role grants" permission.</p>
+    {% endif %}
+    {% if not role.grants_all %}
+    <form method="post" action="{{ url_for('admin.roles_detail', code=role.code) }}" style="display:flex;flex-direction:column;gap:14px">
+      {{ csrf_input() }}
+      <div class="perm-grid">
+      {% for area, perms in by_area.items() %}
+        <fieldset class="perm-area"><legend>{{ area }}</legend>
+          {% for p in perms %}
+          <label class="perm"><input type="checkbox" name="permissions" value="{{ p.code }}"{{ ' checked' if p.granted }}{{ ' disabled' if not can_edit }}>
+            <span>{{ p.description }}{% if p.own_records_only %} <span class="muted small">(own records only)</span>{% endif %}<br><code>{{ p.code }}</code></span></label>
+          {% endfor %}
+        </fieldset>
+      {% endfor %}
+      </div>
+      {% if can_edit %}<button class="pill red" type="submit" style="align-self:flex-start">Save permissions <span class="arrow" aria-hidden="true">→</span></button>{% endif %}
+    </form>
+    {% endif %}
+  </section>
+  <section class="panel" aria-labelledby="who-title">
+    <h2 id="who-title">People with this role</h2>
+    {% if holders %}
+    <ul class="list">{% for h in holders %}<li><span>{% if current_user.has_permission('user.manage') %}<a href="{{ url_for('admin.users_detail', uid=h.id) }}" style="color:var(--navy);font-weight:700">{{ h.display_name }}</a>{% else %}<strong>{{ h.display_name }}</strong>{% endif %}<br><span class="meta">{{ h.email }}</span></span>{% if h.city %}<span class="status off">{{ h.city }} only</span>{% endif %}</li>{% endfor %}</ul>
+    {% if more_holders %}<p class="muted small">Showing 25. Use Users to see everyone with this role.</p>{% endif %}
+    {% else %}
+    <p class="muted small">Nobody has this role yet.</p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

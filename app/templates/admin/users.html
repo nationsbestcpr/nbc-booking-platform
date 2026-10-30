@@ -1,0 +1,31 @@
+{% extends "dash/layout.html" %}
+{% block title %}Users{% endblock %}
+{% block heading %}People and <span class="accent">Their Roles</span>{% endblock %}
+{% block subhead %}<p>New accounts start as users; a paid seat makes them students. Instructor and staff roles are given here.</p>{% endblock %}
+{% block panel %}
+<section class="panel">
+  <form class="toolbar" method="get" action="{{ url_for('admin.users') }}" role="search">
+    <div class="field"><label for="q">Name or email</label><input type="search" id="q" name="q" value="{{ q }}" placeholder="e.g. riley or @example.test"></div>
+    <div class="field"><label for="role">Role</label>
+      <select id="role" name="role"><option value="">Any role</option>{% for r in roles %}<option value="{{ r.code }}"{{ ' selected' if r.code == role }}>{{ r.name }}</option>{% endfor %}</select></div>
+    <div class="field"><label for="status">Status</label>
+      <select id="status" name="status"><option value="">Any status</option>{% for s, l in [('active', 'Active'), ('suspended', 'Suspended'), ('invited', 'Invited'), ('deactivated', 'Deactivated')] %}<option value="{{ s }}"{{ ' selected' if s == status }}>{{ l }}</option>{% endfor %}</select></div>
+    <button class="pill plain" type="submit">Search</button>
+  </form>
+  <p class="muted small num">{{ rows|length }}{{ '+' if more }} account{{ 's' if rows|length != 1 }}{% if more %} · showing the first 200: narrow the search{% endif %}</p>
+  {% if rows %}
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>Name</th><th>Email</th><th>Roles</th><th>Status</th><th>Last sign-in</th></tr></thead>
+    <tbody>
+    {% for u in rows %}
+      <tr><td><a href="{{ url_for('admin.users_detail', uid=u.id) }}">{{ u.display_name }}</a></td><td>{{ u.email }}</td><td>{{ u.roles or '—' }}</td>
+        <td><span class="status {{ {'active': 'ok', 'suspended': 'bad', 'invited': 'wait'}.get(u.status, 'off') }}">{{ u.status|capitalize }}</span></td>
+        <td class="num">{{ u.last_sign_in_at|office_time }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <div class="empty">No accounts match that search.</div>
+  {% endif %}
+</section>
+{% endblock %}

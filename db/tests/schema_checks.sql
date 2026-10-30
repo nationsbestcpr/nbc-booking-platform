@@ -404,6 +404,58 @@ SELECT pg_temp.expect_error(
      SELECT id, 'instructor' FROM user_accounts WHERE email = 'teach@example.test'$q$,
   '23505', 'the same role cannot be granted twice');
 
+-- Role grants and revokes made by a person (admin dashboard), migration 0003.
+INSERT INTO user_accounts (email, display_name, status) VALUES
+  ('newhire@example.test', 'New Hire', 'active'),
+  ('people@example.test',  'People Admin', 'active'),
+  ('admin2@example.test',  'Second Admin', 'active');
+SELECT pg_temp.expect_error(
+  $q$INSERT INTO user_roles (user_account_id, role_code, granted_by_user_id)
+     SELECT (SELECT id FROM user_accounts WHERE email = 'newhire@example.test'), 'viewer',
+            (SELECT id FROM user_accounts WHERE email = 'teach@example.test')$q$,
+  '42501', 'someone without user.manage cannot grant a role');
+INSERT INTO user_roles (user_account_id, role_code, granted_by_user_id)
+SELECT (SELECT id FROM user_accounts WHERE email = 'newhire@example.test'), 'viewer',
+       (SELECT id FROM user_accounts WHERE email = 'admin@example.test');
+SELECT pg_temp.check(true, 'an admin can grant a staff role');
+SELECT pg_temp.expect_error(
+  $q$INSERT INTO user_roles (user_account_id, role_code, granted_by_user_id)
+     SELECT (SELECT id FROM user_accounts WHERE email = 'newhire@example.test'), 'student',
+            (SELECT id FROM user_accounts WHERE email = 'admin@example.test')$q$,
+  '42501', 'nobody grants the student role by hand (only a paid seat does)');
+INSERT INTO roles (code, name, description, dashboard_key, sign_in_method, is_staff, sort_order)
+VALUES ('people_admin', 'People admin', 'test role', 'admin', 'microsoft', true, 15);
+INSERT INTO role_permissions VALUES ('people_admin', 'user.manage');
+INSERT INTO user_roles (user_account_id, role_code)
+SELECT id, 'people_admin' FROM user_accounts WHERE email = 'people@example.test';
+INSERT INTO user_roles (user_account_id, role_code, granted_by_user_id)
+SELECT (SELECT id FROM user_accounts WHERE email = 'newhire@example.test'), 'operations',
+       (SELECT id FROM user_accounts WHERE email = 'people@example.test');
+SELECT pg_temp.check(true, 'anyone with user.manage can grant a staff role');
+SELECT pg_temp.expect_error(
+  $q$INSERT INTO user_roles (user_account_id, role_code, granted_by_user_id)
+     SELECT (SELECT id FROM user_accounts WHERE email = 'newhire@example.test'), 'admin',
+            (SELECT id FROM user_accounts WHERE email = 'people@example.test')$q$,
+  '42501', 'only an admin can grant the admin role');
+SELECT pg_temp.expect_error(
+  $q$UPDATE user_roles SET revoked_at = now(),
+            revoked_by_user_id = (SELECT id FROM user_accounts WHERE email = 'admin@example.test')
+      WHERE role_code = 'admin' AND user_account_id = (SELECT id FROM user_accounts WHERE email = 'admin@example.test')$q$,
+  '23001', 'the last active admin cannot lose the admin role');
+SELECT pg_temp.expect_error(
+  $q$UPDATE user_accounts SET status = 'suspended' WHERE email = 'admin@example.test'$q$,
+  '23001', 'the last active admin cannot be suspended');
+INSERT INTO user_roles (user_account_id, role_code, granted_by_user_id)
+SELECT (SELECT id FROM user_accounts WHERE email = 'admin2@example.test'), 'admin',
+       (SELECT id FROM user_accounts WHERE email = 'admin@example.test');
+UPDATE user_roles SET revoked_at = now(),
+       revoked_by_user_id = (SELECT id FROM user_accounts WHERE email = 'admin2@example.test')
+ WHERE role_code = 'admin' AND user_account_id = (SELECT id FROM user_accounts WHERE email = 'admin@example.test');
+SELECT pg_temp.check(
+  NOT user_has_permission((SELECT id FROM user_accounts WHERE email = 'admin@example.test'), 'user.manage')
+  AND user_has_permission((SELECT id FROM user_accounts WHERE email = 'admin2@example.test'), 'role.manage'),
+  'with a second admin, an admin role can be handed over');
+
 -- ---------------------------------------------------------------------------
 -- Self-service accounts: password sign-in and automatic student role
 -- ---------------------------------------------------------------------------

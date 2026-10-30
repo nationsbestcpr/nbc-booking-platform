@@ -31,6 +31,7 @@
     <div class="account">
       {% if current_user %}
         <span class="who"><strong>{{ current_user.display_name }}</strong><span class="small muted">{{ current_user.main_role.name }}</span></span>
+        <a class="dash-link" href="{{ url_for('me.dashboard') }}">Dashboard</a>
         <form method="post" action="{{ url_for('account.sign_out') }}">{{ csrf_input() }}<button class="link-btn" type="submit">Sign out</button></form>
       {% else %}
         <a class="link-btn" href="{{ url_for('account.sign_in') }}">Sign in</a>

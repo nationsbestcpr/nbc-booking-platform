@@ -1,0 +1,19 @@
+{% extends "dash/layout.html" %}
+{% block title %}Roles and permissions{% endblock %}
+{% block heading %}Roles and <span class="accent">Permissions</span>{% endblock %}
+{% block subhead %}<p>Each role opens its own dashboard and allows a set of actions. Open a role to see or change what it can do.</p>{% endblock %}
+{% block panel %}
+<section class="panel">
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>Role</th><th>Who</th><th>Can do</th><th>People</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr><td><a href="{{ url_for('admin.roles_detail', code=r.code) }}">{{ r.name }}</a><br><span class="muted small">{{ r.description }}</span></td>
+        <td>{% if r.is_staff %}<span class="status bad">Staff</span>{% elif r.is_self_service %}<span class="status off">Automatic</span>{% else %}<span class="status ok">Given by an admin</span>{% endif %}</td>
+        <td class="num">{{ 'Everything' if r.grants_all else r.perms ~ ' permission' ~ ('s' if r.perms != 1 else '') }}</td>
+        <td class="num">{{ r.holders }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endblock %}

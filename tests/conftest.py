@@ -55,7 +55,10 @@ def post_form(client):
 
 
 @pytest.fixture()
-def sign_in(post_form):
+def sign_in(client, post_form):
+    """Sign in as someone (signing out whoever was signed in first)."""
     def _sign_in(email: str, password: str = DEMO_PASSWORD):
+        with client.session_transaction() as sess:
+            sess.clear()
         return post_form("/sign-in", {"email": email, "password": password})
     return _sign_in

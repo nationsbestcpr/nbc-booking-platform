@@ -27,9 +27,9 @@
         <span class="role-badge {{ 'red' if current_user.is_staff else '' }}">{{ current_user.main_role.name }}</span></h2>
       <p class="muted small">
         {% if current_user.is_staff %}
-          Staff dashboards arrive in a later build. For now you see the same classes customers see.
-        {% elif role == 'instructor' %}
-          Your teaching schedule arrives with the instructor portal. These are the classes on sale.
+          These are the classes customers see. <a href="{{ url_for('me.dashboard') }}">Open your dashboard</a> for users, roles and integrations.
+        {% elif current_user.area == 'instructor' %}
+          These are the classes on sale. <a href="{{ url_for('me.dashboard') }}">Open your dashboard</a> for the classes you teach.
         {% elif role == 'student' %}
           Your upcoming classes are below. Book another anytime.
         {% elif current_user.signup_intent == 'instructor' %}

@@ -1,0 +1,42 @@
+{% extends "dash/layout.html" %}
+{% block title %}Admin dashboard{% endblock %}
+{% block heading %}Hi, {{ current_user.first_name }} <span class="accent">At a Glance</span>{% endblock %}
+{% block subhead %}<p>Accounts, classes on sale, and anything the connections need you to look at.</p>{% endblock %}
+{% block panel %}
+<div class="stats">
+  <div class="stat"><strong class="num">{{ stats.accounts }}</strong><span>Active accounts</span></div>
+  <div class="stat"><strong class="num">{{ stats.students }}</strong><span>Students</span></div>
+  <div class="stat"><strong class="num">{{ stats.instructors }}</strong><span>Active instructors</span></div>
+  <div class="stat"><strong class="num">{{ stats.staff }}</strong><span>Staff accounts</span></div>
+  <div class="stat"><strong class="num">{{ stats.classes_on_sale }}</strong><span>Classes on sale</span></div>
+  <div class="stat{{ ' alert-stat' if stats.open_problems }}"><strong class="num">{{ stats.open_problems }}</strong><span>Open data problems</span></div>
+  <div class="stat{{ ' alert-stat' if stats.unsynced }}"><strong class="num">{{ stats.unsynced }}</strong><span>Changes not synced yet</span></div>
+</div>
+<div class="cols">
+  <section class="panel" aria-labelledby="go-title">
+    <h2 id="go-title">Go to</h2>
+    <ul class="list">
+      {% for t in tabs if t.endpoint != 'admin.home' %}
+      <li><a href="{{ url_for(t.endpoint) }}" style="color:var(--navy);font-weight:700">{{ t.label }}</a>
+        <span class="meta">{{ {'admin.users': 'Find people; give and remove roles; suspend accounts.',
+                               'admin.roles': 'What each role can do.',
+                               'admin.integrations': 'Airtable, Stripe, GHL and sign-in: set up, working, or needing attention.',
+                               'me.profile': 'Your name and account.',
+                               'me.settings': 'Your password.'}.get(t.endpoint, '') }}</span></li>
+      {% endfor %}
+    </ul>
+  </section>
+  <section class="panel" aria-labelledby="log-title">
+    <h2 id="log-title">Recent actions</h2>
+    {% if recent %}
+    <ul class="list">
+      {% for r in recent %}<li><span>{{ r.text }}<br><span class="meta num">{{ r.actor or 'System' }} · {{ r.occurred_at|office_time }}</span></span></li>{% endfor %}
+    </ul>
+    {% elif current_user.has_permission('audit.view') %}
+    <p class="muted small">No actions logged yet.</p>
+    {% else %}
+    <p class="muted small">The action log is visible to roles with the "see the full action log" permission.</p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

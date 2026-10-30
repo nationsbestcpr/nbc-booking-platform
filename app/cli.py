@@ -6,6 +6,7 @@
     flask --app wsgi db downgrade -1     # undo the last migration (asks first)
     flask --app wsgi db new "add x"      # start a new migration file
     flask --app wsgi db load-demo        # invented demo data, local development only
+    flask --app wsgi users make-admin EMAIL   # first admin of a new database
 """
 
 from __future__ import annotations
@@ -92,5 +93,46 @@ def load_demo() -> None:
     click.echo("Demo data loaded. Demo accounts sign in with: demo-password")
 
 
+users_cli = AppGroup("users", help="Accounts.")
+
+
+@users_cli.command("make-admin")
+@click.argument("email")
+@click.option("--yes", is_flag=True, help="Don't ask for confirmation.")
+def make_admin(email: str, yes: bool) -> None:
+    """Give an existing account the Admin role (for the first admin of a database).
+
+    After that, admins give roles from the dashboard (Admin > Users). The account
+    must exist first: create it at /create-account.
+    """
+    from sqlalchemy import text
+
+    from . import db
+    env = current_app.config["APP_ENV"]
+    with db.engine().begin() as conn:
+        account = conn.execute(text("SELECT id, display_name, status FROM user_accounts WHERE email = :e"),
+                               {"e": email.strip().lower()}).mappings().first()
+        if account is None:
+            raise click.ClickException(f"No account for {email}. Create it at /create-account first, then run this again.")
+        has = conn.execute(text("""SELECT 1 FROM user_roles WHERE user_account_id = :id AND role_code = 'admin'
+                                    AND revoked_at IS NULL"""), {"id": account["id"]}).first()
+        if has:
+            click.echo(f"{account['display_name']} is already an admin.")
+            return
+        if not yes:
+            click.confirm(f"Give {account['display_name']} <{email}> the Admin role (every permission) "
+                          f"on the {env} database?", abort=True)
+        conn.execute(text("UPDATE user_accounts SET status = 'active' WHERE id = :id AND status <> 'active'"),
+                     {"id": account["id"]})
+        conn.execute(text("INSERT INTO user_roles (user_account_id, role_code) VALUES (:id, 'admin')"),
+                     {"id": account["id"]})
+        conn.execute(text("""
+            INSERT INTO audit_log (actor_type, action, entity_type, entity_id, after, reason)
+            VALUES ('system', 'user.role_grant', 'user_account', :id, '{"role": "admin"}', 'flask users make-admin')
+        """), {"id": account["id"]})
+    click.echo(f"{account['display_name']} is now an admin. They see the admin dashboard after signing in.")
+
+
 def init_app(app: Flask) -> None:
     app.cli.add_command(db_cli)
+    app.cli.add_command(users_cli)

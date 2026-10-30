@@ -1,4 +1,4 @@
-"""Template helpers: money, local class times."""
+"""Template helpers: money, local class times, office times."""
 
 from __future__ import annotations
 
@@ -40,6 +40,19 @@ def class_time(start: datetime, end: datetime, tz: str) -> str:
     return f"{fmt(s)} – {fmt(e)} {_TZ_ABBR.get(tz, tz)}"
 
 
+# Office times (action log, sign-ins, sync runs) are shown in NBC's own time
+# zone. Class times always use the class's own zone (class_date / class_time).
+OFFICE_TZ = "America/New_York"
+
+
+def office_time(value: datetime | None) -> str:
+    """'Oct 30, 2026 6:12 am ET', or an em dash when there's no time."""
+    if value is None:
+        return "—"
+    d = value.astimezone(ZoneInfo(OFFICE_TZ))
+    return d.strftime("%b %-d, %Y %-I:%M %p").replace("AM", "am").replace("PM", "pm") + " ET"
+
+
 _CERT_WORDS = {"ARC": "Red Cross", "BLS": "BLS", "FA": "First Aid", "CPR": "CPR", "AED": "AED",
                "INSTRUCTOR": "instructor", "TRAINER": "trainer"}
 
@@ -54,6 +67,7 @@ def cert_label(cert_type: str) -> str:
 def init_app(app: Flask) -> None:
     app.add_template_filter(cert_label)
     app.add_template_filter(money)
+    app.add_template_filter(office_time)
     app.add_template_global(local_dt)
     app.add_template_global(class_date)
     app.add_template_global(class_time)

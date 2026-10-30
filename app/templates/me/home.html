@@ -1,0 +1,68 @@
+{% extends "dash/layout.html" %}
+{% block title %}My account{% endblock %}
+{% block heading %}Hi, {{ current_user.first_name }} <span class="accent">Your Classes</span>{% endblock %}
+{% block subhead %}<p>Your bookings, waiting lists and past classes, all in one place.</p>{% endblock %}
+{% block panel %}
+<div class="cols">
+  <section class="panel" aria-labelledby="up-title">
+    <div class="panel-head">
+      <h2 id="up-title">Upcoming classes</h2>
+      <a class="pill plain" href="{{ url_for('public.home') }}#classes">Book a class</a>
+    </div>
+    {% if upcoming %}
+    <ul class="list">
+      {% for r in upcoming %}
+      <li>
+        <span><strong>{{ r.course_name }}</strong><br>
+          <span class="meta num">{{ class_date(r.starts_at, r.time_zone) }} · {{ class_time(r.starts_at, r.ends_at, r.time_zone) }}</span><br>
+          <span class="meta">{{ r.site_name }}, {{ r.city_name }}{% if r.attendee_email != current_user.email %} · for {{ r.attendee_first_name }} {{ r.attendee_last_name }}{% endif %}</span></span>
+        {% if r.status == 'awaiting_payment' %}<span class="status wait">Payment due</span>
+        {% elif r.status == 'displaced' %}<span class="status bad">Class cancelled: we'll contact you</span>
+        {% else %}<span class="status ok">Booked</span>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <div class="empty">
+      {% if current_user.signup_intent == 'instructor' and not current_user.has_role('instructor') %}
+        Thanks for signing up as an instructor. Our team will confirm your certification before your instructor account opens. Meanwhile, you can book any class.
+      {% else %}
+        No classes booked yet. Pick a date and book your first seat.
+      {% endif %}
+    </div>
+    {% endif %}
+  </section>
+
+  <section class="panel" aria-labelledby="wait-title">
+    <h2 id="wait-title">Waiting lists</h2>
+    {% if waiting %}
+    <ul class="list">
+      {% for w in waiting %}
+      <li><span><strong>{{ w.course_name }}</strong><br><span class="meta num">{{ class_date(w.starts_at, w.time_zone) }} · {{ w.site_name }}</span></span>
+        {% if w.status == 'offered' %}<span class="status ok">Seat offered: check your texts</span>{% else %}<span class="status wait">Waiting{% if w.party_size > 1 %} · {{ w.party_size }} people{% endif %}</span>{% endif %}</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted small">You're not on any waiting list. When a class is full, you can join its list from the class page.</p>
+    {% endif %}
+  </section>
+</div>
+
+<section class="panel" aria-labelledby="past-title">
+  <h2 id="past-title">Past classes</h2>
+  {% if past %}
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>Date</th><th>Class</th><th>Where</th><th>Result</th></tr></thead>
+    <tbody>
+    {% for r in past %}
+      <tr><td class="num">{{ class_date(r.starts_at, r.time_zone) }}</td><td>{{ r.course_name }}</td><td>{{ r.site_name }}, {{ r.city_name }}</td>
+        <td>{% set labels = {'completed': ('ok', 'Completed'), 'no_show': ('bad', 'No show'), 'cancelled': ('off', 'Cancelled'), 'forfeited': ('off', 'Fee forfeited'), 'confirmed': ('off', 'Booked'), 'awaiting_payment': ('wait', 'Payment due'), 'displaced': ('bad', 'Class cancelled')} %}
+          {% set l = labels.get(r.status, ('off', r.status)) %}<span class="status {{ l[0] }}">{{ l[1] }}</span></td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <p class="muted small">Classes you've taken will show here, with your result.</p>
+  {% endif %}
+</section>
+{% endblock %}
