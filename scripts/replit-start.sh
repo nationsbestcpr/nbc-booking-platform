@@ -23,5 +23,12 @@ fi
 echo "[start] bringing the database up to date"
 .venv/bin/flask --app wsgi db upgrade
 
-echo "[start] starting the web server on port 5000"
-exec .venv/bin/gunicorn --bind 0.0.0.0:5000 --workers 2 --access-logfile - --error-logfile - wsgi:app
+# Listen on 5000 (the [[ports]] entry in .replit) and also on PORT if Replit
+# sets a different one: the readiness check fails with 503 when the app isn't
+# listening where Replit's proxy looks.
+BINDS="--bind 0.0.0.0:5000"
+if [ -n "${PORT:-}" ] && [ "$PORT" != "5000" ]; then
+  BINDS="$BINDS --bind 0.0.0.0:$PORT"
+fi
+echo "[start] PORT from Replit: ${PORT:-(not set)}; listening with $BINDS"
+exec .venv/bin/gunicorn $BINDS --workers 2 --access-logfile - --error-logfile - wsgi:app
