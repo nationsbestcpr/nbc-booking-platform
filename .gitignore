@@ -218,3 +218,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Replit start-up log (scripts/replit-start.sh)
+.start.log
+.start.rc

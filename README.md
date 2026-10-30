@@ -135,9 +135,12 @@ Notes:
   workspace one. The published app runs `flask db upgrade` on that database
   every time it starts (`scripts/replit-start.sh`), so publishing applies new
   migrations by itself.
-- If a publish fails at **Promote** ("did not become ready in time"), open
-  the deployment's **Logs** tab (not Overview): each start-up step prints a
-  `[start]` line, so the last one shows where it stopped.
+- If a start-up step fails (no database, missing secret, migration error,
+  a step stuck for minutes), a non-production app serves its start-up log at
+  the published address instead of failing at **Promote**: open the address
+  to see the `[start]` lines and the error. In production a failed start
+  stops, so Replit keeps the previous version running; read the deployment's
+  **Logs** tab instead.
 - **When publishing, don't approve Replit's "database changes" prompt.**
   Replit offers to copy the workspace tables to production with its own SQL,
   which skips the extensions and fails (`type "citext" does not exist`).
