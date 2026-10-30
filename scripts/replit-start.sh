@@ -43,20 +43,33 @@ say "APP_ENV=${APP_ENV:-(not set: the app will treat itself as local)}"
 [ -n "${SECRET_KEY:-}" ]   && say "SECRET_KEY is set"   || say "SECRET_KEY is NOT set"
 [ -n "${DATABASE_URL:-}" ] && say "DATABASE_URL is set" || say "DATABASE_URL is NOT set"
 [ -n "${DATABASE_URL:-}" ] || fail "the published app has no database. Create the production database in Replit's Database tool, then republish."
+# A published app must never run as local development (built-in secret key,
+# local-only commands allowed).
+case "${APP_ENV:-}" in
+  staging|production) ;;
+  *) fail "APP_ENV must be staging or production in the published app's secrets (Publishing → Adjust settings → Secrets), then republish." ;;
+esac
+key="${SECRET_KEY:-}"
+[ "${#key}" -ge 32 ] || fail "SECRET_KEY (32+ random characters) is missing from the published app's secrets (Publishing → Adjust settings → Secrets), then republish."
+
+# Everything runs as `.venv/bin/python -m ...`: in the published copy the
+# flask/gunicorn launcher scripts can point at Replit's own Python, which
+# can't see the packages ("No module named 'flask'").
+PY=.venv/bin/python
 
 # The build creates .venv, but the published copy may not include it.
-if [ ! -x .venv/bin/gunicorn ]; then
-  say ".venv is missing here; installing the packages now"
+if ! $PY -c "import flask, gunicorn" >/dev/null 2>&1; then
+  say ".venv is missing or incomplete here; installing the packages now"
   step 240 sh scripts/replit-setup.sh || fail "installing the packages"
 fi
 
 say "checking the app loads with these settings"
-step 60 .venv/bin/python -c "import wsgi" || fail "the app could not load (see the error above)"
+step 60 $PY -c "import wsgi" || fail "the app could not load (see the error above)"
 
 say "bringing the database up to date"
-step 120 .venv/bin/flask --app wsgi db upgrade || fail "the database update (see the error above)"
+step 120 $PY -m flask --app wsgi db upgrade || fail "the database update (see the error above)"
 
 BINDS=""
 for p in $PORTS; do BINDS="$BINDS --bind 0.0.0.0:$p"; done
 say "starting the web server"
-exec .venv/bin/gunicorn $BINDS --workers 2 --access-logfile - --error-logfile - wsgi:app
+exec $PY -m gunicorn $BINDS --workers 2 --access-logfile - --error-logfile - wsgi:app
