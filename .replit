@@ -8,7 +8,8 @@ deploymentTarget = "vm"
 # The published app brings its own database up to date before it starts, using
 # our migrations. Don't approve Replit's own "database changes" prompt on publish:
 # its generated SQL skips the extensions (citext, pg_trgm, btree_gist) and fails.
-run = ["sh", "-c", ".venv/bin/flask --app wsgi db upgrade && exec .venv/bin/gunicorn --bind 0.0.0.0:5000 --workers 2 --access-logfile - wsgi:app"]
+# scripts/replit-start.sh prints a "[start]" line per step in the Logs tab.
+run = ["sh", "scripts/replit-start.sh"]
 build = ["sh", "scripts/replit-setup.sh"]
 
 # Replit's own package installer is kept out of the way: no requirements.txt

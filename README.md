@@ -133,8 +133,11 @@ Notes:
   on `/healthz`.
 - Replit's published app uses its own production database, separate from the
   workspace one. The published app runs `flask db upgrade` on that database
-  every time it starts (see `.replit`), so publishing applies new migrations
-  by itself.
+  every time it starts (`scripts/replit-start.sh`), so publishing applies new
+  migrations by itself.
+- If a publish fails at **Promote** ("did not become ready in time"), open
+  the deployment's **Logs** tab (not Overview): each start-up step prints a
+  `[start]` line, so the last one shows where it stopped.
 - **When publishing, don't approve Replit's "database changes" prompt.**
   Replit offers to copy the workspace tables to production with its own SQL,
   which skips the extensions and fails (`type "citext" does not exist`).
