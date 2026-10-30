@@ -94,6 +94,7 @@ class FakePlatforms:
         self.ghl_opps: dict[str, dict] = {}
         self.ghl_fail_next = 0
         self.stripe_refuse_refunds = False
+        self.ghl_refuse_second_opportunity = False
 
     def add_class(self, *, status=("Enrollware",), start="9:00 AM", minutes=240, course=None, day=None,
                   location=None) -> str:
@@ -179,7 +180,14 @@ class FakePlatforms:
         if path == "/opportunities/search":
             return Res(200, {"opportunities": [{"id": k, **v} for k, v in self.ghl_opps.items()
                                                if v["contactId"] == params.get("contact_id")]})
+        if re.fullmatch(r"/locations/[^/]+/customFields", path):
+            return Res(200, {"customFields": [{"id": f"cf-{k}", "fieldKey": f"opportunity.{k}", "name": k}
+                                              for k in ("class_id", "course", "course_date", "course_location",
+                                                        "reg_type", "order_total", "shipping")]})
         if path == "/opportunities/" and method == "POST":
+            if self.ghl_refuse_second_opportunity and any(o["contactId"] == body["contactId"]
+                                                          for o in self.ghl_opps.values()):
+                return Res(400, {"message": "Can not create duplicate opportunity for the contact."})
             oid = "op-" + "".join(random.choices(string.ascii_lowercase, k=10))
             self.ghl_opps[oid] = dict(body)
             return Res(201, {"opportunity": {"id": oid}})
@@ -297,6 +305,8 @@ def test_sync_creates_city_site_products_and_classes(fake, run_sync, q):
     assert not q("SELECT 1 FROM sites WHERE name = 'Somewhere unused'")  # only locations classes use
     issue = q("SELECT * FROM integration_issues WHERE external_ref = :r AND resolved_at IS NULL", r=broken)[0]
     assert issue["code"] == "CLASS_NO_START" and "start time" in issue["message"]
+    # Airtable is only ever read.
+    assert {c[0] for c in fake.calls if c[1].startswith(airtable.API)} == {"GET"}
     # Rental fees are never requested from Airtable.
     assert all("Per Class Rate" not in str(c[2]["params"]) for c in fake.calls)
 
@@ -702,5 +712,35 @@ def test_worker_start_does_the_setup_by_itself(fake, app, q):
         conn.execute(text("DELETE FROM ghl_stage_map"))
     with app.app_context():
         done = worker.on_start()
-    assert done["ghl_stages"] == "loaded" and done["airtable"] in ("succeeded", "partial")
-    assert {r["internal_state"] for r in q("SELECT internal_state FROM ghl_stage_map")} >= {"booked", "cancelled"}
+    try:
+        assert done["ghl_stages"] == "loaded" and done["airtable"] in ("succeeded", "partial")
+        assert done["ghl_fields"].startswith("loaded, none for")          # some keys aren't in this layout
+        assert {r["internal_state"] for r in q("SELECT internal_state FROM ghl_stage_map")} >= {"booked", "cancelled"}
+        ids = q("SELECT value FROM app_settings WHERE key = 'ghl_custom_field_ids'")[0]["value"]
+        assert ids["class_id"] == "cf-class_id" and ids["course_location"] == "cf-course_location"
+        assert "shipping" not in ids
+    finally:
+        with app.app_context(), db.transaction() as conn:
+            conn.execute(text("UPDATE app_settings SET value = '{}' WHERE key = 'ghl_custom_field_ids'"))
+
+
+def test_ghl_refusing_a_second_opportunity_is_explained(fake, on_sale, client, q, app):
+    email = unique_email("twice")
+    fake.ghl_refuse_second_opportunity = True
+    first = book(client, on_sale, seats=1, buyer_email=email).headers["Location"].rsplit("/", 1)[1]
+    stripe_post(client, completed_event(first, 10800))
+    with app.app_context():
+        outbox.run_due(targets=["ghl"])
+    with app.app_context(), db.transaction() as conn:
+        conn.execute(text("""UPDATE registrations SET status = 'cancelled', cancelled_at = now(),
+                                    cancel_reason_code = 'customer_request'
+                              WHERE order_id = (SELECT order_id FROM checkout_sessions
+                                                 WHERE stripe_checkout_session_id = :c)"""), {"c": first})
+    second = book(client, on_sale, seats=1, buyer_email=email).headers["Location"].rsplit("/", 1)[1]
+    stripe_post(client, completed_event(second, 10800))
+    with app.app_context():
+        outbox.run_due(targets=["ghl"])
+    job = q("""SELECT j.* FROM outbox_jobs j JOIN registrations r ON r.id = j.entity_id
+                JOIN checkout_sessions c ON c.order_id = r.order_id WHERE c.stripe_checkout_session_id = :c""",
+            c=second)[0]
+    assert job["status"] == "dead" and "Allow Multiple Opportunities per Contact" in job["last_error"]

@@ -228,7 +228,8 @@ problems to fix, with Sync now / Retry / Mark fixed buttons.
 Put each secret in the workspace's Secrets **and** the published app's
 secrets (Publishing → Adjust settings → Secrets), then republish.
 
-**Airtable** (classes, locations, courses → engine)
+**Airtable** (classes, locations, courses → engine; read only: the app only
+ever sends GET requests to Airtable, and the token has read scopes only)
 1. airtable.com/create/tokens → Create token. Scopes `data.records:read` and
    `schema.bases:read`; access: NBC Master Base only. Copy it into
    `AIRTABLE_TOKEN`.
@@ -270,19 +271,22 @@ Test cards: 4242 4242 4242 4242, any future date, any CVC.
 
 **GHL** (one contact + one opportunity per seat)
 1. In the sub-account (Sandbox 2 for testing): Settings → Private
-   Integrations → Create. Scopes: View/Edit Contacts and View/Edit
-   Opportunities (`contacts.readonly`, `contacts.write`,
-   `opportunities.readonly`, `opportunities.write`). Copy the token →
-   `GHL_API_TOKEN`.
-2. The sub-account id (Settings → Business Profile, or the `location/…` part
-   of its address) → `GHL_LOCATION_ID`.
-3. Republish. On start the app finds the "Community Class" pipeline (or
+   Integrations → Create. Scopes: View/Edit Contacts, View/Edit
+   Opportunities and View Custom Fields (`contacts.readonly`,
+   `contacts.write`, `opportunities.readonly`, `opportunities.write`,
+   `locations/customFields.readonly`). Copy the token → `GHL_API_TOKEN`.
+2. The sub-account id → `GHL_LOCATION_ID` (Sandbox 2: `T1Zy5hM7KwMwF1hBGNd1`).
+3. In the sub-account: Settings → Objects → Opportunities → turn on **Allow
+   Multiple Opportunities per Contact** (a returning student gets one
+   opportunity per class), and leave **Allow Duplicate Contact** off (one
+   contact per email).
+4. Republish. On start the app finds the "Community Class" pipeline (or
    `GHL_PIPELINE_NAME`) and its Pending, Complete, No Show, Cancelled and
-   Waitlisted stages by name; nothing to press. (If the pipeline isn't
-   there, it's listed under Open problems.)
-4. Optional custom fields: in Business settings, "GHL custom field ids" takes the ids of the GHL custom fields to fill, as
-   `{"session_id": "…", "site": "…", "class_date": "…", "class_time": "…",
-   "product": "…", "reg_type": "…", "city": "…", "registration_id": "…"}`.
+   Waitlisted stages by name, and the opportunity custom fields by key
+   (Class ID, Course, Course Date, Course Location, Hours, Instructor, Reg
+   Type, Class Price, Order Total, Delivery, Reg. Date). Nothing to press;
+   anything missing is listed under Open problems. The app never creates or
+   changes pipelines, stages, fields or workflows.
 Opportunities are named `YYYY-MM-DD | COURSE-DELIVERY | MARKET-City` and
 start at Pending. GHL → engine webhooks (contact edits, messages, dragged
 stages) need the Marketplace app (launch plan 15.5); not built yet.

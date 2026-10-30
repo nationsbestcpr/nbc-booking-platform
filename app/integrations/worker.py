@@ -74,21 +74,26 @@ def tick() -> dict:
 
 
 def on_start() -> dict:
-    """First things after a publish: GHL stage ids, then a full Airtable sync."""
+    """First things after a publish: GHL stage and custom field ids, then a full Airtable sync."""
     from . import airtable, airtable_sync, ghl, runs
     from .http import IntegrationError
     done: dict = {}
     if ghl.configured():
-        try:
-            result = ghl.load_stages()
-            done["ghl_stages"] = "loaded" + (f", none for {', '.join(result['missing'])}" if result["missing"] else "")
-            with db.transaction() as conn:
-                runs.resolve(conn, source="ghl", external_ref="pipeline")
-        except IntegrationError as exc:
-            done["ghl_stages"] = f"error: {exc}"
-            with db.transaction() as conn:
-                runs.issue(conn, source="ghl", code="GHL_PIPELINE", severity="error", external_ref="pipeline",
-                           message=f"Couldn't read the GHL pipeline: {exc}")
+        for name, step, code, severity, ref, prefix in (
+                ("ghl_stages", ghl.load_stages, "GHL_PIPELINE", "error", "pipeline",
+                 "Couldn't read the GHL pipeline"),
+                ("ghl_fields", ghl.load_custom_fields, "GHL_CUSTOM_FIELDS", "warning", "custom-fields",
+                 "Opportunities are created without their custom fields")):
+            try:
+                result = step()
+                done[name] = "loaded" + (f", none for {', '.join(result['missing'])}" if result["missing"] else "")
+                with db.transaction() as conn:
+                    runs.resolve(conn, source="ghl", external_ref=ref)
+            except IntegrationError as exc:
+                done[name] = f"error: {exc}"
+                with db.transaction() as conn:
+                    runs.issue(conn, source="ghl", code=code, severity=severity, external_ref=ref,
+                               message=f"{prefix}: {exc}")
     if airtable.configured():
         try:
             stats = airtable_sync.run("schedule")

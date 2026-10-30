@@ -141,19 +141,76 @@ def opportunity_name(reg: dict) -> str:
     return f"{day} | {course_token} | {reg['market_code']}-{reg['site_city']}"
 
 
+# Opportunity custom fields the engine fills, found by their field key. The
+# Community Class layout (Sandbox 2, and the live sub-account after the
+# Dec 14 snapshot) already has these; their ids differ per sub-account, so
+# they're looked up when the app starts (load_custom_fields) and saved in the
+# "GHL custom field ids" business setting.
+FIELD_KEYS = {
+    "class_id": "opportunity.class_id",
+    "course": "opportunity.course",
+    "course_date": "opportunity.course_date",
+    "course_location": "opportunity.course_location",
+    "hours": "opportunity.hours",
+    "instructor": "opportunity.instructor",
+    "reg_type": "opportunity.reg_type",
+    "class_price": "opportunity.class_price",
+    "order_total": "opportunity.order_total",
+    "delivery": "opportunity.delivery",
+    "reg_date": "opportunity.reg_date",
+}
+
+
+def load_custom_fields() -> dict:
+    """Find the opportunity custom fields by key and save their ids. Needs the
+    Private Integration scope 'View Custom Fields' (locations/customFields.readonly)."""
+    try:
+        body = _call("GET", f"/locations/{location_id()}/customFields", params={"model": "opportunity"})
+    except IntegrationError as exc:
+        if exc.status in (401, 403):
+            raise IntegrationError("GHL: the token can't read custom fields. In the Private Integration, add the "
+                                   "scope “View Custom Fields” (locations/customFields.readonly).", retry=False) from exc
+        raise
+    by_key = {f.get("fieldKey"): f.get("id") for f in body.get("customFields") or []}
+    found = {name: by_key[key] for name, key in FIELD_KEYS.items() if by_key.get(key)}
+    with db.transaction() as conn:
+        raw = conn.execute(text("SELECT value FROM app_settings WHERE key = 'ghl_custom_field_ids' FOR NO KEY UPDATE")).scalar()
+        current = raw if isinstance(raw, dict) else {}
+        merged = {**current, **found}
+        if merged != current:
+            conn.execute(text("UPDATE app_settings SET value = CAST(:v AS jsonb), updated_at = now() "
+                              "WHERE key = 'ghl_custom_field_ids'"), {"v": json.dumps(merged)})
+    return {"found": sorted(found), "missing": sorted(set(FIELD_KEYS) - set(found))}
+
+
 def _custom_fields(reg: dict, reg_type: str | None) -> list[dict]:
     with db.engine().connect() as conn:
         raw = conn.execute(text("SELECT value FROM app_settings WHERE key = 'ghl_custom_field_ids'")).scalar()
     ids = raw if isinstance(raw, dict) else (json.loads(raw) if isinstance(raw, str) and raw else {})
     from ..filters import local_dt
+    start = local_dt(reg["starts_at"], reg["time_zone"])
+    hours = (reg["ends_at"] - reg["starts_at"]).total_seconds() / 3600
+    reg_type_text = {"new": "New", "existing": "Existing"}.get(reg_type or "", None)
     values = {
         "session_id": str(reg["session_public_id"]),
+        "class_id": str(reg["session_public_id"]),
         "registration_id": str(reg["public_id"]),
         "site": reg["site_name"],
-        "class_date": local_dt(reg["starts_at"], reg["time_zone"]).strftime("%Y-%m-%d"),
-        "class_time": local_dt(reg["starts_at"], reg["time_zone"]).strftime("%-I:%M %p"),
+        "course_location": f"{reg['site_name']}, {reg['address_line1']}, {reg['site_city']}, "
+                           f"{reg['site_state']} {reg['postal_code']}",
+        "class_date": start.strftime("%Y-%m-%d"),
+        "course_date": start.strftime("%m/%d/%Y"),
+        "class_time": start.strftime("%-I:%M %p"),
+        "hours": f"{hours:g}",
         "product": reg["product_name"],
-        "reg_type": {"new": "New", "existing": "Existing"}.get(reg_type or "", None),
+        "course": reg["product_name"],
+        "delivery": reg["product_name"].split(" – ")[-1] if " – " in reg["product_name"]
+                    else reg["delivery_mode"].capitalize(),
+        "instructor": reg["airtable_lead_instructor"],
+        "reg_type": reg_type_text,
+        "class_price": f"{reg['unit_price_cents'] / 100:.2f}",
+        "order_total": f"{reg['order_total_cents'] / 100:.2f}",
+        "reg_date": reg["confirmed_at"].strftime("%m/%d/%Y") if reg["confirmed_at"] else None,
         "city": reg["metro_name"],
     }
     return [{"id": fid, "field_value": values[k]} for k, fid in (ids or {}).items()
@@ -188,6 +245,10 @@ def _find_opportunity(contact_id: str, pipeline_id: str, name: str, registration
     return next((c for c in candidates if c not in owned), None)
 
 
+def _create_opportunity(body: dict) -> dict:
+    return _call("POST", "/opportunities/", json_body=body)
+
+
 @handler("ghl", "sync_registration")
 def sync_registration(job: dict) -> None:
     reg_id = job["payload"]["registration_id"]
@@ -195,12 +256,16 @@ def sync_registration(job: dict) -> None:
         reg = conn.execute(text("""
             SELECT r.id, r.public_id, r.status, r.reg_type, r.ghl_opportunity_id, r.ghl_stage_pushed,
                    r.attendee_first_name, r.attendee_last_name, r.attendee_email, r.attendee_phone_e164,
-                   r.amount_paid_cents, r.person_id,
-                   s.starts_at, s.time_zone, s.public_id AS session_public_id, s.delivery_mode,
-                   si.name AS site_name, si.city AS site_city, m.market_code, m.name AS metro_name,
+                   r.amount_paid_cents, r.person_id, r.unit_price_cents, r.confirmed_at,
+                   o.total_cents AS order_total_cents,
+                   s.starts_at, s.ends_at, s.time_zone, s.public_id AS session_public_id, s.delivery_mode,
+                   s.airtable_lead_instructor,
+                   si.name AS site_name, si.city AS site_city, si.address_line1, si.state_code AS site_state,
+                   si.postal_code, m.market_code, m.name AS metro_name,
                    p.ghl_course_code, p.short_name, p.name AS product_name,
                    pe.ghl_contact_id, pe.first_name, pe.last_name, pe.email, pe.phone_e164
               FROM registrations r
+              JOIN orders o ON o.id = r.order_id
               JOIN sessions s ON s.id = r.session_id
               JOIN sites si ON si.id = s.site_id
               JOIN metros m ON m.id = s.metro_id
@@ -237,11 +302,19 @@ def sync_registration(job: dict) -> None:
             _call("PUT", f"/opportunities/{opp_id}", json_body={
                 "pipelineId": stage["pipeline_id"], "pipelineStageId": stage["stage_id"], "status": "open"})
         else:
-            res = _call("POST", "/opportunities/", json_body={
+            try:
+                res = _create_opportunity({
                 "locationId": location_id(), "pipelineId": stage["pipeline_id"],
                 "pipelineStageId": stage["stage_id"], "name": name, "status": "open", "contactId": contact_id,
                 "monetaryValue": round((reg["amount_paid_cents"] or 0) / 100, 2),
                 "source": "NBC booking engine", "customFields": _custom_fields(reg, reg_type)})
+            except IntegrationError as exc:
+                if exc.status in (400, 422) and "duplicate" in str(exc).lower():
+                    raise IntegrationError(
+                        "GHL refused a second opportunity for the same contact. In the sub-account turn on "
+                        "Settings → Objects → Opportunities → Allow Multiple Opportunities per Contact, then press "
+                        "Retry.", status=exc.status, retry=False) from exc
+                raise
             opp_id = (res.get("opportunity") or {}).get("id")
             if not opp_id:
                 raise IntegrationError("GHL: the opportunity was created but no id came back.")

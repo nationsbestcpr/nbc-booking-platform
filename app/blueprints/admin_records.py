@@ -287,7 +287,9 @@ LOCKED_SETTINGS = {"environment", "airtable_writeback_enabled"}
 NULLABLE_SETTINGS = {"large_refund_threshold_cents"}
 # Settings edited as a list of names -> ids (JSON object of text), with the names allowed.
 ID_MAP_SETTINGS = {"ghl_custom_field_ids": {"session_id", "registration_id", "site", "class_date", "class_time",
-                                            "product", "reg_type", "city"}}
+                                            "product", "reg_type", "city", "class_id", "course", "course_date",
+                                            "course_location", "hours", "instructor", "class_price", "order_total",
+                                            "delivery", "reg_date"}}
 
 
 def _setting_kind(key: str, value) -> str:
