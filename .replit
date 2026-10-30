@@ -1,7 +1,9 @@
 modules = ["python-3.12", "web", "bash"]
 # Packages live in the project's .venv (scripts/replit-setup.sh): Replit's own
 # Python is read-only and its pip wrapper forces --user installs, which fail.
-run = "sh scripts/replit-setup.sh && .venv/bin/python -m flask --app wsgi run --host 0.0.0.0 --port 5000 --debug"
+# Run also sets up the preset admin from SUPERADMIN_* in the workspace's Secrets
+# (it never stops Run from starting).
+run = "sh scripts/replit-setup.sh && (.venv/bin/python -m flask --app wsgi users ensure-superadmin || true) && .venv/bin/python -m flask --app wsgi run --host 0.0.0.0 --port 5000 --debug"
 
 [deployment]
 deploymentTarget = "vm"

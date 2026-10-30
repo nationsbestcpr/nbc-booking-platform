@@ -135,6 +135,11 @@ In the Replit workspace shell, after the code is in the Repl:
    Every start runs `flask --app wsgi users ensure-superadmin`: it creates that
    account with that password the first time and makes sure it is an admin.
    Change the password afterwards in the app (Password page); restarts keep it.
+   The start log (Logs tab) says what happened: `[start] checking the preset
+   admin account` then `Preset admin account …: created …`. If that email had
+   already signed up, its own password is kept: add the secret
+   `SUPERADMIN_RESET_PASSWORD=yes`, republish, sign in, then delete that secret.
+   The same secret also clears a lockout after too many wrong tries.
    Without these secrets, make the first admin by hand: create an account at
    `/create-account`, then `flask --app wsgi users make-admin you@nationsbestcpr.com`.
 5. Start the app (Run) and open `/healthz`: `"status": "ok"` and

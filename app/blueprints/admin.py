@@ -60,6 +60,8 @@ def describe(entry: dict, role_names: dict[str, str], account_name: str | None =
         name = role_names.get(after.get("role"), after.get("role"))
         return (f"Changed the {name} role's permissions: "
                 f"{len(after.get('added', []))} added, {len(before.get('removed', []))} removed")
+    if action == "user.password_reset":
+        return f"Reset the password{who}"
     return action.replace("_", " ").replace(".", ": ")
 
 

@@ -139,59 +139,90 @@ def make_admin(email: str, yes: bool) -> None:
 SUPERADMIN_MIN_PASSWORD = 12
 
 
+def _secret(name: str) -> str:
+    """A secret's value without surrounding spaces or quotes pasted along with it."""
+    value = os.environ.get(name, "").strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        value = value[1:-1].strip()
+    return value
+
+
 @users_cli.command("ensure-superadmin")
 def ensure_superadmin() -> None:
-    """Make sure the preset admin account from the secrets exists and is an admin.
+    """Make sure the preset admin account from the secrets exists and can sign in.
 
     Reads SUPERADMIN_EMAIL, SUPERADMIN_PASSWORD (12+ characters) and optionally
-    SUPERADMIN_NAME. Runs on every start of the published app:
+    SUPERADMIN_NAME and SUPERADMIN_RESET_PASSWORD. Runs on every start:
       * no account with that email yet: creates it, with that password, active;
       * the account exists: keeps its password (a password changed in the app
-        stays changed) and only makes sure it holds the Admin role;
+        stays changed) and makes sure it holds the Admin role;
+      * SUPERADMIN_RESET_PASSWORD=yes: sets the password to SUPERADMIN_PASSWORD,
+        clears a sign-in lockout and switches the account back on (for an
+        account that existed before, or a forgotten password); remove the
+        secret afterwards so a password changed in the app isn't overwritten;
       * SUPERADMIN_EMAIL not set: does nothing.
-    The password is never printed or stored except as a scrypt hash. A
-    suspended preset account is left suspended.
+    The password is never printed or stored except as a scrypt hash.
     """
     from sqlalchemy import text
     from werkzeug.security import generate_password_hash
 
     from . import db
-    email = os.environ.get("SUPERADMIN_EMAIL", "").strip().lower()
-    password = os.environ.get("SUPERADMIN_PASSWORD", "")
-    name = " ".join(os.environ.get("SUPERADMIN_NAME", "").split()) or "Super Admin"
+    email = _secret("SUPERADMIN_EMAIL").lower()
+    password = _secret("SUPERADMIN_PASSWORD")
+    name = " ".join(_secret("SUPERADMIN_NAME").split()) or "Super Admin"
+    reset = _secret("SUPERADMIN_RESET_PASSWORD").lower() in {"1", "yes", "true", "on"}
     if not email:
         click.echo("SUPERADMIN_EMAIL is not set: no preset admin account.")
         return
     if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
         raise click.ClickException("SUPERADMIN_EMAIL isn't an email address.")
+    if (reset or password) and len(password) < SUPERADMIN_MIN_PASSWORD:
+        raise click.ClickException(
+            f"SUPERADMIN_PASSWORD must be {SUPERADMIN_MIN_PASSWORD}+ characters.")
+    notes: list[str] = []
     with db.engine().begin() as conn:
         account = conn.execute(text("SELECT id, status FROM user_accounts WHERE email = :e"),
                                {"e": email}).mappings().first()
-        created = False
         if account is None:
-            if len(password) < SUPERADMIN_MIN_PASSWORD:
-                raise click.ClickException(
-                    f"SUPERADMIN_PASSWORD must be set to {SUPERADMIN_MIN_PASSWORD}+ characters to create the preset admin account.")
+            if not password:
+                raise click.ClickException("SUPERADMIN_PASSWORD must be set to create the preset admin account.")
             uid = conn.execute(text("""
                 INSERT INTO user_accounts (email, display_name, status, email_verified_at)
                 VALUES (:e, :n, 'active', now()) RETURNING id
             """), {"e": email, "n": name}).scalar_one()
+            conn.execute(text("INSERT INTO user_roles (user_account_id, role_code) VALUES (:uid, 'user')"), {"uid": uid})
+            notes.append("created with the password in SUPERADMIN_PASSWORD")
+        else:
+            uid = account["id"]
+        identity = conn.execute(text("""SELECT id, locked_until > now() AS locked FROM user_identities
+                                         WHERE user_account_id = :uid AND provider = 'password'"""),
+                                {"uid": uid}).mappings().first()
+        if identity is None and password:
             conn.execute(text("""
                 INSERT INTO user_identities (user_account_id, provider, subject, password_hash, password_changed_at)
                 VALUES (:uid, 'password', :e, :h, now())
             """), {"uid": uid, "e": email, "h": generate_password_hash(password)})
-            conn.execute(text("INSERT INTO user_roles (user_account_id, role_code) VALUES (:uid, 'user')"), {"uid": uid})
-            created = True
-        else:
-            uid = account["id"]
-            has_password = conn.execute(text("""SELECT 1 FROM user_identities
-                                                 WHERE user_account_id = :uid AND provider = 'password'"""),
-                                        {"uid": uid}).first()
-            if not has_password and len(password) >= SUPERADMIN_MIN_PASSWORD:
-                conn.execute(text("""
-                    INSERT INTO user_identities (user_account_id, provider, subject, password_hash, password_changed_at)
-                    VALUES (:uid, 'password', :e, :h, now())
-                """), {"uid": uid, "e": email, "h": generate_password_hash(password)})
+            if account is not None:
+                notes.append("password from SUPERADMIN_PASSWORD added")
+        elif identity is not None and reset:
+            conn.execute(text("""
+                UPDATE user_identities SET password_hash = :h, password_changed_at = now(),
+                       failed_attempts = 0, locked_until = NULL
+                 WHERE id = :id
+            """), {"h": generate_password_hash(password), "id": identity["id"]})
+            notes.append("password reset to SUPERADMIN_PASSWORD and sign-in unlocked "
+                         "(remove SUPERADMIN_RESET_PASSWORD now)")
+        elif identity is not None:
+            notes.append("existing account: its own password was kept (to use the one in "
+                         "SUPERADMIN_PASSWORD, add the secret SUPERADMIN_RESET_PASSWORD=yes and republish)")
+            if identity["locked"]:
+                notes.append("sign-in is locked for a few minutes after too many wrong tries")
+        if account is not None and account["status"] != "active":
+            if reset:
+                conn.execute(text("UPDATE user_accounts SET status = 'active' WHERE id = :uid"), {"uid": uid})
+                notes.append("account switched back on")
+            else:
+                notes.append(f"account is {account['status']}; SUPERADMIN_RESET_PASSWORD=yes switches it back on")
         is_admin = conn.execute(text("""SELECT 1 FROM user_roles WHERE user_account_id = :uid
                                          AND role_code = 'admin' AND revoked_at IS NULL"""), {"uid": uid}).first()
         if not is_admin:
@@ -201,9 +232,17 @@ def ensure_superadmin() -> None:
                 VALUES ('system', 'user.role_grant', 'user_account', :uid, '{"role": "admin"}',
                         'Preset admin account (SUPERADMIN_EMAIL)')
             """), {"uid": uid})
-    status = "created" if created else ("given the Admin role" if not is_admin else "already set up")
-    note = "" if created or not account or account["status"] == "active" else f" (account is {account['status']})"
-    click.echo(f"Preset admin account {email}: {status}{note}.")
+            if account is not None:
+                notes.append("given the Admin role")
+        if reset and account is not None:
+            conn.execute(text("""
+                INSERT INTO audit_log (actor_type, action, entity_type, entity_id, reason)
+                VALUES ('system', 'user.password_reset', 'user_account', :uid,
+                        'Preset admin account (SUPERADMIN_RESET_PASSWORD)')
+            """), {"uid": uid})
+    if account is not None and not notes:
+        notes.append("already set up")
+    click.echo(f"Preset admin account {email}: " + "; ".join(notes) + ".")
 
 
 def init_app(app: Flask) -> None:

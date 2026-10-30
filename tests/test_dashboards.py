@@ -486,7 +486,7 @@ def test_preset_superadmin_is_created_and_can_sign_in(app, client, sign_in, post
     post_form("/account/settings", {"current_password": "preset-admin-pass-1", "new_password": "changed-in-app-22",
                                      "confirm_password": "changed-in-app-22"})
     res = runner.invoke(args=["users", "ensure-superadmin"])
-    assert res.exit_code == 0 and "already set up" in res.output
+    assert res.exit_code == 0 and "its own password was kept" in res.output
     assert sign_in(email, "preset-admin-pass-1").status_code == 400
     assert sign_in(email, "changed-in-app-22").status_code == 302
     # If someone removed its Admin role, the next start gives it back.
@@ -501,6 +501,32 @@ def test_preset_superadmin_is_created_and_can_sign_in(app, client, sign_in, post
         conn.execute(text("""UPDATE user_roles SET revoked_at = now(),
                                     revoked_by_user_id = (SELECT id FROM user_accounts WHERE email = 'admin@example.test')
                               WHERE user_account_id = :u AND role_code = 'admin' AND revoked_at IS NULL"""), {"u": uid})
+
+
+def test_preset_superadmin_reset_for_an_account_made_earlier(app, client, sign_in, post_form, monkeypatch):
+    """The email signed up before the secrets were set: the start log says the
+    old password was kept, and SUPERADMIN_RESET_PASSWORD=yes switches to the
+    secret's password and clears a lockout."""
+    email = unique_email("early")
+    with client.session_transaction() as sess:
+        sess.clear()
+    res = post_form("/create-account", {"first_name": "Early", "last_name": "Bird", "email": email,
+                                        "password": "my-own-password-1", "intent": "student"})
+    assert res.status_code == 302
+    # Pasted with quotes and a trailing space: both are ignored.
+    monkeypatch.setenv("SUPERADMIN_EMAIL", f" {email} ")
+    monkeypatch.setenv("SUPERADMIN_PASSWORD", '"preset-admin-pass-2" ')
+    runner = app.test_cli_runner()
+    res = runner.invoke(args=["users", "ensure-superadmin"])
+    assert res.exit_code == 0 and "its own password was kept" in res.output and "SUPERADMIN_RESET_PASSWORD" in res.output
+    for _ in range(app.config["SIGN_IN_MAX_FAILURES"]):
+        sign_in(email, "preset-admin-pass-2")                          # wrong until reset: locks it
+    assert "locked" in runner.invoke(args=["users", "ensure-superadmin"]).output
+    monkeypatch.setenv("SUPERADMIN_RESET_PASSWORD", "yes")
+    res = runner.invoke(args=["users", "ensure-superadmin"])
+    assert res.exit_code == 0 and "password reset" in res.output and "preset-admin-pass-2" not in res.output
+    assert sign_in(email, "preset-admin-pass-2").status_code == 302
+    assert client.get("/dashboard").headers["Location"].endswith("/admin")
 
 
 def test_preset_superadmin_needs_a_long_password(app, monkeypatch):
