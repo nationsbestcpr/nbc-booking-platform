@@ -103,7 +103,17 @@ def configured() -> bool:
 
 
 def base_id() -> str:
-    return os.environ.get("AIRTABLE_BASE_ID", "").strip()
+    """The base id, also when the secret holds the base's whole address
+    (https://airtable.com/appXXXX/tblYYYY/...) or stray spaces/quotes."""
+    raw = os.environ.get("AIRTABLE_BASE_ID", "")
+    found = re.search(r"app[A-Za-z0-9]{14}", raw)
+    return found.group(0) if found else raw.strip().strip("'\"")
+
+
+def masked_base_id() -> str:
+    """'applTS…39': enough to recognise the base without printing the whole secret value."""
+    b = base_id()
+    return f"{b[:6]}…{b[-2:]}" if len(b) > 9 else "(not set)"
 
 
 def table_name(key: str) -> str:
@@ -132,8 +142,24 @@ def _norm(name: str) -> str:
 
 
 def read_schema() -> dict[str, dict[str, dict]]:
-    """{table name: {normalised field name: {"name", "type"}}} for the base."""
-    body = _get(f"meta/bases/{base_id()}/tables")
+    """{table name: {normalised field name: {"name", "type"}}} for the base.
+    The first call of every sync, so access problems are explained here."""
+    if not re.fullmatch(r"app[A-Za-z0-9]{14}", base_id()):
+        raise IntegrationError("Airtable: AIRTABLE_BASE_ID isn't a base id. It starts with “app” and has 17 "
+                               "characters (the NBC Master Base's starts with applTS).", retry=False)
+    try:
+        body = _get(f"meta/bases/{base_id()}/tables")
+    except IntegrationError as exc:
+        if exc.status == 401:
+            raise IntegrationError("Airtable: the token was refused. Copy AIRTABLE_TOKEN again (it starts with "
+                                   "“pat”) or make a new one.", status=401, retry=False) from exc
+        if exc.status in (403, 404):
+            raise IntegrationError(
+                f"Airtable: this token can't open base {masked_base_id()}. On airtable.com/create/tokens, edit the "
+                "token: under Scopes add data.records:read and schema.bases:read, and under Access add "
+                "“NBC Master Base”. The token must be made by an Airtable account that can open the base.",
+                status=exc.status, retry=False) from exc
+        raise
     return {t["name"]: {_norm(f["name"]): {"name": f["name"], "type": f.get("type")} for f in t.get("fields", [])}
             for t in body.get("tables", [])}
 

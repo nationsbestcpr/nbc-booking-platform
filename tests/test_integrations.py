@@ -49,7 +49,7 @@ class FakePlatforms:
         self.metro = f"Tidewater {tag.capitalize()}"           # a new city per test
         self.metro_slug = f"tidewater-{tag}-va"
         self.market = f"TIDEWATER{tag.upper()}"[:12]
-        self.day = (date.today() + timedelta(days=12)).isoformat()
+        self.day = (date.today() + timedelta(days=400)).isoformat()     # after the demo classes in lists
         self.course_fa, self.course_bls, self.loc = rec_id(), rec_id(), rec_id()
         # Field names and shapes as in the real NBC Master Base (Oct 2026).
         self.schema = {
@@ -772,3 +772,18 @@ def test_production_never_books_without_payment(fake, on_sale, client, app, monk
     monkeypatch.setitem(app.config, "APP_ENV", "production")
     page = text_of(client.get(f"/book/{on_sale['public_id']}"))
     assert "Online booking opens soon" in page and "Book (test" not in page
+
+
+def test_airtable_access_problems_are_explained(fake, run_sync, q, monkeypatch):
+    monkeypatch.setenv("AIRTABLE_BASE_ID", "https://airtable.com/appTESTBASE000001/tblAAAAAAAAAAAAAA/viwBBB")
+    assert airtable.base_id() == "appTESTBASE000001"          # the whole address pasted still works
+    real = fake._airtable
+    fake._airtable = lambda path, params: Res(404, {"error": "NOT_FOUND"})
+    with pytest.raises(http.IntegrationError, match="can't open base appTES…01"):
+        run_sync()
+    issue = q("SELECT * FROM integration_issues WHERE source = 'airtable' AND code = 'SYNC_FAILED' "
+              "AND resolved_at IS NULL")[0]
+    assert "NBC Master Base" in issue["message"]
+    fake._airtable = real
+    run_sync()
+    assert not q("SELECT 1 FROM integration_issues WHERE code = 'SYNC_FAILED' AND resolved_at IS NULL")

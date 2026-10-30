@@ -254,11 +254,16 @@ def run(trigger: str = "schedule", *, user_id: int | None = None, record_id: str
             _mark_removed(seen, run_id, stats)
         status = "partial" if stats["problems"] else "succeeded"
         runs.finish(run_id, status, stats)
+        with db.transaction() as conn:
+            runs.resolve(conn, source=SOURCE, external_ref="sync")
         stats["status"] = status
         stats["run_id"] = run_id
         return stats
     except IntegrationError as exc:
         runs.finish(run_id, "failed", stats, str(exc))
+        with db.transaction() as conn:
+            runs.issue(conn, source=SOURCE, code="SYNC_FAILED", severity="error", run_id=run_id,
+                       external_ref="sync", message=str(exc))
         raise
     except Exception as exc:
         runs.finish(run_id, "failed", stats, f"{exc.__class__.__name__}: {exc}")

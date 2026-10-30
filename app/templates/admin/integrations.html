@@ -11,6 +11,7 @@
     <p class="muted small">{{ c.what }}</p>
     <dl class="kv">
       <dt>Secrets</dt><dd><span class="secret-list">{% for s in c.secrets %}<span class="secret {{ 'missing' if s in c.missing else 'set' }}" title="{{ 'Missing' if s in c.missing else 'Set' }}">{{ s }}</span>{% endfor %}</span></dd>
+      {% if c.key == 'airtable' and c.base %}<dt>Base</dt><dd><code class="small">{{ c.base }}</code></dd>{% endif %}
       {% if c.key == 'airtable' %}<dt>Sync</dt><dd>When the app starts, then every {{ c.every }} minutes</dd>{% endif %}
       {% if c.mode %}<dt>Mode</dt><dd><span class="status {{ 'wait' if c.mode == 'Test' else 'ok' }}">{{ c.mode }}</span></dd>{% endif %}
       {% if c.problem %}<dt>Problem</dt><dd><span class="status bad">{{ c.problem }}</span></dd>{% endif %}

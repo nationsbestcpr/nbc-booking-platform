@@ -425,7 +425,8 @@ def _integration_details(key: str) -> dict:
     """What each card shows beyond the shared fields."""
     from ..integrations import ghl, stripe_api, worker
     if key == "airtable":
-        return {"every": worker.sync_minutes()}
+        from ..integrations import airtable
+        return {"every": worker.sync_minutes(), "base": airtable.masked_base_id() if airtable.base_id() else None}
     if key == "stripe":
         if not stripe_api.secret_key():
             from ..integrations import checkout
