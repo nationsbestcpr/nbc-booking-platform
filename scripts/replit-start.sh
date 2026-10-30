@@ -74,6 +74,12 @@ step 120 $PY -m flask --app wsgi db upgrade || fail "the database update (see th
 say "checking the preset admin account"
 step 30 $PY -m flask --app wsgi users ensure-superadmin || fail "the preset admin account (see the message above)"
 
+# The background worker (Airtable sync, lapsed holds, GHL/Stripe queue) runs
+# beside the web server; if it ever stops, it starts again after 10 seconds.
+# Its lines start with "[worker]" in the Logs tab.
+say "starting the background worker"
+( while true; do $PY -m flask --app wsgi worker run; echo "[worker] stopped; restarting in 10 s"; sleep 10; done ) &
+
 BINDS=""
 for p in $PORTS; do BINDS="$BINDS --bind 0.0.0.0:$p"; done
 say "starting the web server"

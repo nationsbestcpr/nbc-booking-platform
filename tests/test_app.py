@@ -170,6 +170,9 @@ def test_sign_out(client, sign_in):
     assert "Riley Brooks" not in client.get("/").get_data(as_text=True)
 
 
-def test_webhooks_are_stubbed_and_skip_csrf(client):
-    assert client.post("/webhooks/stripe").status_code == 501
+def test_webhooks_skip_csrf_and_check_signatures(client, monkeypatch):
+    monkeypatch.delenv("STRIPE_WEBHOOK_SECRET", raising=False)
+    assert client.post("/webhooks/stripe").status_code == 503          # not set up: not accepted
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_x")
+    assert client.post("/webhooks/stripe", data=b"{}").status_code == 400   # unsigned
     assert client.post("/webhooks/ghl").status_code == 501

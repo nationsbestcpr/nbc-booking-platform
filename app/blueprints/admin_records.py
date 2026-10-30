@@ -285,12 +285,17 @@ def log():
 LOCKED_SETTINGS = {"environment", "airtable_writeback_enabled"}
 # Settings that may be left empty (a decision not made yet).
 NULLABLE_SETTINGS = {"large_refund_threshold_cents"}
+# Settings edited as a list of names -> ids (JSON object of text), with the names allowed.
+ID_MAP_SETTINGS = {"ghl_custom_field_ids": {"session_id", "registration_id", "site", "class_date", "class_time",
+                                            "product", "reg_type", "city"}}
 
 
 def _setting_kind(key: str, value) -> str:
     """'money' (whole cents, edited in dollars), 'number', 'yesno' or 'fixed' (read-only here)."""
     if key in LOCKED_SETTINGS:
         return "fixed"
+    if key in ID_MAP_SETTINGS:
+        return "idmap"
     if isinstance(value, bool):
         return "yesno"
     if isinstance(value, int) or (value is None and key in NULLABLE_SETTINGS):
@@ -310,7 +315,18 @@ def settings():
         raw = request.form.get("value", "").strip().replace(",", "").lstrip("$")
         if kind == "fixed":
             abort(400)
-        if kind == "yesno":
+        if kind == "idmap":
+            try:
+                new = json.loads(request.form.get("value", "").strip() or "{}")
+                allowed = ID_MAP_SETTINGS[key]
+                if not isinstance(new, dict) or any(k not in allowed or not isinstance(v, str) for k, v in new.items()):
+                    raise ValueError
+                new = {k: v.strip() for k, v in new.items() if v.strip()}
+            except ValueError:
+                flash("Use the form {\"name\": \"id\", ...} with these names: "
+                      + ", ".join(sorted(ID_MAP_SETTINGS[key])) + ". Nothing was changed.", "error")
+                return redirect(url_for("admin.settings") + f"#s-{key}")
+        elif kind == "yesno":
             new = raw == "yes"
         elif raw == "" and key in NULLABLE_SETTINGS:
             new = None
@@ -344,5 +360,6 @@ def settings():
     """)
     for r in rows:
         r["kind"] = _setting_kind(r["key"], r["value"])
-        r["json"] = json.dumps(r["value"], indent=1) if r["kind"] == "fixed" else None
+        r["json"] = json.dumps(r["value"], indent=1) if r["kind"] in ("fixed", "idmap") else None
+        r["names"] = sorted(ID_MAP_SETTINGS.get(r["key"], ()))
     return render_template("admin/settings.html", rows=rows, locked=LOCKED_SETTINGS, **_ctx())

@@ -1,8 +1,7 @@
 """Landing page: the classes that are on sale, for everyone.
 
 Signed-in people also get a short greeting based on their role, worked out
-from their account (nobody chooses a role). Booking itself (seat holds and
-Stripe Checkout) is build phase 3, so the Book buttons are placeholders.
+from their account (nobody chooses a role). Book opens /book/<class> (book.py).
 
 Only data safe for the public is selected here: never access codes, on-site
 contacts or payment details (those live in *_private_details tables).
@@ -29,7 +28,7 @@ def home():
          GROUP BY m.id ORDER BY m.name
     """)
     classes = db.fetch_all("""
-        SELECT s.id, s.slug, s.starts_at, s.ends_at, s.time_zone, s.delivery_mode,
+        SELECT s.id, s.public_id, s.slug, s.starts_at, s.ends_at, s.time_zone, s.delivery_mode,
                m.name AS city_name, m.state_code, m.slug AS city_slug,
                si.name AS site_name, cf.name AS course_name, cf.code AS course_code,
                a.seats_left, a.seat_limit,

@@ -8,6 +8,11 @@
     flask --app wsgi db load-demo        # invented demo data, local development only
     flask --app wsgi users make-admin EMAIL   # first admin of a new database
     flask --app wsgi users ensure-superadmin  # preset admin from SUPERADMIN_EMAIL / SUPERADMIN_PASSWORD
+    flask --app wsgi worker run          # background jobs: Airtable sync, holds, GHL/Stripe queue
+    flask --app wsgi worker once         # one pass of the above, then stop
+    flask --app wsgi sync airtable [--record recXXXX]   # pull from Airtable now
+    flask --app wsgi sync check-airtable # how the base's fields match the sync
+    flask --app wsgi sync ghl-stages     # load the GHL pipeline's stage ids
 """
 
 from __future__ import annotations
@@ -245,6 +250,69 @@ def ensure_superadmin() -> None:
     click.echo(f"Preset admin account {email}: " + "; ".join(notes) + ".")
 
 
+worker_cli = AppGroup("worker", help="Background jobs.")
+sync_cli = AppGroup("sync", help="Run one integration job now.")
+
+
+@worker_cli.command("run")
+def worker_run() -> None:
+    """Run the background worker until stopped."""
+    from .integrations import worker
+    worker.run_forever()
+
+
+@worker_cli.command("once")
+def worker_once() -> None:
+    """One pass: release lapsed holds, send due jobs, sync Airtable if due."""
+    from .integrations import worker
+    click.echo(worker.tick() or "Nothing to do.")
+
+
+@sync_cli.command("airtable")
+@click.option("--record", default=None, help="Only this Class Schedule record (rec...).")
+def sync_airtable(record: str | None) -> None:
+    """Pull courses, locations and classes from Airtable now."""
+    from .integrations import airtable_sync
+    from .integrations.http import IntegrationError
+    try:
+        stats = airtable_sync.run("manual", record_id=record)
+    except IntegrationError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(", ".join(f"{k.replace('_', ' ')}: {v}" for k, v in stats.items()))
+
+
+@sync_cli.command("check-airtable")
+def sync_check_airtable() -> None:
+    """Show which Airtable fields the sync found."""
+    from .integrations import airtable_sync
+    from .integrations.http import IntegrationError
+    try:
+        mapping = airtable_sync.check_fields()
+    except IntegrationError as exc:
+        raise click.ClickException(str(exc)) from exc
+    for key, m in mapping.items():
+        click.echo(f"{m['wanted']}: " + ("MISSING TABLE" if not m["table"] else f"table “{m['table']}”"))
+        for logical, actual in m["fields"].items():
+            click.echo(f"    {logical:16} <- {actual}")
+        for logical in m["missing_required"]:
+            click.echo(f"    {logical:16} MISSING (required)")
+        for logical in m["missing_optional"]:
+            click.echo(f"    {logical:16} not found (optional)")
+
+
+@sync_cli.command("ghl-stages")
+def sync_ghl_stages() -> None:
+    """Load the Community Class pipeline's stage ids from GHL."""
+    from .integrations import ghl
+    from .integrations.http import IntegrationError
+    try:
+        click.echo(ghl.load_stages())
+    except IntegrationError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
 def init_app(app: Flask) -> None:
     app.cli.add_command(db_cli)
     app.cli.add_command(users_cli)
+    app.cli.add_command(worker_cli)
+    app.cli.add_command(sync_cli)

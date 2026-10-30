@@ -215,6 +215,74 @@ grants by people who aren't allowed to make them, and never lets the last
 active admin be removed or suspended. `environment` and
 `airtable_writeback_enabled` can't be changed from the screen.
 
+## Integrations: Airtable, Stripe, GHL
+
+The code is in `app/integrations/` (one file per platform, plus the outbox
+queue and the worker). The published app runs a background worker next to
+the web server (its log lines start with `[worker]`); every few seconds it
+releases unpaid seat holds and sends queued GHL and Stripe work, and every
+`AIRTABLE_SYNC_MINUTES` (default 5) it pulls from Airtable. The
+**Integrations** page shows each one's state, what hasn't synced, and data
+problems to fix, with Sync now / Retry / Mark fixed buttons.
+
+Put each secret in the workspace's Secrets **and** the published app's
+secrets (Publishing → Adjust settings → Secrets), then republish.
+
+**Airtable** (classes, locations, courses → engine)
+1. airtable.com/create/tokens → Create token. Scopes `data.records:read` and
+   `schema.bases:read`; access: NBC Master Base only. Copy it into
+   `AIRTABLE_TOKEN`.
+2. Open the base; its address starts `airtable.com/app…/`. That `app…` part
+   goes in `AIRTABLE_BASE_ID`.
+3. Integrations → **Check Airtable fields** lists which field the sync uses
+   for each item. A required one that isn't found is named there. The names
+   the sync looks for are in `FIELDS` in `app/integrations/airtable.py`.
+4. **Sync now**. New cities arrive "Still on Enrollware": nothing sells until
+   an admin presses **Start booking here** for that city on Locations.
+5. Optional "Sync now" button in Airtable: on Class Schedule add a Button
+   field, action Open URL, formula
+   `"https://<your app address>/admin/sync?record=" & RECORD_ID()`.
+   It asks staff to sign in; no key is in the link.
+
+A class is on sale when its Status includes **Enrollware**; a Status with
+"Cancelled" cancels it; a row that disappears comes off sale (and is listed
+as a problem if seats were sold). Rental fees, POC payments and trackers are
+never read.
+
+**Stripe** (checkout, payments, refunds)
+1. Dashboard (test mode) → Developers → API keys → the secret key `sk_test_…`
+   → `STRIPE_SECRET_KEY`. Live keys (`sk_live_…`) only in production; the app
+   refuses them elsewhere.
+2. Workbench → Webhooks → Create an event destination → events
+   `checkout.session.completed`, `checkout.session.async_payment_succeeded`,
+   `checkout.session.expired` → endpoint URL as shown on the Integrations page
+   (`https://<your app address>/webhooks/stripe`) → copy the signing secret
+   `whsec_…` → `STRIPE_WEBHOOK_SECRET`.
+3. Coupons: create promotion codes in Stripe; customers enter them on the
+   Stripe page.
+Test cards: 4242 4242 4242 4242, any future date, any CVC.
+
+**GHL** (one contact + one opportunity per seat)
+1. In the sub-account (Sandbox 2 for testing): Settings → Private
+   Integrations → Create. Scopes: View/Edit Contacts and View/Edit
+   Opportunities (`contacts.readonly`, `contacts.write`,
+   `opportunities.readonly`, `opportunities.write`). Copy the token →
+   `GHL_API_TOKEN`.
+2. The sub-account id (Settings → Business Profile, or the `location/…` part
+   of its address) → `GHL_LOCATION_ID`.
+3. Integrations → **Load pipeline stages**: finds the "Community Class"
+   pipeline (or `GHL_PIPELINE_NAME`) and its Pending, Complete, No Show,
+   Cancelled and Waitlisted stages.
+4. Optional custom fields: in Business settings, "GHL custom field ids" takes the ids of the GHL custom fields to fill, as
+   `{"session_id": "…", "site": "…", "class_date": "…", "class_time": "…",
+   "product": "…", "reg_type": "…", "city": "…", "registration_id": "…"}`.
+Opportunities are named `YYYY-MM-DD | COURSE-DELIVERY | MARKET-City` and
+start at Pending. GHL → engine webhooks (contact edits, messages, dragged
+stages) need the Marketplace app (launch plan 15.5); not built yet.
+
+From a shell: `flask --app wsgi sync airtable`, `sync check-airtable`,
+`sync ghl-stages`, `worker once`.
+
 ## Deploy (Replit Reserved VM)
 
 `.replit` builds with `scripts/replit-setup.sh` and runs gunicorn from `.venv` on port 5000. Secrets: `APP_ENV`, `SECRET_KEY`,
@@ -228,7 +296,8 @@ above before the first publish.
 | Database schema, roles and permissions | Done (PR #1) |
 | App skeleton: sign-in, create account, landing page of classes | Done |
 | Dashboards: admin (classes, bookings, waiting lists, locations, users, instructors, roles, integrations, action log, business settings), instructor, student; preset admin login | Done |
-| 1. Airtable sync | Next |
-| 2. Search pages and SEO | To do |
-| 3. Seat holds and Stripe Checkout | To do |
-| 4. GHL sync · 4a tracking · 4b staff dashboards + Microsoft sign-in · 4c instructor portal | To do |
+| 1. Airtable sync (pull) | Done |
+| 3. Seat holds and Stripe Checkout | Done |
+| 4. GHL contacts and opportunities (engine → GHL) | Done |
+| 2. Search pages and SEO | Next |
+| 4. GHL webhooks (GHL → engine) · 4a tracking · 4b Microsoft sign-in · 4c instructor portal · Airtable write-back | To do |

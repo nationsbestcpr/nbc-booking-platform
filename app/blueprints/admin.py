@@ -60,6 +60,17 @@ def describe(entry: dict, role_names: dict[str, str], account_name: str | None =
         name = role_names.get(after.get("role"), after.get("role"))
         return (f"Changed the {name} role's permissions: "
                 f"{len(after.get('added', []))} added, {len(before.get('removed', []))} removed")
+    if action == "integration.sync_now":
+        return "Synced from Airtable" + (f" (record {after['record']})" if after.get("record") else "")
+    if action == "integration.ghl_stages":
+        return f"Loaded the GHL {after.get('pipeline', '')} pipeline stages"
+    if action == "integration.retry":
+        return "Retried an item that didn't sync"
+    if action == "integration.issue_resolve":
+        return "Marked a sync problem as fixed"
+    if action == "city.booking_system":
+        where = "here" if after.get("booking_system") == "engine" else "in Enrollware"
+        return f"Switched {after.get('city', 'a city')} to book {where}"
     if action == "user.password_reset":
         return f"Reset the password{who}"
     return action.replace("_", " ").replace(".", ": ")
@@ -349,21 +360,23 @@ def roles_detail(code: str):
 # What each connection needs and where its activity shows up. Secret values are
 # never read here, only whether each named secret is set.
 INTEGRATIONS = [
-    {"key": "airtable", "name": "Airtable", "phase": "Phase 1 · Airtable sync",
-     "what": "Classes, places, courses and prices come in from the NBC Master Base; seat counts go back.",
+    {"key": "airtable", "name": "Airtable",
+     "what": "Courses, locations and the class schedule come in from the NBC Master Base every few minutes. "
+             "A class goes on sale when its Status includes Enrollware.",
      "secrets": ["AIRTABLE_TOKEN", "AIRTABLE_BASE_ID"],
-     "runs": ["airtable_sync", "airtable_writeback", "enrollment_snapshot"],
-     "issue_source": "airtable", "outbox": ["airtable"], "webhook": None, "oauth": None},
-    {"key": "stripe", "name": "Stripe", "phase": "Phase 3 · Checkout",
-     "what": "Checkout pages, payments and refunds.",
+     "runs": ["airtable_sync"], "issue_source": "airtable", "outbox": [], "webhook": None, "oauth": None},
+    {"key": "stripe", "name": "Stripe",
+     "what": "Customers pay on Stripe's checkout page; payments confirm seats, unpaid holds expire, "
+             "late payments with no seat left are refunded.",
      "secrets": ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"],
-     "runs": ["stripe_reconcile"], "issue_source": "stripe", "outbox": ["stripe"], "webhook": "stripe", "oauth": None},
-    {"key": "ghl", "name": "GHL", "phase": "Phase 4 · GHL sync",
-     "what": "One contact and one opportunity per seat; messages and stage changes come back.",
-     "secrets": ["GHL_CLIENT_ID", "GHL_CLIENT_SECRET", "TOKEN_ENCRYPTION_KEY"],
-     "runs": ["ghl_reconcile"], "issue_source": "ghl", "outbox": ["ghl"], "webhook": "ghl", "oauth": "ghl"},
-    {"key": "microsoft", "name": "Microsoft 365 sign-in", "phase": "Phase 4b · Staff dashboards",
-     "what": "Staff sign in with their NBC Microsoft accounts.",
+     "runs": [], "issue_source": "stripe", "outbox": ["stripe"], "webhook": "stripe", "oauth": None},
+    {"key": "ghl", "name": "GHL",
+     "what": "Each paid seat becomes one contact and one opportunity in the Community Class pipeline, "
+             "stage Pending.",
+     "secrets": ["GHL_API_TOKEN", "GHL_LOCATION_ID"],
+     "runs": [], "issue_source": "ghl", "outbox": ["ghl"], "webhook": None, "oauth": None},
+    {"key": "microsoft", "name": "Microsoft 365 sign-in",
+     "what": "Staff sign in with their NBC Microsoft accounts. Not built yet.",
      "secrets": ["ENTRA_TENANT_ID", "ENTRA_CLIENT_ID", "ENTRA_CLIENT_SECRET"],
      "runs": [], "issue_source": None, "outbox": [], "webhook": None, "oauth": None},
 ]
@@ -388,18 +401,41 @@ def _integration_status(spec: dict) -> dict:
          WHERE provider = :p AND revoked_at IS NULL ORDER BY installed_at DESC LIMIT 1
     """, p=spec["oauth"]) if spec["oauth"] else None
 
+    extra = _integration_details(spec["key"])
+    jobs_done = db.fetch_value("""SELECT count(*) FROM outbox_jobs WHERE target = ANY(:t) AND status = 'succeeded'""",
+                               t=spec["outbox"]) if spec["outbox"] else 0
     if missing:
         state, label = "off", "Not set up"
+    elif extra.get("problem"):
+        state, label = "bad", "Needs attention"
     elif problems["errors"] or unsynced or (last_run and last_run["status"] == "failed"):
         state, label = "bad", "Needs attention"
     elif spec["oauth"] and not connection:
         state, label = "wait", "Waiting for the app to be installed"
-    elif not (last_run or last_webhook or connection) and (spec["runs"] or spec["webhook"]):
+    elif not (last_run or last_webhook or connection or jobs_done) and (spec["runs"] or spec["webhook"] or spec["outbox"]):
         state, label = "wait", "Set up, no activity yet"
     else:
         state, label = "ok", "Working"
     return {**spec, "missing": missing, "last_run": last_run, "problems": problems, "unsynced": unsynced,
-            "last_webhook": last_webhook, "connection": connection, "state": state, "label": label}
+            "last_webhook": last_webhook, "connection": connection, "state": state, "label": label,
+            "jobs_done": jobs_done, **extra}
+
+
+def _integration_details(key: str) -> dict:
+    """What each card shows beyond the shared fields."""
+    from ..integrations import ghl, stripe_api, worker
+    if key == "airtable":
+        return {"every": worker.sync_minutes()}
+    if key == "stripe":
+        if not stripe_api.secret_key():
+            return {}
+        problem = stripe_api.check_key_for_environment()
+        return {"mode": "Live" if stripe_api.is_live_key() else "Test", "problem": problem,
+                "webhook_url": url_for("webhooks.stripe", _external=True)}
+    if key == "ghl":
+        return {"pipeline": ghl.pipeline_name(),
+                "stages": db.fetch_all("SELECT internal_state, stage_name FROM ghl_stage_map ORDER BY internal_state")}
+    return {}
 
 
 @bp.get("/integrations")
@@ -407,14 +443,22 @@ def _integration_status(spec: dict) -> dict:
 def integrations():
     cards = [_integration_status(s) for s in INTEGRATIONS]
     issues = db.fetch_all("""
-        SELECT source, severity, code, message, occurrences, last_seen_at
+        SELECT id, source, severity, code, message, occurrences, last_seen_at
           FROM integration_issues WHERE resolved_at IS NULL
          ORDER BY CASE severity WHEN 'error' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END, last_seen_at DESC
-         LIMIT 20
+         LIMIT 50
     """)
     runs = db.fetch_all("""
         SELECT kind, trigger, status, error, stats, started_at, finished_at
           FROM integration_runs ORDER BY started_at DESC LIMIT 10
     """)
-    return render_template("admin/integrations.html", cards=cards, issues=issues, runs=runs,
+    unsynced = db.fetch_all("""
+        SELECT u.outbox_job_id, u.target, u.operation, u.entity_type, u.entity_id, u.status, u.attempts,
+               u.last_error, u.created_at, u.run_after,
+               CASE WHEN u.entity_type = 'registration' THEN
+                 (SELECT r.attendee_first_name || ' ' || r.attendee_last_name FROM registrations r WHERE r.id = u.entity_id)
+               END AS who
+          FROM unsynced_items u ORDER BY u.created_at DESC LIMIT 50
+    """)
+    return render_template("admin/integrations.html", cards=cards, issues=issues, runs=runs, unsynced=unsynced,
                            tabs=areas.tabs_for(auth.current_user()))

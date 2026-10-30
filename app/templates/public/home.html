@@ -83,14 +83,13 @@
               <button class="pill plain" type="button" aria-disabled="true" disabled>Join waitlist</button>
             {% else %}
               <span class="seats {{ 'low' if c.seats_left <= 3 }} num">{{ c.seats_left }} of {{ c.seat_limit }} seats left</span>
-              <button class="pill" type="button" aria-disabled="true" disabled title="Booking opens with checkout">Book now <span class="arrow" aria-hidden="true">→</span></button>
+              <a class="pill" href="{{ url_for('book.form', public_id=c.public_id) }}">Book now <span class="arrow" aria-hidden="true">→</span></a>
             {% endif %}
           </div>
         </div>
       </article>
       {% endfor %}
     </div>
-    <p class="muted small" style="margin-top:16px">Booking and payment open in the next build. Seats shown are live.</p>
     {% else %}
     <div class="empty">No classes are on sale right now. New dates are added every week.</div>
     {% endif %}

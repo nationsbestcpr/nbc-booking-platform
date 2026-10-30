@@ -1,0 +1,30 @@
+{% extends "dash/layout.html" %}
+{% block title %}Airtable fields{% endblock %}
+{% block heading %}Airtable <span class="accent">Fields</span>{% endblock %}
+{% block subhead %}<p>Which fields of the NBC Master Base the sync reads. A missing required field stops that table from syncing; a missing optional one is simply left out.</p>{% endblock %}
+{% block panel %}
+<p><a class="btn-small" href="{{ url_for('admin.integrations') }}">← Back to Integrations</a></p>
+{% if error %}
+<p class="notice error" role="alert">{{ error }}</p>
+{% endif %}
+<div class="int-grid">
+  {% for key, m in mapping.items() %}
+  <section class="panel" aria-labelledby="t-{{ key }}">
+    <div class="panel-head"><h2 id="t-{{ key }}">{{ m.wanted }}</h2>
+      {% if not m.table %}<span class="status bad">Table not found</span>
+      {% elif m.missing_required %}<span class="status bad">Missing required fields</span>
+      {% else %}<span class="status ok">Ready</span>{% endif %}</div>
+    {% if m.table %}
+    <dl class="field-map">
+      {% for logical, actual in m.fields.items() %}<dt>{{ logical.replace('_', ' ')|capitalize }}</dt><dd>“{{ actual }}” <span class="muted small">({{ m.types[logical] }})</span></dd>{% endfor %}
+      {% for logical in m.missing_required %}<dt>{{ logical.replace('_', ' ').replace('|', ' or ')|capitalize }}</dt><dd><span class="status bad">Required, not found</span><br><span class="small muted">Looked for: {% for alt in logical.split('|') %}{{ m.known[alt]|join(', ') }}{{ '; ' if not loop.last }}{% endfor %}</span></dd>{% endfor %}
+      {% for logical in m.missing_optional %}<dt>{{ logical.replace('_', ' ')|capitalize }}</dt><dd><span class="muted small">Not found (optional) · looked for {{ m.known[logical]|join(', ') }}</span></dd>{% endfor %}
+    </dl>
+    {% else %}
+    <p class="muted small">No table with this name in the base. If it was renamed, set its name in the secrets ({{ {'courses': 'AIRTABLE_TABLE_COURSES', 'locations': 'AIRTABLE_TABLE_LOCATIONS', 'schedule': 'AIRTABLE_TABLE_SCHEDULE'}[key] }}).</p>
+    {% endif %}
+  </section>
+  {% endfor %}
+</div>
+<p class="muted small">A field with a different name in your base? Tell the developer its exact name; the list of names the sync looks for is kept in one place in the code.</p>
+{% endblock %}

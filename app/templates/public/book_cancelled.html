@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Booking not finished{% endblock %}
+{% block content %}
+<div class="wrap">
+  <section class="panel book-result" aria-labelledby="c-title">
+    <span class="eyebrow">No payment taken</span>
+    <h1 id="c-title" class="title">Your Booking <span class="accent">Wasn't Finished</span></h1>
+    <p>You left the payment page, so we've let the seat{{ 's' if order and order.attendees|length > 1 }} go for someone else.</p>
+    {% if order %}<a class="pill red" href="{{ url_for('book.form', public_id=order.session_public_id, seats=order.attendees|length) }}" style="align-self:flex-start">Book this class again <span class="arrow" aria-hidden="true">→</span></a>{% endif %}
+    <a class="pill" href="{{ url_for('public.home') }}#classes" style="align-self:flex-start">See all classes <span class="arrow" aria-hidden="true">→</span></a>
+  </section>
+</div>
+{% endblock %}

@@ -214,6 +214,7 @@ fieldset.field { border: 0; padding: 0; margin: 0; }
 .notice { border-radius: 12px; padding: 12px 16px; font-weight: 600; font-size: 0.9375rem; max-width: none; }
 .notice.ok { background: #e3f3ea; color: var(--ok); }
 .notice.error { background: #fdeceb; color: var(--red-deep); }
+.notice.warn { background: #fff4dc; color: #7a4b00; }
 .panel { border: 1px solid var(--line); border-radius: var(--radius-card); padding: clamp(18px, 3vw, 26px); background: var(--white); display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 .panel-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; }
 .panel h2 { color: var(--navy); font-size: 1.25rem; }
@@ -272,3 +273,27 @@ fieldset.field { border: 0; padding: 0; margin: 0; }
 .error-page { padding-block: 64px; display: flex; flex-direction: column; gap: 14px; }
 
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* Booking */
+.book .auth-side li span { color: #e1e1f2; }
+.book .auth-form { gap: 22px; }
+.book-form { display: flex; flex-direction: column; gap: 18px; }
+.book-form h2 { color: var(--navy); font-size: 1.25rem; margin-top: 6px; }
+.seat-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.seat-row select { font: 400 1rem var(--font); padding: 11px 14px; border-radius: 12px; border: 1.5px solid var(--line); background: var(--white); color: var(--ink); }
+.pill.light-border { background: var(--white); color: var(--navy); box-shadow: inset 0 0 0 1.5px var(--navy); }
+.row-3 { display: grid; grid-template-columns: 1fr 1fr 1.3fr; gap: 12px; }
+.attendee { border-top: 1px solid var(--line); padding-top: 14px; }
+.attendee legend { color: var(--navy); }
+.book-result { margin-block: 32px 56px; max-width: 760px; gap: 18px; }
+@media (max-width: 640px) { .row-3 { grid-template-columns: 1fr; } }
+
+/* Integrations: actions */
+.int-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.int-actions form { margin: 0; }
+.btn-small { text-decoration: none; display: inline-block; font: 600 0.8125rem var(--font); padding: 7px 14px; border-radius: 999px; border: 1.5px solid var(--navy); background: var(--white); color: var(--navy); cursor: pointer; }
+.btn-small.primary { background: var(--navy); color: var(--white); }
+.btn-small:hover { filter: brightness(1.06); }
+.field-map { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 4px 14px; font-size: 0.875rem; margin: 0; }
+.field-map dt { color: var(--muted); }
+.field-map dd { margin: 0; overflow-wrap: anywhere; }

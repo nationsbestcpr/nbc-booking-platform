@@ -46,7 +46,7 @@ second, wrong source of truth.
 | Data | Engine stores | Why |
 |---|---|---|
 | Card numbers, card details | **Never** | Stripe-hosted Checkout. Card data never reaches NBC servers. |
-| Product and price IDs | **Reference**: `products.stripe_product_id`, `stripe_price_id`; per-class `session_products.stripe_price_id` | Create Checkout sessions. A Stripe price may only be used when its amount equals the displayed price (enforced by CHECK). Otherwise checkout sends `price_data`. |
+| Product and price IDs | **Reference**: `products.stripe_product_id`, `stripe_price_id`; per-class `session_products.stripe_price_id` | Create Checkout sessions. A Stripe price may only be used when its amount equals the displayed price (enforced by CHECK). Otherwise checkout sends `price_data`. Today checkout always sends `price_data` from the class's own price, so these stay empty. |
 | Checkout session IDs | **Reference**: `checkout_sessions` | Match webhooks to holds; expire the session at 15 minutes (D2). |
 | Payment intent and charge IDs, amounts | **Reference + owned amounts**: `payments` | Refunds, reconciliation, the console's student view. |
 | Refund IDs and amounts | **Owned**: `refunds` | Refunds done directly in the Stripe Dashboard come in by webhook (`source = 'stripe_dashboard'`) so the engine never shows a stale balance. |
@@ -70,7 +70,7 @@ second, wrong source of truth.
 | DND / opt-out state | **Not stored** | GHL sends every customer message, so GHL enforces DND. The engine's `notifications` table refuses customer messages that bypass GHL. |
 | Workflows (confirmations, reminders, coursework, reviews) | **Not stored** | They run in GHL, triggered by stage and field changes the engine pushes. |
 | Source / first-touch fields | **Snapshot** on the engine side (`order_attribution`, `people.first_order_id` as the write-once anchor); written to GHL once | So write-once logic doesn't need to read GHL. |
-| OAuth tokens | **Ledger**, encrypted: `oauth_connections` | Each refresh returns a new refresh token, so it can't live in Replit Secrets. |
+| OAuth tokens | **Ledger**, encrypted: `oauth_connections` | Each refresh returns a new refresh token, so it can't live in Replit Secrets. Used once the Marketplace app (webhooks) is built; until then contacts and opportunities are written with a Private Integration token kept in Secrets (`GHL_API_TOKEN`), which doesn't rotate. |
 
 ### Microsoft 365 (Entra ID) — owns staff identity
 

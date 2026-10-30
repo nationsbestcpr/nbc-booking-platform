@@ -17,7 +17,10 @@
             {{ csrf_input() }}<input type="hidden" name="key" value="{{ r.key }}">
             <div class="field" style="flex:1 1 110px">
               <label class="sr-only" for="v-{{ r.key }}">{{ r.key }}</label>
-              {% if r.kind == 'yesno' %}
+              {% if r.kind == 'idmap' %}
+                <textarea id="v-{{ r.key }}" name="value" rows="4" style="font:400 0.875rem ui-monospace,monospace;padding:9px 12px;border-radius:12px;border:1.5px solid var(--line);width:100%">{{ r.json }}</textarea>
+                <span class="hint">Names: {{ r.names|join(', ') }}</span>
+              {% elif r.kind == 'yesno' %}
                 <select id="v-{{ r.key }}" name="value"><option value="yes"{{ ' selected' if r.value }}>Yes</option><option value="no"{{ ' selected' if not r.value }}>No</option></select>
               {% elif r.kind == 'money' %}
                 <input type="text" inputmode="decimal" id="v-{{ r.key }}" name="value" value="{{ '%.2f'|format(r.value / 100) if r.value is not none else '' }}" placeholder="{{ 'Not set' if r.value is none }}" style="font:400 1rem var(--font);padding:9px 12px;border-radius:12px;border:1.5px solid var(--line)">

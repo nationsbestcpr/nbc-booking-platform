@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Book {{ s.course_name }}{% endblock %}
+{% block content %}
+{% set d = local_dt(s.starts_at, s.time_zone) %}
+<div class="wrap">
+  <div class="auth book">
+    <aside class="auth-side" aria-labelledby="class-title">
+      <span class="eyebrow" style="color:#ffb3b8">Book your seat</span>
+      <h1 id="class-title">{{ s.course_name }}</h1>
+      <ul>
+        <li><span><strong class="num">{{ class_date(s.starts_at, s.time_zone) }}</strong><br><span class="num">{{ class_time(s.starts_at, s.ends_at, s.time_zone) }}</span></span></li>
+        <li><span><strong>{{ s.site_name }}</strong><br>{{ s.address_line1 }}{% if s.address_line2 %}, {{ s.address_line2 }}{% endif %}<br>{{ s.site_city }}, {{ s.site_state }} {{ s.postal_code }}</span></li>
+        <li><span>{{ s.delivery_mode|capitalize }} class{% if s.delivery_mode == 'blended' %}: an online part before class day, then the skills session here{% endif %}</span></li>
+        {% if s.parking_notes_public %}<li><span>Parking: {{ s.parking_notes_public }}</span></li>{% endif %}
+      </ul>
+      <p class="num" style="color:#d9d9ee">{% if s.on_sale and s.seats_left > 0 %}{{ s.seats_left }} of {{ s.seat_limit }} seats left{% elif s.on_sale %}This class is full.{% else %}This class isn't on sale.{% endif %}</p>
+    </aside>
+
+    {% if not s.on_sale or s.seats_left <= 0 %}
+    <div class="auth-form">
+      <h2>{{ 'Class full' if s.on_sale else 'Not on sale' }}</h2>
+      {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+      <p class="muted">{{ 'Every seat in this class is taken.' if s.on_sale else 'This class is no longer taking bookings.' }} Pick another date.</p>
+      <a class="pill" href="{{ url_for('public.home') }}#classes" style="align-self:flex-start">See classes <span class="arrow" aria-hidden="true">→</span></a>
+    </div>
+    {% elif not online %}
+    <div class="auth-form">
+      <h2>Online booking opens soon</h2>
+      <p class="muted">Call us or email info@nationsbestcpr.com to book this class.</p>
+    </div>
+    {% else %}
+    <div class="auth-form">
+      <form method="get" action="{{ url_for('book.form', public_id=s.public_id) }}" class="seat-picker">
+        <div class="field">
+          <label for="seats">How many seats?</label>
+          <div class="seat-row">
+            <select id="seats" name="seats">
+              {% for n in range(1, [s.seats_left, 10]|min + 1) %}<option value="{{ n }}" {{ 'selected' if n == seats }}>{{ n }} seat{{ 's' if n > 1 }}</option>{% endfor %}
+            </select>
+            {% if product_id %}<input type="hidden" name="product" value="{{ product_id }}">{% endif %}
+            <button class="pill plain light-border" type="submit">Update</button>
+          </div>
+          <span class="hint">Booking for a group or your staff? Pick the number of people; each gets their own seat and certificate.</span>
+        </div>
+      </form>
+
+      <form method="post" action="{{ url_for('book.submit', public_id=s.public_id) }}" novalidate>
+        {{ csrf_input() }}
+        <input type="hidden" name="seats" value="{{ seats }}">
+        <div class="book-form">
+          {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+
+          <fieldset class="field">
+            <legend>Course</legend>
+            <div class="choice-tiles">
+              {% for o in s.offers %}
+              <label class="tile"><input type="radio" name="product_id" value="{{ o.id }}" {{ 'checked' if (product_id == o.id) or (not product_id and loop.first) }} required>
+                <strong>{{ o.short_name }} · <span class="num">{{ o.price_cents|money }}</span></strong><span>{{ o.name }}</span></label>
+              {% endfor %}
+            </div>
+          </fieldset>
+
+          <h2>Your details</h2>
+          <div class="row-2">
+            <div class="field"><label for="bf">First name</label><input type="text" id="bf" name="buyer_first_name" value="{{ form.buyer_first_name or buyer.first_name }}" autocomplete="given-name" required></div>
+            <div class="field"><label for="bl">Last name</label><input type="text" id="bl" name="buyer_last_name" value="{{ form.buyer_last_name or buyer.last_name }}" autocomplete="family-name" required></div>
+          </div>
+          <div class="row-2">
+            <div class="field"><label for="be">Email</label><input type="email" id="be" name="buyer_email" value="{{ form.buyer_email or buyer.email }}" autocomplete="email" required><span class="hint">Your confirmation goes here.</span></div>
+            <div class="field"><label for="bp">Mobile phone <span class="muted">(optional)</span></label><input type="text" inputmode="tel" id="bp" name="buyer_phone" value="{{ form.buyer_phone or buyer.phone }}" autocomplete="tel"><span class="hint">For class-day texts.</span></div>
+          </div>
+
+          <h2>Who's attending</h2>
+          {% for i in range(seats) %}
+          <fieldset class="field attendee">
+            <legend>Seat {{ i + 1 }}</legend>
+            {% if i == 0 %}
+            <div class="choice-tiles">
+              <label class="tile"><input type="radio" name="buyer_attends" value="yes" {{ 'checked' if form.get('buyer_attends', 'yes') == 'yes' }}><strong>I'm attending</strong><span>Use my details above</span></label>
+              <label class="tile"><input type="radio" name="buyer_attends" value="no" {{ 'checked' if form.get('buyer_attends') == 'no' }}><strong>Someone else</strong><span>I'm booking for them</span></label>
+            </div>
+            <p class="hint small">If someone else, fill in their name and email:</p>
+            {% endif %}
+            <div class="row-3">
+              <div class="field"><label for="a{{ i }}f">First name</label><input type="text" id="a{{ i }}f" name="a{{ i }}_first" value="{{ form.get('a%d_first' % i, '') }}"></div>
+              <div class="field"><label for="a{{ i }}l">Last name</label><input type="text" id="a{{ i }}l" name="a{{ i }}_last" value="{{ form.get('a%d_last' % i, '') }}"></div>
+              <div class="field"><label for="a{{ i }}e">Email</label><input type="email" id="a{{ i }}e" name="a{{ i }}_email" value="{{ form.get('a%d_email' % i, '') }}"></div>
+            </div>
+          </fieldset>
+          {% endfor %}
+
+          <p class="small muted">Your seat{{ 's are' if seats > 1 else ' is' }} held for 15 minutes while you pay on Stripe's secure page. Have a discount code? Enter it there.</p>
+          <button class="pill red" type="submit" style="align-self:flex-start">Continue to payment <span class="arrow" aria-hidden="true">→</span></button>
+        </div>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

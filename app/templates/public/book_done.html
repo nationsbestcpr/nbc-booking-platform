@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}{{ "You're booked" if order.status == 'paid' and order.seats_confirmed > 0 else 'Your booking' }}{% endblock %}
+{% block head_meta %}{% if order.status == 'open' %}<meta http-equiv="refresh" content="4">{% endif %}{% endblock %}
+{% block content %}
+{% set booked = order.status == 'paid' and order.seats_confirmed > 0 %}
+<div class="wrap">
+  <section class="panel book-result" aria-labelledby="done-title">
+    {% if booked %}
+      <span class="eyebrow">Booking confirmed</span>
+      <h1 id="done-title" class="title">You're Booked, <span class="accent">{{ order.buyer_first_name }}</span></h1>
+      <p>Your confirmation is on its way to <strong>{{ order.buyer_email }}</strong>. Bring a photo ID to class.</p>
+    {% elif order.status == 'open' %}
+      <span class="eyebrow">Almost there</span>
+      <h1 id="done-title" class="title">Confirming <span class="accent">Your Payment</span></h1>
+      <p>Stripe is telling us about your payment. This page updates by itself in a few seconds.</p>
+    {% elif order.status in ('paid', 'refunded', 'partially_refunded') %}
+      <span class="eyebrow">We're sorry</span>
+      <h1 id="done-title" class="title">That Seat <span class="accent">Was Taken</span></h1>
+      <p>Your payment arrived after your seat hold ran out and the class filled up. Your money is being refunded in full, and our team will contact you to find another date.</p>
+    {% else %}
+      <span class="eyebrow">Not booked</span>
+      <h1 id="done-title" class="title">This Booking <span class="accent">Wasn't Completed</span></h1>
+      <p>No payment was taken. <a href="{{ url_for('book.form', public_id=order.session_public_id) }}">Try again</a> or pick another date.</p>
+    {% endif %}
+    <dl class="kv">
+      <dt>Class</dt><dd>{{ order.course_name }}</dd>
+      <dt>When</dt><dd class="num">{{ class_date(order.starts_at, order.time_zone) }} · {{ class_time(order.starts_at, order.ends_at, order.time_zone) }}</dd>
+      <dt>Where</dt><dd>{{ order.site_name }}, {{ order.address_line1 }}, {{ order.site_city }}, {{ order.site_state }} {{ order.postal_code }}</dd>
+      <dt>Attending</dt><dd>{% for a in order.attendees %}{{ a.attendee_first_name }} {{ a.attendee_last_name }} ({{ a.short_name }}){{ ', ' if not loop.last }}{% endfor %}</dd>
+      {% if booked %}<dt>Paid</dt><dd class="num">{{ order.total_cents|money }}{% if order.discount_cents %} (saved {{ order.discount_cents|money }}){% endif %}</dd>{% endif %}
+    </dl>
+    <a class="pill" href="{{ url_for('public.home') }}" style="align-self:flex-start">Back to classes <span class="arrow" aria-hidden="true">→</span></a>
+  </section>
+</div>
+{% endblock %}

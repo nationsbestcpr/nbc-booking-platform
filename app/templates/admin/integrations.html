@@ -3,33 +3,69 @@
 {% block heading %}Integrations <span class="accent">Status</span>{% endblock %}
 {% block subhead %}<p>Each connection to another platform: whether it's set up, whether it's working, and what needs a look.</p>{% endblock %}
 {% block panel %}
+{% set can = current_user.permissions %}
 <div class="int-grid">
   {% for c in cards %}
   <section class="panel int-card" aria-labelledby="int-{{ c.key }}">
     <div class="panel-head"><h2 id="int-{{ c.key }}">{{ c.name }}</h2><span class="status {{ c.state }}">{{ c.label }}</span></div>
     <p class="muted small">{{ c.what }}</p>
     <dl class="kv">
-      <dt>Built in</dt><dd>{{ c.phase }}</dd>
       <dt>Secrets</dt><dd><span class="secret-list">{% for s in c.secrets %}<span class="secret {{ 'missing' if s in c.missing else 'set' }}" title="{{ 'Missing' if s in c.missing else 'Set' }}">{{ s }}</span>{% endfor %}</span></dd>
-      {% if c.oauth %}<dt>Connection</dt><dd>{% if c.connection %}Installed in sub-account <code>{{ c.connection.account_ref }}</code> · renewed {{ c.connection.refreshed_at|office_time }}{% else %}Not installed yet{% endif %}</dd>{% endif %}
-      {% if c.runs %}<dt>Last run</dt><dd>{% if c.last_run %}{{ c.last_run.kind.replace('_', ' ')|capitalize }} · <span class="status {{ {'succeeded': 'ok', 'partial': 'wait', 'failed': 'bad', 'running': 'wait'}[c.last_run.status] }}">{{ c.last_run.status|capitalize }}</span> · <span class="num">{{ c.last_run.started_at|office_time }}</span>{% else %}Never{% endif %}</dd>{% endif %}
+      {% if c.key == 'airtable' %}<dt>Sync</dt><dd>Every {{ c.every }} minutes, plus Sync now</dd>{% endif %}
+      {% if c.mode %}<dt>Mode</dt><dd><span class="status {{ 'wait' if c.mode == 'Test' else 'ok' }}">{{ c.mode }}</span></dd>{% endif %}
+      {% if c.problem %}<dt>Problem</dt><dd><span class="status bad">{{ c.problem }}</span></dd>{% endif %}
+      {% if c.webhook_url %}<dt>Webhook URL</dt><dd><code class="small">{{ c.webhook_url }}</code></dd>{% endif %}
+      {% if c.key == 'ghl' %}<dt>Pipeline</dt><dd>{{ c.pipeline }}{% if c.stages %}<br><span class="small muted">{% for st in c.stages %}{{ st.internal_state.replace('_', ' ')|capitalize }} → {{ st.stage_name }}{{ ' · ' if not loop.last }}{% endfor %}</span>{% else %}<br><span class="small muted">Stages not loaded yet</span>{% endif %}</dd>{% endif %}
+      {% if c.runs %}<dt>Last run</dt><dd>{% if c.last_run %}<span class="status {{ {'succeeded': 'ok', 'partial': 'wait', 'failed': 'bad', 'running': 'wait'}[c.last_run.status] }}">{{ {'succeeded': 'Done', 'partial': 'Done with problems', 'failed': 'Failed', 'running': 'Running'}[c.last_run.status] }}</span> · <span class="num">{{ c.last_run.started_at|office_time }}</span>{% if c.last_run.error %}<br><span class="small muted">{{ c.last_run.error }}</span>{% endif %}{% else %}Never{% endif %}</dd>{% endif %}
       {% if c.webhook %}<dt>Last message in</dt><dd class="num">{{ c.last_webhook|office_time if c.last_webhook else 'None yet' }}</dd>{% endif %}
+      {% if c.outbox %}<dt>Sent</dt><dd class="num">{{ c.jobs_done }}{% if c.unsynced %} · <span class="status bad">{{ c.unsynced }} not synced</span>{% endif %}</dd>{% endif %}
       {% if c.issue_source %}<dt>Open problems</dt><dd class="num">{{ c.problems.open }}{% if c.problems.errors %} <span class="status bad">{{ c.problems.errors }} error{{ 's' if c.problems.errors != 1 }}</span>{% endif %}</dd>{% endif %}
-      {% if c.outbox %}<dt>Not synced</dt><dd class="num">{{ c.unsynced }}</dd>{% endif %}
     </dl>
+    {% if not c.missing %}
+    <div class="int-actions">
+      {% if c.key == 'airtable' %}
+        {% if 'class.sync_now' in can %}<form method="post" action="{{ url_for('admin.airtable_sync_now') }}">{{ csrf_input() }}<button class="btn-small primary" type="submit">Sync now</button></form>{% endif %}
+        <a class="btn-small" href="{{ url_for('admin.airtable_fields') }}">Check Airtable fields</a>
+      {% elif c.key == 'ghl' and 'settings.manage' in can %}
+        <form method="post" action="{{ url_for('admin.ghl_stages') }}">{{ csrf_input() }}<button class="btn-small" type="submit">{{ 'Reload' if c.stages else 'Load' }} pipeline stages</button></form>
+      {% endif %}
+    </div>
+    {% endif %}
   </section>
   {% endfor %}
 </div>
-<p class="muted small">Secrets are checked by name only; their values are never shown. Add them in Replit's Secrets (staging) or the published app's secrets (production).</p>
+<p class="muted small">Secrets are checked by name only; their values are never shown. Add them in Replit's Secrets (workspace) and the published app's secrets, then republish.</p>
+
+<section class="panel" aria-labelledby="unsynced-title">
+  <div class="panel-head">
+    <h2 id="unsynced-title">Not synced yet</h2>
+    {% if 'system.issue_resolve' in can %}<form method="post" action="{{ url_for('admin.queue_run') }}">{{ csrf_input() }}<button class="btn-small" type="submit">Send waiting items now</button></form>{% endif %}
+  </div>
+  {% if unsynced %}
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>To</th><th>What</th><th>Tries</th><th>Last error</th><th></th></tr></thead>
+    <tbody>{% for j in unsynced %}
+      <tr><td><span class="status {{ 'bad' if j.status == 'dead' else 'wait' }}">{{ {'ghl': 'GHL', 'stripe': 'Stripe', 'airtable': 'Airtable'}.get(j.target, j.target|capitalize) }}</span></td>
+        <td>{{ {'sync_registration': 'Contact and opportunity', 'expire_checkout': 'Close a payment page', 'refund': 'Refund'}.get(j.operation, j.operation.replace('_', ' ')|capitalize) }}{% if j.who %} · {{ j.who }}{% endif %}<br><span class="small muted num">queued {{ j.created_at|office_time }}{% if j.status != 'dead' %} · next try {{ j.run_after|office_time }}{% endif %}</span></td>
+        <td class="num">{{ j.attempts }}</td>
+        <td class="small">{{ j.last_error or 'Waiting for the background worker' }}</td>
+        <td>{% if 'system.issue_resolve' in can and j.status in ('failed', 'dead') %}<form method="post" action="{{ url_for('admin.job_retry', job_id=j.outbox_job_id) }}">{{ csrf_input() }}<button class="btn-small" type="submit">Retry</button></form>{% endif %}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}
+  <p class="muted small">Everything has been sent.</p>
+  {% endif %}
+</section>
 
 <section class="panel" aria-labelledby="prob-title">
   <h2 id="prob-title">Open problems</h2>
   {% if issues %}
   <div class="scroll-x"><table class="table">
-    <thead><tr><th>Where</th><th>Problem</th><th>Seen</th><th>Last seen</th></tr></thead>
+    <thead><tr><th>Where</th><th>Problem</th><th>Seen</th><th>Last seen</th><th></th></tr></thead>
     <tbody>{% for i in issues %}
-      <tr><td><span class="status {{ {'error': 'bad', 'warning': 'wait'}.get(i.severity, 'off') }}">{{ i.source|capitalize }}</span></td>
-        <td>{{ i.message }}<br><code class="muted small">{{ i.code }}</code></td><td class="num">{{ i.occurrences }}×</td><td class="num">{{ i.last_seen_at|office_time }}</td></tr>
+      <tr><td><span class="status {{ {'error': 'bad', 'warning': 'wait'}.get(i.severity, 'off') }}">{{ {'ghl': 'GHL'}.get(i.source, i.source|capitalize) }}</span></td>
+        <td>{{ i.message }}<br><code class="muted small">{{ i.code }}</code></td><td class="num">{{ i.occurrences }}×</td><td class="num">{{ i.last_seen_at|office_time }}</td>
+        <td>{% if 'system.issue_resolve' in can %}<form method="post" action="{{ url_for('admin.issue_resolve', issue_id=i.id) }}">{{ csrf_input() }}<button class="btn-small" type="submit">Mark fixed</button></form>{% endif %}</td></tr>
     {% endfor %}</tbody>
   </table></div>
   {% else %}
@@ -44,7 +80,9 @@
     <thead><tr><th>Job</th><th>Started by</th><th>Result</th><th>Started</th></tr></thead>
     <tbody>{% for r in runs %}
       <tr><td>{{ r.kind.replace('_', ' ')|capitalize }}</td><td>{{ {'schedule': 'Schedule', 'button': 'Sync button', 'manual': 'By hand', 'webhook': 'Incoming message'}[r.trigger] }}</td>
-        <td><span class="status {{ {'succeeded': 'ok', 'partial': 'wait', 'failed': 'bad', 'running': 'wait'}[r.status] }}">{{ r.status|capitalize }}</span>{% if r.error %}<br><span class="small muted">{{ r.error }}</span>{% endif %}</td>
+        <td><span class="status {{ {'succeeded': 'ok', 'partial': 'wait', 'failed': 'bad', 'running': 'wait'}[r.status] }}">{{ {'succeeded': 'Done', 'partial': 'Done with problems', 'failed': 'Failed', 'running': 'Running'}[r.status] }}</span>
+          {% if r.stats and r.stats.classes_seen is defined %}<br><span class="small muted num">{{ r.stats.classes_seen }} classes read · {{ r.stats.classes_created }} new · {{ r.stats.classes_updated }} changed{% if r.stats.problems %} · {{ r.stats.problems }} problems{% endif %}</span>{% endif %}
+          {% if r.error %}<br><span class="small muted">{{ r.error }}</span>{% endif %}</td>
         <td class="num">{{ r.started_at|office_time }}</td></tr>
     {% endfor %}</tbody>
   </table></div>

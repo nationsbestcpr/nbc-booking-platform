@@ -15,6 +15,10 @@ and `docs/database-architecture.md` before changing data or integrations.
   re-implement them only in Python; let the database refuse and handle the error.
 - Writes go through `db.transaction()`. Lock a class row with
   `FOR NO KEY UPDATE`, never `FOR UPDATE` (it deadlocks against foreign keys).
+- Calls to other platforms live in `app/integrations/` and go through
+  `http.request` (tests swap its transport). Anything the engine must tell
+  another platform is queued with `outbox.enqueue(conn, ...)` in the same
+  transaction as the change; the worker delivers it with retries.
 - Money is integer cents. Times are timestamptz; show class times in the
   class's own time zone (`filters.local_dt`).
 - Schema changes go through a migration: `flask --app wsgi db new "..."`,

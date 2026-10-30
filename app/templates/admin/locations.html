@@ -10,6 +10,20 @@
     <span>{% if city.booking_system == 'engine' %}<span class="status ok">Books here since {{ city.cutover_at.strftime('%b %-d, %Y') if city.cutover_at else '—' }}</span>{% else %}<span class="status off">Still on Enrollware</span>{% endif %}
       {% if city.is_hub %}<span class="status wait">Hub city</span>{% endif %}{% if not city.is_active %}<span class="status off">Inactive</span>{% endif %}</span>
   </div>
+  {% if 'settings.manage' in current_user.permissions %}
+  <form class="int-actions" method="post" action="{{ url_for('admin.city_booking', metro_id=city.id) }}">
+    {{ csrf_input() }}
+    {% if city.booking_system == 'engine' %}
+      <input type="hidden" name="booking_system" value="enrollware">
+      <button class="btn-small" type="submit">Switch back to Enrollware</button>
+      <span class="small muted">Stops new bookings here; booked seats stay.</span>
+    {% else %}
+      <input type="hidden" name="booking_system" value="engine">
+      <button class="btn-small primary" type="submit">Start booking here</button>
+      <span class="small muted">Its classes go on sale on this site. Do this once Enrollware stops taking new bookings for {{ city.name }}.</span>
+    {% endif %}
+  </form>
+  {% endif %}
   {% if city.sites %}
   <div class="scroll-x"><table class="table">
     <thead><tr><th>Site</th><th>Address</th><th>Rooms (max students)</th><th>Upcoming classes</th></tr></thead>
