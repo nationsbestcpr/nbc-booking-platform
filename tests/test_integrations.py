@@ -744,3 +744,31 @@ def test_ghl_refusing_a_second_opportunity_is_explained(fake, on_sale, client, q
                 JOIN checkout_sessions c ON c.order_id = r.order_id WHERE c.stripe_checkout_session_id = :c""",
             c=second)[0]
     assert job["status"] == "dead" and "Allow Multiple Opportunities per Contact" in job["last_error"]
+
+
+def test_without_stripe_the_test_app_books_without_payment(fake, on_sale, client, q, app, monkeypatch):
+    monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
+    page = text_of(client.get(f"/book/{on_sale['public_id']}"))
+    assert "Test booking." in page and "Book (test, no payment)" in page
+    res = book(client, on_sale, seats=2)
+    assert res.status_code == 303 and "/book/done?order=" in res.headers["Location"]
+    order = q("SELECT * FROM orders WHERE public_id = CAST(:p AS uuid)",
+              p=res.headers["Location"].split("order=")[1])[0]
+    assert order["status"] == "paid" and not order["livemode"]
+    assert not q("SELECT 1 FROM payments WHERE order_id = :o", o=order["id"])
+    regs = q("SELECT * FROM registrations WHERE order_id = :o", o=order["id"])
+    assert [r["status"] for r in regs] == ["confirmed", "confirmed"]
+    assert not fake.stripe_sessions                                    # Stripe never called
+    done = text_of(client.get(res.headers["Location"]))
+    assert "You're Booked" in done and "no payment taken" in done
+    with app.app_context():
+        outbox.run_due(targets=["ghl"])
+    regs = q("SELECT * FROM registrations WHERE order_id = :o", o=order["id"])
+    assert all(r["ghl_opportunity_id"] for r in regs) and len(fake.ghl_opps) == 2
+
+
+def test_production_never_books_without_payment(fake, on_sale, client, app, monkeypatch):
+    monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
+    monkeypatch.setitem(app.config, "APP_ENV", "production")
+    page = text_of(client.get(f"/book/{on_sale['public_id']}"))
+    assert "Online booking opens soon" in page and "Book (test" not in page

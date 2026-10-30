@@ -27,7 +27,8 @@
       <dt>When</dt><dd class="num">{{ class_date(order.starts_at, order.time_zone) }} · {{ class_time(order.starts_at, order.ends_at, order.time_zone) }}</dd>
       <dt>Where</dt><dd>{{ order.site_name }}, {{ order.address_line1 }}, {{ order.site_city }}, {{ order.site_state }} {{ order.postal_code }}</dd>
       <dt>Attending</dt><dd>{% for a in order.attendees %}{{ a.attendee_first_name }} {{ a.attendee_last_name }} ({{ a.short_name }}){{ ', ' if not loop.last }}{% endfor %}</dd>
-      {% if booked %}<dt>Paid</dt><dd class="num">{{ order.total_cents|money }}{% if order.discount_cents %} (saved {{ order.discount_cents|money }}){% endif %}</dd>{% endif %}
+      {% if booked and order.test_booking %}<dt>Paid</dt><dd>Test booking: no payment taken ({{ order.total_cents|money }} at full price)</dd>
+      {% elif booked %}<dt>Paid</dt><dd class="num">{{ order.total_cents|money }}{% if order.discount_cents %} (saved {{ order.discount_cents|money }}){% endif %}</dd>{% endif %}
     </dl>
     <a class="pill" href="{{ url_for('public.home') }}" style="align-self:flex-start">Back to classes <span class="arrow" aria-hidden="true">→</span></a>
   </section>

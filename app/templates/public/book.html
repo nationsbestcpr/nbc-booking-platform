@@ -48,6 +48,7 @@
         {{ csrf_input() }}
         <input type="hidden" name="seats" value="{{ seats }}">
         <div class="book-form">
+          {% if testing %}<p class="notice warn" role="note"><strong>Test booking.</strong> No payment is taken: the seat is confirmed at once and recorded like a paid booking. This only happens on the test site, before card payments are switched on.</p>{% endif %}
           {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
 
           <fieldset class="field">
@@ -89,8 +90,12 @@
           </fieldset>
           {% endfor %}
 
+          {% if testing %}
+          <button class="pill red" type="submit" style="align-self:flex-start">Book (test, no payment) <span class="arrow" aria-hidden="true">→</span></button>
+          {% else %}
           <p class="small muted">Your seat{{ 's are' if seats > 1 else ' is' }} held for 15 minutes while you pay on Stripe's secure page. Have a discount code? Enter it there.</p>
           <button class="pill red" type="submit" style="align-self:flex-start">Continue to payment <span class="arrow" aria-hidden="true">→</span></button>
+          {% endif %}
         </div>
       </form>
     </div>

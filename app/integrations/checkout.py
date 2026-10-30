@@ -22,6 +22,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+from flask import current_app
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
@@ -64,6 +65,18 @@ def normalise_phone(raw: str | None) -> str | None:
     return f"+{digits}" if 8 <= len(digits) <= 15 and digits[0] != "0" else ""
 
 
+def test_checkout() -> bool:
+    """Test bookings without payment: only outside production, and only while no
+    Stripe key is set. Book confirms the seats at once (no money moves), so the
+    whole path (seats, the app's records, GHL contact and opportunity) can be
+    tried before Stripe is connected. Adding STRIPE_SECRET_KEY switches it off."""
+    return current_app.config["APP_ENV"] != "production" and not stripe_api.secret_key()
+
+
+def online_booking() -> bool:
+    return test_checkout() or stripe_api.check_key_for_environment() is None
+
+
 def bookable_session(public_id: str) -> dict | None:
     """The class with what a customer may see, and whether it's on sale."""
     s = db.fetch_one("""
@@ -97,7 +110,8 @@ def _is_uuid(v: str) -> bool:
 def start(*, session_public_id: str, product_id: int, buyer: Person, attendees: list[Person],
           base_url: str, client_ip: str | None = None, user_agent: str | None = None) -> str:
     """Hold the seats and open Stripe Checkout. Returns the Stripe page URL."""
-    if stripe_api.check_key_for_environment():
+    testing = test_checkout()
+    if not testing and stripe_api.check_key_for_environment():
         raise BookingError("Online booking isn't open yet. Call us to book this class.")
     if not attendees or len(attendees) > MAX_SEATS_PER_ORDER:
         raise BookingError(f"Book between 1 and {MAX_SEATS_PER_ORDER} seats at a time.")
@@ -115,7 +129,7 @@ def start(*, session_public_id: str, product_id: int, buyer: Person, attendees: 
     if quantity > s["seats_left"]:
         raise BookingError(f"Only {s['seats_left']} seat{'s' if s['seats_left'] != 1 else ''} left in this class."
                            if s["seats_left"] > 0 else "This class just filled up.")
-    livemode = stripe_api.is_live_key()
+    livemode = False if testing else stripe_api.is_live_key()
 
     try:
         with db.transaction() as conn:
@@ -146,6 +160,14 @@ def start(*, session_public_id: str, product_id: int, buyer: Person, attendees: 
         if "is full" in str(exc.orig) or "not on sale" in str(exc.orig) or "not open" in str(exc.orig):
             raise BookingError("Someone just took the last seats in this class. Pick another date.") from exc
         raise
+
+    if testing:
+        # Confirmed now, exactly as a Stripe payment would (seats, records, GHL), with no payment row.
+        amounts = {"subtotal": subtotal, "discount": 0, "tax": 0, "total": subtotal}
+        with db.transaction() as conn:
+            found = _lock_order(conn, order["id"], hold["id"], None)
+            _confirm(conn, found, {"id": None, "customer": None, "payment_intent": None}, amounts)
+        return f"{base_url}/book/done?order={order['public_id']}"
 
     from ..filters import class_date
     expires_at = int((datetime.now(timezone.utc) + timedelta(minutes=stripe_minutes)).timestamp())
@@ -252,6 +274,9 @@ def order_summary(order_public_id: str) -> dict | None:
         SELECT o.id, o.public_id, o.status, o.buyer_first_name, o.buyer_email, o.total_cents, o.discount_cents,
                (SELECT count(*) FROM registrations r WHERE r.order_id = o.id
                    AND r.status IN ('confirmed', 'completed', 'no_show', 'awaiting_payment')) AS seats_confirmed,
+               (NOT o.livemode AND o.status = 'paid' AND o.total_cents > 0
+                AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.order_id = o.id)
+                AND NOT EXISTS (SELECT 1 FROM checkout_sessions c WHERE c.order_id = o.id)) AS test_booking,
                s.starts_at, s.ends_at, s.time_zone, s.public_id AS session_public_id, cf.name AS course_name,
                si.name AS site_name, si.address_line1, si.city AS site_city, si.state_code AS site_state,
                si.postal_code
@@ -293,15 +318,20 @@ def _find(conn: Connection, cs_id: str) -> dict | None:
                                 WHERE stripe_checkout_session_id = :cs"""), {"cs": cs_id}).mappings().first()
     if ids is None:
         return None
+    return _lock_order(conn, ids["order_id"], ids["seat_hold_id"], ids["id"])
+
+
+def _lock_order(conn: Connection, order_id: int, hold_id: int, checkout_id: int | None) -> dict:
     order = conn.execute(text("""
         SELECT status AS order_status, livemode, public_id AS order_public_id, buyer_first_name, buyer_last_name,
                buyer_email, buyer_phone_e164
           FROM orders WHERE id = :o FOR NO KEY UPDATE
-    """), {"o": ids["order_id"]}).mappings().one()
+    """), {"o": order_id}).mappings().one()
     hold = conn.execute(text("SELECT session_id FROM seat_holds WHERE id = :h FOR NO KEY UPDATE"),
-                        {"h": ids["seat_hold_id"]}).mappings().one()
-    conn.execute(text("SELECT 1 FROM checkout_sessions WHERE id = :c FOR NO KEY UPDATE"), {"c": ids["id"]})
-    return {"checkout_id": ids["id"], "order_id": ids["order_id"], "seat_hold_id": ids["seat_hold_id"],
+                        {"h": hold_id}).mappings().one()
+    if checkout_id is not None:
+        conn.execute(text("SELECT 1 FROM checkout_sessions WHERE id = :c FOR NO KEY UPDATE"), {"c": checkout_id})
+    return {"checkout_id": checkout_id, "order_id": order_id, "seat_hold_id": hold_id,
             **order, "session_id": hold["session_id"]}
 
 
@@ -382,8 +412,8 @@ def _paid(cs: dict) -> str:
 
 
 def _payment(conn: Connection, found: dict, cs: dict, amounts: dict) -> int | None:
-    if amounts["total"] <= 0:
-        return None
+    if amounts["total"] <= 0 or not cs.get("payment_intent"):
+        return None          # nothing charged (a 100% code, or a test booking)
     return conn.execute(text("""
         INSERT INTO payments (order_id, method, status, amount_cents, stripe_payment_intent_id, received_at, livemode)
         VALUES (:o, 'card', 'succeeded', :a, :pi, now(), :live)
@@ -433,8 +463,9 @@ def _confirm(conn: Connection, found: dict, cs: dict, amounts: dict) -> None:
     conn.execute(text("UPDATE people SET first_order_id = COALESCE(first_order_id, :o) WHERE id = :p"),
                  {"o": found["order_id"], "p": buyer_id})
     _payment(conn, found, cs, amounts)
-    conn.execute(text("""UPDATE checkout_sessions SET status = 'complete', completed_at = now()
-                          WHERE id = :c"""), {"c": found["checkout_id"]})
+    if found["checkout_id"] is not None:
+        conn.execute(text("""UPDATE checkout_sessions SET status = 'complete', completed_at = now()
+                              WHERE id = :c"""), {"c": found["checkout_id"]})
 
 
 def _paid_without_seat(conn: Connection, found: dict, cs: dict, amounts: dict, reason: str) -> None:

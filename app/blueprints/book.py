@@ -47,7 +47,7 @@ def form(public_id: str):
         buyer["first_name"], buyer["last_name"] = user.display_name.split(" ", 1)
     return render_template("public/book.html", s=s, seats=seats, form={}, buyer=buyer, error=None,
                            product_id=request.args.get("product", type=int),
-                           online=checkout.stripe_api.check_key_for_environment() is None)
+                           online=checkout.online_booking(), testing=checkout.test_checkout())
 
 
 @bp.post("/<public_id>")
@@ -91,7 +91,8 @@ def submit(public_id: str):
             error = str(exc)
             s = checkout.bookable_session(public_id)
     return render_template("public/book.html", s=s, seats=seats, form=f, buyer=buyer, error=error,
-                           product_id=product_id, online=checkout.stripe_api.check_key_for_environment() is None), 400
+                           product_id=product_id, online=checkout.online_booking(),
+                           testing=checkout.test_checkout()), 400
 
 
 @bp.get("/done")

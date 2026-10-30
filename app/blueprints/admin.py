@@ -428,7 +428,8 @@ def _integration_details(key: str) -> dict:
         return {"every": worker.sync_minutes()}
     if key == "stripe":
         if not stripe_api.secret_key():
-            return {}
+            from ..integrations import checkout
+            return {"mode": "Test bookings, no payment"} if checkout.test_checkout() else {}
         problem = stripe_api.check_key_for_environment()
         return {"mode": "Live" if stripe_api.is_live_key() else "Test", "problem": problem,
                 "webhook_url": url_for("webhooks.stripe", _external=True)}
