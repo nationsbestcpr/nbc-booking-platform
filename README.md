@@ -234,11 +234,17 @@ secrets (Publishing → Adjust settings → Secrets), then republish.
    `AIRTABLE_TOKEN`.
 2. Open the base; its address starts `airtable.com/app…/`. That `app…` part
    goes in `AIRTABLE_BASE_ID`.
-3. Integrations → **Check Airtable fields** lists which field the sync uses
-   for each item. A required one that isn't found is named there. The names
-   the sync looks for are in `FIELDS` in `app/integrations/airtable.py`.
-4. **Sync now**. New cities arrive "Still on Enrollware": nothing sells until
-   an admin presses **Start booking here** for that city on Locations.
+3. Republish. The first sync runs as the app starts (then every few
+   minutes). Integrations → **Check Airtable fields** shows which field the
+   sync uses for each item; the names it looks for are in `FIELDS` in
+   `app/integrations/airtable.py` (matched to the base as of Oct 2026:
+   Class Schedule's Date, Start Time, Abbreviation → location, Course Type →
+   course; Master Locations' Name, Address, Metro Area, Time Zone, Max
+   Student Count; Course Master's Converted Course Name, Course Family,
+   Delivery Type, Price, Companion Price, Max Seats, Duration in Minutes).
+4. New cities arrive "Still on Enrollware": nothing sells until an admin
+   presses **Start booking here** for that city on Locations. Virtual
+   (online) classes and locations are not synced.
 5. Optional "Sync now" button in Airtable: on Class Schedule add a Button
    field, action Open URL, formula
    `"https://<your app address>/admin/sync?record=" & RECORD_ID()`.
@@ -270,9 +276,10 @@ Test cards: 4242 4242 4242 4242, any future date, any CVC.
    `GHL_API_TOKEN`.
 2. The sub-account id (Settings → Business Profile, or the `location/…` part
    of its address) → `GHL_LOCATION_ID`.
-3. Integrations → **Load pipeline stages**: finds the "Community Class"
-   pipeline (or `GHL_PIPELINE_NAME`) and its Pending, Complete, No Show,
-   Cancelled and Waitlisted stages.
+3. Republish. On start the app finds the "Community Class" pipeline (or
+   `GHL_PIPELINE_NAME`) and its Pending, Complete, No Show, Cancelled and
+   Waitlisted stages by name; nothing to press. (If the pipeline isn't
+   there, it's listed under Open problems.)
 4. Optional custom fields: in Business settings, "GHL custom field ids" takes the ids of the GHL custom fields to fill, as
    `{"session_id": "…", "site": "…", "class_date": "…", "class_time": "…",
    "product": "…", "reg_type": "…", "city": "…", "registration_id": "…"}`.

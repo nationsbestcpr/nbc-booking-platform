@@ -11,11 +11,11 @@
     <p class="muted small">{{ c.what }}</p>
     <dl class="kv">
       <dt>Secrets</dt><dd><span class="secret-list">{% for s in c.secrets %}<span class="secret {{ 'missing' if s in c.missing else 'set' }}" title="{{ 'Missing' if s in c.missing else 'Set' }}">{{ s }}</span>{% endfor %}</span></dd>
-      {% if c.key == 'airtable' %}<dt>Sync</dt><dd>Every {{ c.every }} minutes, plus Sync now</dd>{% endif %}
+      {% if c.key == 'airtable' %}<dt>Sync</dt><dd>When the app starts, then every {{ c.every }} minutes</dd>{% endif %}
       {% if c.mode %}<dt>Mode</dt><dd><span class="status {{ 'wait' if c.mode == 'Test' else 'ok' }}">{{ c.mode }}</span></dd>{% endif %}
       {% if c.problem %}<dt>Problem</dt><dd><span class="status bad">{{ c.problem }}</span></dd>{% endif %}
       {% if c.webhook_url %}<dt>Webhook URL</dt><dd><code class="small">{{ c.webhook_url }}</code></dd>{% endif %}
-      {% if c.key == 'ghl' %}<dt>Pipeline</dt><dd>{{ c.pipeline }}{% if c.stages %}<br><span class="small muted">{% for st in c.stages %}{{ st.internal_state.replace('_', ' ')|capitalize }} → {{ st.stage_name }}{{ ' · ' if not loop.last }}{% endfor %}</span>{% else %}<br><span class="small muted">Stages not loaded yet</span>{% endif %}</dd>{% endif %}
+      {% if c.key == 'ghl' %}<dt>Pipeline</dt><dd>{{ c.pipeline }}{% if c.stages %}<br><span class="small muted">{% for st in c.stages %}{{ st.internal_state.replace('_', ' ')|capitalize }} → {{ st.stage_name }}{{ ' · ' if not loop.last }}{% endfor %}</span>{% else %}<br><span class="small muted">Stages load by themselves when the app starts</span>{% endif %}</dd>{% endif %}
       {% if c.runs %}<dt>Last run</dt><dd>{% if c.last_run %}<span class="status {{ {'succeeded': 'ok', 'partial': 'wait', 'failed': 'bad', 'running': 'wait'}[c.last_run.status] }}">{{ {'succeeded': 'Done', 'partial': 'Done with problems', 'failed': 'Failed', 'running': 'Running'}[c.last_run.status] }}</span> · <span class="num">{{ c.last_run.started_at|office_time }}</span>{% if c.last_run.error %}<br><span class="small muted">{{ c.last_run.error }}</span>{% endif %}{% else %}Never{% endif %}</dd>{% endif %}
       {% if c.webhook %}<dt>Last message in</dt><dd class="num">{{ c.last_webhook|office_time if c.last_webhook else 'None yet' }}</dd>{% endif %}
       {% if c.outbox %}<dt>Sent</dt><dd class="num">{{ c.jobs_done }}{% if c.unsynced %} · <span class="status bad">{{ c.unsynced }} not synced</span>{% endif %}</dd>{% endif %}

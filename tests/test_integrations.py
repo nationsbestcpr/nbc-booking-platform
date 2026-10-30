@@ -51,27 +51,38 @@ class FakePlatforms:
         self.market = f"TIDEWATER{tag.upper()}"[:12]
         self.day = (date.today() + timedelta(days=12)).isoformat()
         self.course_fa, self.course_bls, self.loc = rec_id(), rec_id(), rec_id()
+        # Field names and shapes as in the real NBC Master Base (Oct 2026).
         self.schema = {
-            "Course Master": ["Course Name", "Course Family", "Delivery", "Price", "Companion Course",
-                              "Companion Price", "Max Seats"],
-            "Master Locations": ["Location Name", "Address", "Metro", "Time Zone", "Max Student Count",
-                                 "Access Code", "Parking Notes", "Rental Fee"],
-            "Class Schedule": ["Status", "Class Date", "Start Time", "End Time", "Location", "Course",
-                               "Instructor Assigned"],
+            "Course Master": ["Converted Course Name", "Course Family", "Delivery Type", "Price", "Companion Price",
+                              "Max Seats", "Duration in Minutes", "Companion Duration (min)", "Status",
+                              "Concurrent Group Key"],
+            "Master Locations": ["Abbreviation", "Name", "Address", "Metro Area", "Time Zone", "Max Student Count",
+                                 "Access Code", "Parking", "Status", "Per Class Rate"],
+            "Class Schedule": ["Calendar", "Status", "Date", "Start Time", "Abbreviation", "Course Type", "Course NAME",
+                               "Instructor Assigned", "ASSIGN INSTRUCTOR (Name)",
+                               "Duration in Minutes (from Duration (min))", "Start Date/Time"],
         }
+        self.virtual_loc = rec_id()
         self.tables = {
             "Course Master": [
-                {"id": self.course_fa, "fields": {"Course Name": "Adult & Pediatric First Aid/CPR/AED", "Course Family":
-                 "FA/CPR/AED", "Delivery": "Blended", "Price": 108, "Companion Course": "Adult First Aid/CPR/AED",
-                 "Companion Price": 88, "Max Seats": 12}},
-                {"id": self.course_bls, "fields": {"Course Name": "Basic Life Support", "Course Family": "BLS",
-                 "Delivery": "Blended", "Price": "$88.00", "Max Seats": 9}},
+                {"id": self.course_fa, "fields": {"Converted Course Name": "ARC Blended r.25", "Course Family":
+                 "FA_CPR_AED", "Delivery Type": "Blended", "Price": 108, "Companion Price": 88, "Max Seats": 12,
+                 "Duration in Minutes": 240, "Companion Duration (min)": 210, "Status": "Active",
+                 "Concurrent Group Key": "FA_CPR_AED_BL"}},
+                {"id": self.course_bls, "fields": {"Converted Course Name": "ARC BLS r.25", "Course Family": "BLS",
+                 "Delivery Type": "Blended", "Price": 88, "Max Seats": 9, "Duration in Minutes": 180,
+                 "Status": "Active"}},
+                {"id": rec_id(), "fields": {"Converted Course Name": "AHA BLS", "Status": "Inactive"}},
             ],
             "Master Locations": [
-                {"id": self.loc, "fields": {"Location Name": self.site_name,
-                 "Address": "100 Main St, Suite 2, Norfolk, VA 23510", "Metro": self.metro, "Time Zone": "Eastern",
-                 "Max Student Count": 14, "Access Code": "4321#", "Parking Notes": "Lot behind the hall",
-                 "Rental Fee": 50}},
+                {"id": self.loc, "fields": {"Abbreviation": f"HH{tag}", "Name": f"Virginia - {self.metro} - {self.site_name}",
+                 "Address": "100 Main St, Suite 2, Norfolk, VA 23510", "Metro Area": f"Virginia - {self.metro}",
+                 "Time Zone": "Eastern", "Max Student Count": "14", "Access Code": "4321#",
+                 "Parking": "Lot behind the hall", "Status": ["Currently Scheduling"], "Per Class Rate": 50}},
+                {"id": self.virtual_loc, "fields": {"Abbreviation": "Zoom", "Name": "VIRTUAL - Zoom",
+                 "Metro Area": "VIRTUAL", "Status": ["VIRTUAL"]}},
+                {"id": rec_id(), "fields": {"Abbreviation": "Old", "Name": "Somewhere unused",
+                 "Metro Area": "Texas - Houston", "Status": ["Inactive"]}},
             ],
             "Class Schedule": [],
         }
@@ -84,14 +95,18 @@ class FakePlatforms:
         self.ghl_fail_next = 0
         self.stripe_refuse_refunds = False
 
-    def add_class(self, *, status=("Enrollware",), start="9:00 AM", end="1:00 PM", course=None, day=None) -> str:
+    def add_class(self, *, status=("Enrollware",), start="9:00 AM", minutes=240, course=None, day=None,
+                  location=None) -> str:
         rid = rec_id()
-        fields = {"Status": list(status), "Class Date": day or self.day, "Location": [self.loc],
-                  "Course": [course or self.course_fa], "Instructor Assigned": "Pat Instructor"}
+        fields = {"Calendar": "x", "Status": list(status), "Date": day or self.day, "Abbreviation": [location or self.loc],
+                  "Course Type": [course or self.course_fa], "Course NAME": "typed name", "Instructor Assigned": True,
+                  "ASSIGN INSTRUCTOR (Name)": "Pat Instructor",
+                  # the base's formula reads date + time as UTC; the sync must not trust it
+                  "Start Date/Time": f"{day or self.day}T09:00:00.000Z"}
         if start:
             fields["Start Time"] = start
-        if end:
-            fields["End Time"] = end
+        if minutes:
+            fields["Duration in Minutes (from Duration (min))"] = minutes
         self.tables["Class Schedule"].append({"id": rid, "fields": fields})
         return rid
 
@@ -249,7 +264,8 @@ def completed_event(cs_id: str, subtotal: int, discount: int = 0, *, livemode: b
 
 def test_sync_creates_city_site_products_and_classes(fake, run_sync, q):
     fa = fake.add_class()
-    bls = fake.add_class(course=fake.course_bls, start="2:00 PM", end="5:00 PM")
+    bls = fake.add_class(course=fake.course_bls, start="2:00 PM", minutes=None)
+    online = fake.add_class(location=fake.virtual_loc, start="6pm")
     planning = fake.add_class(status=("Scheduled",), start="10:00 AM")
     broken = fake.add_class(start=None)
 
@@ -275,22 +291,24 @@ def test_sync_creates_city_site_products_and_classes(fake, run_sync, q):
          WHERE sp.session_id = :s""", s=s["id"])}
     assert prices == {"A&P": 10800, "Adult": 8800}
     assert session_for(q, bls)["capacity"] == 9
-    assert session_for(q, planning) is None and session_for(q, broken) is None
+    assert session_for(q, planning) is None and session_for(q, broken) is None and session_for(q, online) is None
+    bls_times = q("SELECT ends_at - starts_at AS d FROM sessions WHERE id = :i", i=session_for(q, bls)["id"])[0]
+    assert bls_times["d"] == timedelta(minutes=180)                 # the course's own length
+    assert not q("SELECT 1 FROM sites WHERE name = 'Somewhere unused'")  # only locations classes use
     issue = q("SELECT * FROM integration_issues WHERE external_ref = :r AND resolved_at IS NULL", r=broken)[0]
     assert issue["code"] == "CLASS_NO_START" and "start time" in issue["message"]
     # Rental fees are never requested from Airtable.
-    assert all("Rental Fee" not in str(c[2]["params"]) for c in fake.calls)
+    assert all("Per Class Rate" not in str(c[2]["params"]) for c in fake.calls)
 
 
 def test_sync_follows_changes_in_airtable(fake, run_sync, q):
     fa = fake.add_class()
-    other = fake.add_class(start="2:00 PM", end="6:00 PM")
+    other = fake.add_class(start="2:00 PM")
     run_sync()
     assert run_sync()["classes_unchanged"] == 2
 
     fake.record(fa)["fields"]["Start Time"] = "10:00 AM"
-    fake.record(fa)["fields"]["End Time"] = "2:00 PM"
-    fake.record(other)["fields"]["Status"] = ["Cancelled"]
+    fake.record(other)["fields"]["Status"] = ["Approved", "Enrollware", "CANCELLED - Weather"]
     stats = run_sync()
     assert stats["classes_updated"] == 2
     moved = session_for(q, fa)
@@ -298,10 +316,10 @@ def test_sync_follows_changes_in_airtable(fake, run_sync, q):
     cancelled = session_for(q, other)
     assert cancelled["status"] == "cancelled" and not cancelled["is_published"]
 
-    fake.record(fa)["fields"]["Status"] = ["Confirmed"]          # Enrollware taken off: off sale
+    fake.record(fa)["fields"]["Status"] = ["Approved", "Send POC Cancellation"]   # Enrollware off: off sale, not cancelled
     run_sync()
-    assert not session_for(q, fa)["is_published"]
-    fake.record(fa)["fields"]["Status"] = ["Confirmed", "Enrollware"]
+    assert not session_for(q, fa)["is_published"] and session_for(q, fa)["status"] == "scheduled"
+    fake.record(fa)["fields"]["Status"] = ["Approved", "Enrollware"]
     run_sync()
     assert session_for(q, fa)["is_published"]
 
@@ -320,7 +338,7 @@ def test_two_rows_at_one_time_share_one_class(fake, run_sync, q):
 def test_a_cancelled_companion_row_only_stops_its_course(fake, run_sync, q):
     a = fake.add_class()
     b = fake.add_class()
-    fake.record(b)["fields"]["Course"] = [fake.course_fa]
+    fake.record(b)["fields"]["Course Type"] = [fake.course_fa]
     run_sync()
     sid = session_for(q, a)["id"]
     fake.record(b)["fields"]["Status"] = ["Cancelled"]
@@ -338,13 +356,11 @@ def test_rows_of_one_class_that_disagree_are_flagged_not_flipped(fake, run_sync,
     run_sync()
     before = session_for(q, a)["starts_at"]
     fake.record(b)["fields"]["Start Time"] = "10:00 AM"
-    fake.record(b)["fields"]["End Time"] = "2:00 PM"
     stats = run_sync()
     assert stats["problems"] == 2 and session_for(q, a)["starts_at"] == before
     assert q("""SELECT count(*) AS n FROM integration_issues WHERE code = 'CLASS_ROWS_DISAGREE'
                  AND external_ref IN (:a, :b) AND resolved_at IS NULL""", a=a, b=b)[0]["n"] == 2
     fake.record(a)["fields"]["Start Time"] = "10:00 AM"
-    fake.record(a)["fields"]["End Time"] = "2:00 PM"
     run_sync()
     assert session_for(q, a)["starts_at"] != before
 
@@ -367,6 +383,14 @@ def test_value_parsers():
     assert airtable_sync.parse_clock("1 PM").strftime("%H:%M") == "13:00"
     assert airtable_sync.parse_clock("13:15").strftime("%H:%M") == "13:15"
     assert airtable_sync.parse_clock(32400).strftime("%H:%M") == "09:00"
+    for raw, want in (("9am", "09:00"), ("4:30p", "16:30"), ("1:00:00 PM", "13:00"), ("15:00:00", "15:00"),
+                      ("8a-4p", "08:00"), ("12:30", "12:30"), ("12pm", "12:00"), ("12:15 AM", "00:15")):
+        assert airtable_sync.parse_clock(raw).strftime("%H:%M") == want, raw
+    for raw in ("NOT Available", "4th of July", "10", "Weeknights", "13pm"):
+        assert airtable_sync.parse_clock(raw) is None, raw
+    assert airtable_sync.parse_metro("Virginia - Richmond") == ("Richmond", "VA")
+    assert airtable_sync.parse_metro("Texas - DFW") == ("DFW", "TX")
+    assert airtable_sync.parse_metro("Richmond, VA") == ("Richmond", "VA")
     assert airtable_sync.time_zone("Central", None) == "America/Chicago"
     assert airtable_sync.time_zone("America/Denver", None) == "America/Denver"
     assert airtable_sync.time_zone(None, "TX") == "America/Chicago"
@@ -607,7 +631,7 @@ def test_integrations_page_shows_status_and_actions(fake, run_sync, client, sign
                   "Not synced yet"):
         assert words in page
     fields = text_of(client.get("/admin/integrations/airtable/fields"))
-    assert "“Class Date”" in fields and "Ready" in fields
+    assert "“Abbreviation”" in fields and "“Course Type”" in fields and "Ready" in fields
 
     token = csrf_from(client, "/admin/integrations")
     res = client.post("/admin/integrations/ghl/stages", data={"csrf_token": token})
@@ -621,7 +645,6 @@ def test_airtable_button_syncs_one_class(fake, run_sync, client, sign_in, q):
     rid = fake.add_class()
     run_sync()
     fake.record(rid)["fields"]["Start Time"] = "11:00 AM"
-    fake.record(rid)["fields"]["End Time"] = "3:00 PM"
     client.get("/sign-out")
     assert client.get(f"/admin/sync?record={rid}").status_code == 302      # sign-in first
     sign_in("admin@example.test")
@@ -670,3 +693,14 @@ def test_hold_expiry_skips_an_order_the_webhook_is_confirming(fake, on_sale, cli
             assert checkout._find(webhook, cs)["order_status"] == "open"
             assert checkout.expire_holds() == 0         # skipped, not deadlocked
         assert checkout.expire_holds() == 1             # next pass, once the webhook is done
+
+
+def test_worker_start_does_the_setup_by_itself(fake, app, q):
+    from app.integrations import worker
+    fake.add_class()
+    with app.app_context(), db.transaction() as conn:
+        conn.execute(text("DELETE FROM ghl_stage_map"))
+    with app.app_context():
+        done = worker.on_start()
+    assert done["ghl_stages"] == "loaded" and done["airtable"] in ("succeeded", "partial")
+    assert {r["internal_state"] for r in q("SELECT internal_state FROM ghl_stage_map")} >= {"booked", "cancelled"}

@@ -5,6 +5,9 @@ Every few seconds it:
   * releases checkout holds that ran out (and expires their Stripe pages);
   * delivers due outbox jobs (GHL contacts/opportunities, Stripe expiry and refunds);
   * runs the Airtable sync when the last one is older than AIRTABLE_SYNC_MINUTES (default 5).
+When it starts (every publish), it also loads the GHL pipeline's stage ids and
+runs a first Airtable sync straight away, so nothing has to be pressed on the
+Integrations page after publishing.
 
 Only one worker works at a time, whatever the number of machines: it holds a
 Postgres advisory lock for as long as it runs. A second one waits.
@@ -70,6 +73,31 @@ def tick() -> dict:
     return done
 
 
+def on_start() -> dict:
+    """First things after a publish: GHL stage ids, then a full Airtable sync."""
+    from . import airtable, airtable_sync, ghl, runs
+    from .http import IntegrationError
+    done: dict = {}
+    if ghl.configured():
+        try:
+            result = ghl.load_stages()
+            done["ghl_stages"] = "loaded" + (f", none for {', '.join(result['missing'])}" if result["missing"] else "")
+            with db.transaction() as conn:
+                runs.resolve(conn, source="ghl", external_ref="pipeline")
+        except IntegrationError as exc:
+            done["ghl_stages"] = f"error: {exc}"
+            with db.transaction() as conn:
+                runs.issue(conn, source="ghl", code="GHL_PIPELINE", severity="error", external_ref="pipeline",
+                           message=f"Couldn't read the GHL pipeline: {exc}")
+    if airtable.configured():
+        try:
+            stats = airtable_sync.run("schedule")
+            done["airtable"] = stats.get("status")
+        except Exception as exc:  # recorded on the run row; the loop tries again later
+            done["airtable"] = f"error: {exc}"
+    return done
+
+
 def run_forever(poll_seconds: int = 15) -> None:
     lock_conn = None
     _log(f"starting (Airtable every {sync_minutes()} min)")
@@ -86,6 +114,9 @@ def run_forever(poll_seconds: int = 15) -> None:
                     time.sleep(60)
                     continue
                 _log("working")
+                started = on_start()
+                if started:
+                    _log("on start: " + ", ".join(f"{k}: {v}" for k, v in started.items()))
             else:
                 lock_conn.execute(text("SELECT 1"))
                 lock_conn.commit()

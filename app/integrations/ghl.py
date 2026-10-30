@@ -137,7 +137,7 @@ def opportunity_name(reg: dict) -> str:
     day = local_dt(reg["starts_at"], reg["time_zone"]).strftime("%Y-%m-%d")
     course = (reg["ghl_course_code"] or reg["short_name"] or "COURSE").upper()
     delivery = reg["delivery_mode"].upper()
-    course_token = course if course.endswith(delivery) else f"{course}-{delivery}"
+    course_token = course if "-" in course else f"{course}-{delivery}"
     return f"{day} | {course_token} | {reg['market_code']}-{reg['site_city']}"
 
 

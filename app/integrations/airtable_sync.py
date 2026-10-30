@@ -172,11 +172,13 @@ def parse_address(full: str | None) -> dict:
     return out
 
 
-_TIME = re.compile(r"^\s*(\d{1,2})(?::(\d{2}))?\s*([ap])\.?\s*m?\.?\s*$|^\s*(\d{1,2}):(\d{2})\s*$", re.I)
+_TIME = re.compile(r"(\d{1,2})(?::(\d{2}))?(?::\d{2})?\s*([ap])?\.?\s*m?\.?", re.I)
 
 
 def parse_clock(v) -> time | None:
-    """'9:00 AM', '9am', '13:30', a datetime, or seconds after midnight."""
+    """A start time as the base writes it: '9:00 AM', '9am', '4:30p', '1:00:00 PM', '15:00:00',
+    '8a-4p' (the start is used), or seconds after midnight. None for anything else
+    ('NOT Available', '4th of July', a bare '10')."""
     if v is None:
         return None
     if isinstance(v, list):
@@ -187,17 +189,16 @@ def parse_clock(v) -> time | None:
         secs = int(v)
         return time(secs // 3600 % 24, secs // 60 % 60)
     s = str(v).strip()
-    if "T" in s:
-        return None    # a full date-time: handled by the caller
-    m = _TIME.match(s)
-    if not m:
+    if "T" in s or not s or not s[0].isdigit():
         return None
-    if m.group(4):
-        hour, minute = int(m.group(4)), int(m.group(5))
-    else:
-        hour, minute = int(m.group(1)) % 12, int(m.group(2) or 0)
-        if m.group(3).lower() == "p":
-            hour += 12
+    m = _TIME.match(s)
+    if not m or (m.group(2) is None and m.group(3) is None):
+        return None
+    hour, minute = int(m.group(1)), int(m.group(2) or 0)
+    if m.group(3):
+        if not 1 <= hour <= 12:
+            return None
+        hour = hour % 12 + (12 if m.group(3).lower() == "p" else 0)
     return time(hour, minute) if hour < 24 and minute < 60 else None
 
 
@@ -244,9 +245,11 @@ def run(trigger: str = "schedule", *, user_id: int | None = None, record_id: str
                                                  "See the problems list on the Integrations page.")
             stats["status"] = "failed"
             return stats
+        schedule = _fetch_schedule(mapping["schedule"], record_id, run_id, stats)
         products = _sync_courses(mapping["courses"], run_id, stats)
-        sites = _sync_locations(mapping["locations"], run_id, stats)
-        seen = _sync_schedule(mapping["schedule"], products, sites, run_id, stats, record_id)
+        sites, virtual = _sync_locations(mapping["locations"], run_id, stats,
+                                         _locations_in_use(schedule, mapping["schedule"]))
+        seen = _sync_schedule(mapping["schedule"], schedule, products, sites, virtual, run_id, stats)
         if record_id is None:
             _mark_removed(seen, run_id, stats)
         status = "partial" if stats["problems"] else "succeeded"
@@ -316,28 +319,54 @@ def _problem(run_id: int, stats: dict, record_id: str, exc: RowProblem, table: s
 
 # --- Course Master -> products ------------------------------------------------------
 
+_FAMILY_ALIASES = {"FA_CPR_AED": "FA_CPR_AED", "BLS": "BLS", "INSTR_TRAIN": "IT", "IT": "IT"}
+
+
 def _family_code(*hints: str | None) -> str | None:
+    for h in hints:
+        if h and h.strip().upper() in _FAMILY_ALIASES:
+            return _FAMILY_ALIASES[h.strip().upper()]
     blob = " ".join(h for h in hints if h).lower()
     if not blob:
         return None
-    if "instructor" in blob or re.search(r"\bit\b", blob):
+    if "instr" in blob or re.search(r"\bit\b", blob):
         return "IT"
     if "bls" in blob or "basic life" in blob:
         return "BLS"
-    if any(w in blob for w in ("cpr", "first aid", "aed", "fa/", "pediatric", "adult")):
+    if any(w in blob for w in ("cpr", "first aid", "aed", "fa/", "pediatric", "adult", "fa_")):
         return "FA_CPR_AED"
     return None
 
 
-def _short_name(name: str, family: str) -> str:
-    low = name.lower()
-    if family == "FA_CPR_AED":
-        return "A&P" if "pediatric" in low or "a&p" in low else "Adult"
-    return {"BLS": "BLS", "IT": "Instructor Training"}.get(family, name[:20])
+_DELIVERY = {"blended": ("blended", "Blended"), "skills": ("blended", "Skills session"),
+             "classroom": ("classroom", "Classroom")}
+
+
+def _delivery(hint: str | None, name: str) -> tuple[str, str]:
+    """(engine delivery mode, label). A Skills session is the in-person part of blended learning."""
+    text_ = (hint or name).lower()
+    for word, result in _DELIVERY.items():
+        if word in text_:
+            return result
+    return ("blended", "Blended") if "online" in text_ else ("classroom", "Classroom")
+
+
+_PRODUCT_NAMES = {
+    # family: (main short, main name, companion short, companion name)
+    "FA_CPR_AED": ("A&P", "Adult & Pediatric First Aid/CPR/AED", "Adult", "Adult First Aid/CPR/AED"),
+    "BLS": ("BLS", "Basic Life Support (BLS)", "Companion", "Basic Life Support (BLS), second price"),
+    "IT": ("IT", "Instructor Training", "Companion", "Instructor Training, second price"),
+}
 
 
 def _sync_courses(m: dict, run_id: int, stats: dict) -> dict[str, list[dict]]:
-    """Returns {course record id: [product rows]} (the main product first)."""
+    """Returns {course record id: [product rows]} (the main product first, then its companion).
+
+    One Course Master row sells as up to two products from the same seats: its
+    Price (A&P) and its Companion Price (Adult). Customers see plain names
+    ("Adult & Pediatric First Aid/CPR/AED – Blended"); the Airtable name is
+    only used to keep each product's code. Max Seats and Duration are the
+    class defaults for that course. Inactive rows are skipped."""
     families = {r["code"]: r for r in db.fetch_all("SELECT id, code FROM course_families")}
     out: dict[str, list[dict]] = {}
     for record in airtable.list_records(m["table"], list(m["fields"].values())):
@@ -346,7 +375,7 @@ def _sync_courses(m: dict, run_id: int, stats: dict) -> dict[str, list[dict]]:
             name = _text(v.get("name"))
             if not name:
                 raise RowProblem("COURSE_NO_NAME", "the course has no name.")
-            if _truthy(v.get("active")) is False:
+            if v.get("status") is False or (_text(v.get("status")) or "").lower() in {"inactive", "archived", "retired"}:
                 continue
             family = _family_code(_text(v.get("family")), _text(v.get("group_key")), name)
             if family not in families:
@@ -356,38 +385,31 @@ def _sync_courses(m: dict, run_id: int, stats: dict) -> dict[str, list[dict]]:
             price = _cents(v.get("price"))
             if price is None or price < 0:
                 raise RowProblem("COURSE_NO_PRICE", f"“{name}” has no price.")
-            delivery_hint = (_text(v.get("delivery")) or name).lower()
-            delivery = "blended" if "blend" in delivery_hint or "online" in delivery_hint else "classroom"
-            short = _text(v.get("short_name")) or _short_name(name, family)
+            delivery, label = _delivery(_text(v.get("delivery")), name)
+            main_short, main_name, comp_short, comp_name = _PRODUCT_NAMES[family]
             code = re.sub(r"[^A-Z0-9]+", "_", name.upper()).strip("_")[:50]
-            ghl_code = _text(v.get("ghl_code")) or re.sub(r"[^A-Z0-9]", "", short.upper())[:12] or family
+            word = label.split()[0].upper()            # BLENDED / SKILLS / CLASSROOM
+            seats = _number(v.get("max_seats"))
+            minutes = _number(v.get("duration"))
+            comp_minutes = _number(v.get("companion_duration"))
+            extra = {"max_seats": int(seats) if seats and seats >= 1 else None,
+                     "duration": int(minutes) if minutes and minutes >= 1 else None}
             with db.transaction() as conn:
                 _register(conn, record, m["table"], v)
                 fam_id = families[family]["id"]
-                seats = _number(v.get("max_seats"))
-                if seats and seats >= 1:
-                    conn.execute(text("""UPDATE course_families SET one_instructor_max = :n
-                                          WHERE id = :f AND one_instructor_max <> :n"""),
-                                 {"n": int(seats), "f": fam_id})
-                minutes = _number(v.get("duration"))
-                if minutes and minutes > 0:
-                    minutes = minutes * 60 if minutes <= 24 else minutes       # hours or minutes
-                if minutes and minutes >= 1:
-                    conn.execute(text("""UPDATE course_families SET default_duration_min = :m
-                                          WHERE id = :f AND default_duration_min IS DISTINCT FROM :m"""),
-                                 {"m": int(minutes), "f": fam_id})
-                rows = [_upsert_product(conn, record["id"], code, name, short, family, fam_id, delivery,
-                                        ghl_code, price)]
+                rows = [{**_upsert_product(conn, record["id"], code, f"{main_name} – {label}", main_short, family,
+                                           fam_id, delivery, f"{re.sub(r'[^A-Z0-9]', '', main_short.upper())}-{word}",
+                                           price), **extra}]
                 companion_price = _cents(v.get("companion_price"))
                 if companion_price is not None and companion_price >= 0:
-                    c_name = _text(v.get("companion_name")) or (
-                        name.replace("Pediatric", "").replace("&", "").replace("  ", " ").strip()
-                        if family == "FA_CPR_AED" else f"{name} (companion)")
-                    c_short = "Adult" if family == "FA_CPR_AED" else "Companion"
-                    rows.append(_upsert_product(conn, None, f"{code}_COMPANION"[:60], c_name, c_short, family,
-                                                fam_id, delivery, re.sub(r"[^A-Z0-9]", "", c_short.upper()),
-                                                companion_price))
+                    rows.append({**_upsert_product(
+                        conn, None, f"{code}_COMPANION"[:60], f"{comp_name} – {label}", comp_short, family, fam_id,
+                        delivery, f"{re.sub(r'[^A-Z0-9]', '', comp_short.upper())}-{word}", companion_price),
+                        **extra, "duration": int(comp_minutes) if comp_minutes and comp_minutes >= 1
+                        else extra["duration"]})
                 runs.resolve(conn, source=SOURCE, external_ref=record["id"])
+            for row in rows:
+                row["source_name"] = name
             out[record["id"]] = rows
             stats["products"] += len(rows)
         except RowProblem as exc:
@@ -430,11 +452,47 @@ def _upsert_product(conn: Connection, record_id: str | None, code: str, name: st
 
 # --- Master Locations -> cities, sites, rooms ---------------------------------------
 
-def _sync_locations(m: dict, run_id: int, stats: dict) -> dict[str, dict]:
-    """Returns {location record id: {"site_id", "metro_id", "time_zone", "slug", "room_max"}}."""
+VIRTUAL = "virtual"
+_STATE_NAMES = {
+    "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR", "california": "CA", "colorado": "CO",
+    "connecticut": "CT", "delaware": "DE", "district of columbia": "DC", "florida": "FL", "georgia": "GA",
+    "hawaii": "HI", "idaho": "ID", "illinois": "IL", "indiana": "IN", "iowa": "IA", "kansas": "KS",
+    "kentucky": "KY", "louisiana": "LA", "maine": "ME", "maryland": "MD", "massachusetts": "MA",
+    "michigan": "MI", "minnesota": "MN", "mississippi": "MS", "missouri": "MO", "montana": "MT",
+    "nebraska": "NE", "nevada": "NV", "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM",
+    "new york": "NY", "north carolina": "NC", "north dakota": "ND", "ohio": "OH", "oklahoma": "OK",
+    "oregon": "OR", "pennsylvania": "PA", "rhode island": "RI", "south carolina": "SC", "south dakota": "SD",
+    "tennessee": "TN", "texas": "TX", "utah": "UT", "vermont": "VT", "virginia": "VA", "washington": "WA",
+    "west virginia": "WV", "wisconsin": "WI", "wyoming": "WY",
+}
+_INACTIVE_SITE = ("inactive", "cut list", "replaced")
+
+
+def parse_metro(raw: str | None) -> tuple[str, str | None] | None:
+    """'Virginia - Richmond' -> ('Richmond', 'VA'); 'Richmond, VA' -> ('Richmond', 'VA'); 'Richmond' -> ('Richmond', None)."""
+    if not raw:
+        return None
+    m = re.fullmatch(r"\s*([A-Za-z .]+?)\s+-\s+(.+?)\s*", raw)
+    if m and m.group(1).lower() in _STATE_NAMES:
+        return m.group(2), _STATE_NAMES[m.group(1).lower()]
+    m = re.fullmatch(r"\s*(.+?),?\s+([A-Za-z]{2})\s*", raw)
+    if m and m.group(2).upper() in _STATES:
+        return m.group(1), m.group(2).upper()
+    return raw.strip(), None
+
+
+def _sync_locations(m: dict, run_id: int, stats: dict, needed: set[str] | None) -> tuple[dict[str, dict], set[str]]:
+    """Sync the locations the classes use (needed=None: all).
+    Returns ({location record id: site}, {ids of virtual locations, not sold here})."""
     out: dict[str, dict] = {}
+    virtual: set[str] = set()
     for record in airtable.list_records(m["table"], list(m["fields"].values())):
+        if needed is not None and record["id"] not in needed:
+            continue
         v = _values(record, m)
+        if (_text(v.get("metro")) or "").strip().lower() == VIRTUAL:
+            virtual.add(record["id"])
+            continue
         try:
             site = _location(record, m, v)
             if site:
@@ -444,13 +502,16 @@ def _sync_locations(m: dict, run_id: int, stats: dict) -> dict[str, dict]:
             _problem(run_id, stats, record["id"], exc, m["table"])
         except DBAPIError as exc:
             _problem(run_id, stats, record["id"], RowProblem("LOCATION_REFUSED", _db_reason(exc)), m["table"])
-    return out
+    return out, virtual
 
 
 def _location(record: dict, m: dict, v: dict) -> dict | None:
-    name = _text(v.get("name"))
-    if not name:
+    raw_name = _text(v.get("name"))
+    if not raw_name:
         raise RowProblem("LOCATION_NO_NAME", "the location has no name.")
+    metro_raw = None if _is_record_ids(v.get("metro")) else _text(v.get("metro"))
+    # 'Virginia - Richmond - Henrico Library (Henrico)' -> 'Henrico Library (Henrico)'
+    name = raw_name[len(metro_raw) + 3:].strip() if metro_raw and raw_name.startswith(metro_raw + " - ") else raw_name
     addr = parse_address(_text(v.get("address")))
     line1 = addr["line1"] or _text(v.get("address"))
     city = _text(v.get("city")) or addr["city"]
@@ -464,12 +525,10 @@ def _location(record: dict, m: dict, v: dict) -> dict | None:
     zone = time_zone(_text(v.get("time_zone")), state)
     if not zone:
         raise RowProblem("LOCATION_TIME_ZONE", f"“{name}”: unknown time zone.")
-    metro_raw = None if _is_record_ids(v.get("metro")) else _text(v.get("metro"))
-    metro_name, metro_state = metro_raw or city, state
-    mm = re.fullmatch(r"(.+?),?\s+([A-Za-z]{2})", metro_name or "")
-    if mm and mm.group(2).upper() in _STATES:
-        metro_name, metro_state = mm.group(1).strip(), mm.group(2).upper()
-    active = _truthy(v.get("active"))
+    metro_name, metro_state = parse_metro(metro_raw) or (city, state)
+    metro_state = metro_state or state
+    statuses = [s.lower() for s in _statuses(v.get("status"))]
+    active = not any(s.strip().startswith(_INACTIVE_SITE) for s in statuses)
     room_max = _number(v.get("max_students"))
 
     with db.transaction() as conn:
@@ -477,9 +536,8 @@ def _location(record: dict, m: dict, v: dict) -> dict | None:
         metro_slug = slugify(f"{metro_name}-{metro_state}")
         metro_id = conn.execute(text("SELECT id FROM metros WHERE slug = :s"), {"s": metro_slug}).scalar()
         if metro_id is None:
-            market = _text(v.get("market_code")) or re.sub(r"[^A-Z]", "", metro_name.upper())[:12] or metro_slug.upper()
-            taken = conn.execute(text("SELECT 1 FROM metros WHERE market_code = :c"), {"c": market}).first()
-            if taken:
+            market = re.sub(r"[^A-Z]", "", metro_name.upper())[:12] or metro_slug.upper()
+            if conn.execute(text("SELECT 1 FROM metros WHERE market_code = :c"), {"c": market}).first():
                 market = f"{market}-{metro_state}"
             metro_id = conn.execute(text("""
                 INSERT INTO metros (slug, name, state_code, market_code, time_zone)
@@ -490,8 +548,8 @@ def _location(record: dict, m: dict, v: dict) -> dict | None:
                             {"r": record["id"]}).mappings().first()
         params = {"metro": metro_id, "name": name, "l1": line1, "l2": _text(v.get("address2")) or addr["line2"],
                   "city": city, "st": state, "zip": postal, "lat": _number(v.get("lat")), "lng": _number(v.get("lng")),
-                  "tz": zone, "park": _text(v.get("parking")), "dir": _text(v.get("directions")),
-                  "active": active is not False, "rid": record["id"]}
+                  "tz": zone, "park": _text(v.get("parking")), "dir": None,
+                  "active": active, "rid": record["id"]}
         if params["lat"] is not None and not -90 <= params["lat"] <= 90:
             params["lat"] = None
         if params["lng"] is not None and not -180 <= params["lng"] <= 180:
@@ -504,7 +562,7 @@ def _location(record: dict, m: dict, v: dict) -> dict | None:
             conn.execute(text("""
                 UPDATE sites SET name = :name, address_line1 = :l1, address_line2 = :l2, city = :city,
                        state_code = :st, postal_code = :zip, latitude = :lat, longitude = :lng, time_zone = :tz,
-                       parking_notes_public = :park, directions_public = :dir, is_active = :active,
+                       parking_notes_public = :park, is_active = :active,
                        source_synced_at = now(), source_deleted_at = NULL
                  WHERE id = :id
             """), {**params, "id": site_id})
@@ -524,17 +582,20 @@ def _location(record: dict, m: dict, v: dict) -> dict | None:
                 RETURNING id
             """), {**params, "slug": slug}).scalar_one()
 
-        private = {k: _text(v.get(k)) for k in ("access_code", "poc_name", "poc_phone", "poc_email", "emergency")}
+        private = {k: _text(v.get(k)) for k in ("access_code", "access_info", "poc_name", "poc_phone", "poc_email",
+                                                 "emergency")}
         if private["poc_email"] and "@" not in private["poc_email"]:
             private["poc_email"] = None
         conn.execute(text("""
-            INSERT INTO site_private_details (site_id, access_code, poc_name, poc_phone, poc_email, emergency_contact)
-            VALUES (:s, :access_code, :poc_name, :poc_phone, :poc_email, :emergency)
-            ON CONFLICT (site_id) DO UPDATE SET access_code = EXCLUDED.access_code, poc_name = EXCLUDED.poc_name,
+            INSERT INTO site_private_details (site_id, access_code, access_instructions, poc_name, poc_phone, poc_email,
+                                              emergency_contact)
+            VALUES (:s, :access_code, :access_info, :poc_name, :poc_phone, :poc_email, :emergency)
+            ON CONFLICT (site_id) DO UPDATE SET access_code = EXCLUDED.access_code,
+                   access_instructions = EXCLUDED.access_instructions, poc_name = EXCLUDED.poc_name,
                    poc_phone = EXCLUDED.poc_phone, poc_email = EXCLUDED.poc_email,
                    emergency_contact = EXCLUDED.emergency_contact, updated_at = now()
         """), {"s": site_id, **private})
-        room_max_int = int(room_max) if room_max and room_max > 0 else None
+        room_max_int = int(room_max) if room_max and room_max >= 1 else None
         runs.resolve(conn, source=SOURCE, external_ref=record["id"])
     return {"site_id": site_id, "metro_id": metro_id, "time_zone": zone, "slug": slug, "name": name,
             "room_max": room_max_int}
@@ -556,36 +617,49 @@ def _room(conn: Connection, site: dict, room_name: str | None, family_max: int) 
 
 # --- Class Schedule -> classes -----------------------------------------------------
 
-def _sync_schedule(m: dict, products: dict, sites: dict, run_id: int, stats: dict,
-                   record_id: str | None) -> set[str]:
-    fields = list(m["fields"].values())
+def _fetch_schedule(m: dict, record_id: str | None, run_id: int, stats: dict) -> list[dict]:
+    """Class Schedule rows from the day before yesterday on (or one row and the other rows of its class)."""
     if record_id:
         rec = airtable.get_record(m["table"], record_id)
-        records = [rec] if rec else []
         if rec is None:
             _unpublish_record(record_id, "The class was deleted in Airtable.", run_id, stats)
-        else:
-            # The other rows of the same class are needed to work out its state.
-            with db.engine().connect() as c:
-                siblings = c.execute(text("""
-                    SELECT o.airtable_record_id FROM session_airtable_records me
-                      JOIN session_airtable_records o ON o.session_id = me.session_id
-                     WHERE me.airtable_record_id = :r AND o.airtable_record_id <> :r
-                """), {"r": record_id}).scalars().all()
-            records += [r for r in (airtable.get_record(m["table"], sid) for sid in siblings) if r]
-    else:
-        when = m["fields"].get("date") or m["fields"].get("start")
-        formula = (f"OR({airtable.formula_field(when)} = BLANK(), "
-                   f"IS_AFTER({airtable.formula_field(when)}, DATEADD(TODAY(), -2, 'days')))") if when else None
-        records = airtable.list_records(m["table"], fields, formula)
+            return []
+        with db.engine().connect() as c:
+            siblings = c.execute(text("""
+                SELECT o.airtable_record_id FROM session_airtable_records me
+                  JOIN session_airtable_records o ON o.session_id = me.session_id
+                 WHERE me.airtable_record_id = :r AND o.airtable_record_id <> :r
+            """), {"r": record_id}).scalars().all()
+        return [rec] + [r for r in (airtable.get_record(m["table"], sid) for sid in siblings) if r]
+    when = m["fields"]["date"]
+    formula = (f"OR({airtable.formula_field(when)} = BLANK(), "
+               f"IS_AFTER({airtable.formula_field(when)}, DATEADD(TODAY(), -2, 'days')))")
+    return list(airtable.list_records(m["table"], list(m["fields"].values()), formula))
 
+
+def _locations_in_use(records: list[dict], m: dict) -> set[str]:
+    """Location record ids of rows that are on sale or already synced (the rest aren't needed)."""
+    with db.engine().connect() as c:
+        mapped = set(c.execute(text("SELECT airtable_record_id FROM session_airtable_records WHERE airtable_record_id = ANY(:ids)"),
+                               {"ids": [r["id"] for r in records]}).scalars())
+    out: set[str] = set()
+    for r in records:
+        v = _values(r, m)
+        on_sale = any(st.lower() == airtable.PUBLISH_STATUS for st in _statuses(v.get("status")))
+        if (on_sale or r["id"] in mapped) and _is_record_ids(v.get("location")):
+            out.update(v["location"])
+    return out
+
+
+def _sync_schedule(m: dict, records: list[dict], products: dict, sites: dict, virtual: set[str], run_id: int,
+                   stats: dict) -> set[str]:
     seen: set[str] = set()
     groups: dict[tuple, list[ClassRow]] = {}
     for record in records:
         seen.add(record["id"])
         stats["classes_seen"] += 1
         try:
-            row = _parse_class(record, _values(record, m), products, sites)
+            row = _parse_class(record, _values(record, m), products, sites, virtual)
         except RowProblem as exc:
             stats["classes_skipped"] += 1
             _problem(run_id, stats, record["id"], exc, m["table"])
@@ -661,11 +735,14 @@ class ClassRow:
         return self.course_rows[0]
 
 
-def _parse_class(record: dict, v: dict, products: dict, sites: dict) -> ClassRow | None:
-    """Read one row. None for a planning row that was never on sale (none of the engine's business)."""
+def _parse_class(record: dict, v: dict, products: dict, sites: dict, virtual: set[str]) -> ClassRow | None:
+    """Read one row. None for a row that's none of the engine's business: a planning row
+    that was never on sale, or an online (virtual) class."""
     statuses = _statuses(v.get("status"))
     published = any(s.lower() == airtable.PUBLISH_STATUS for s in statuses)
-    cancelled = any("cancel" in s.lower() for s in statuses)
+    cancelled = any(s.lower().startswith(airtable.CANCELLED_PREFIX) for s in statuses)
+    if _is_record_ids(v.get("location")) and v["location"][0] in virtual:
+        return None
     with db.engine().connect() as c:
         existing_id = c.execute(text("SELECT session_id FROM session_airtable_records WHERE airtable_record_id = :r"),
                                 {"r": record["id"]}).scalar()
@@ -675,45 +752,30 @@ def _parse_class(record: dict, v: dict, products: dict, sites: dict) -> ClassRow
     site = _link(v.get("location"), sites, {s["name"].lower(): s for s in sites.values()})
     if not site:
         raise RowProblem("CLASS_UNKNOWN_LOCATION", "its Location isn't one of the synced Master Locations.")
-    course_rows = _link(v.get("course"), products, {rows[0]["name"].lower(): rows for rows in products.values()})
+    course_rows = _link(v.get("course"), products, {rows[0]["source_name"].lower(): rows for rows in products.values()})
     if not course_rows:
         raise RowProblem("CLASS_UNKNOWN_COURSE", "its Course isn't one of the synced Course Master rows.")
     main = course_rows[0]
     zone = ZoneInfo(site["time_zone"])
 
-    starts = parse_instant(v.get("start"))
-    day = parse_day(v.get("date")) or (starts.astimezone(zone).date() if starts else None)
+    # The date and start time as typed, in the location's own time zone. (The base's
+    # "Start Date/Time" formula reads them as UTC, so it isn't used.)
+    day = parse_day(v.get("date"))
     clock = parse_clock(v.get("start_time"))
-    if clock is None and parse_instant(v.get("start_time")):
-        starts = parse_instant(v.get("start_time"))
-    if starts is None:
-        if not day or not clock:
-            raise RowProblem("CLASS_NO_START", "it needs a date and a start time.")
-        starts = datetime.combine(day, clock, zone)
-    starts = starts.astimezone(timezone.utc)
-    ends = parse_instant(v.get("end")) or parse_instant(v.get("end_time"))
-    end_clock = parse_clock(v.get("end_time"))
-    if ends is None and end_clock:
-        local_start = starts.astimezone(zone)
-        ends = datetime.combine(local_start.date(), end_clock, zone)
-        if ends <= local_start:
-            ends += timedelta(days=1)
-    if ends is None:
-        dur = _number(v.get("duration"))
-        if dur and dur > 0:
-            seconds = dur if dur > 24 * 60 else dur * 60 if dur > 24 else dur * 3600   # seconds, minutes or hours
-            ends = starts + timedelta(seconds=seconds)
+    if not day or not clock:
+        raise RowProblem("CLASS_NO_START", "it needs a date and a start time like 9:00 AM."
+                         + (f" “{_text(v.get('start_time'))}” isn't one." if _text(v.get("start_time")) else ""))
+    starts = datetime.combine(day, clock, zone).astimezone(timezone.utc)
     with db.engine().connect() as c:
         fam = c.execute(text("SELECT one_instructor_max, default_duration_min FROM course_families WHERE id = :f"),
                         {"f": main["family_id"]}).mappings().one()
-    if ends is None:
-        ends = starts + timedelta(minutes=fam["default_duration_min"] or 240)
-    ends = ends.astimezone(timezone.utc)
-    if ends <= starts:
-        raise RowProblem("CLASS_BAD_TIMES", "its end time is before its start time.")
+    dur = _number(v.get("duration"))
+    minutes = (dur if dur and dur > 24 else dur * 60 if dur and dur > 0 else None) \
+        or main.get("duration") or fam["default_duration_min"] or 240
+    ends = starts + timedelta(minutes=minutes)
 
     seats = _number(v.get("seats"))
-    one_max = int(seats) if seats and seats >= 1 else fam["one_instructor_max"]
+    one_max = int(seats) if seats and seats >= 1 else (main.get("max_seats") or fam["one_instructor_max"])
     price = _cents(v.get("price"))
     companion_price = _cents(v.get("companion_price"))
     offers = [(main, price if price is not None and price >= 0 else main["price"])]
