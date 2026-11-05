@@ -51,7 +51,9 @@ def classes():
     f = {k: request.args.get(k, d) for k, d in (("city", ""), ("course", ""), ("when", "upcoming"), ("status", ""))}
     rows = db.fetch_all("""
         SELECT s.id, s.starts_at, s.ends_at, s.time_zone, s.status, s.is_published, s.delivery_mode,
-               cf.name AS course_name, si.name AS site_name, m.name AS city_name,
+               cf.name AS course_name, si.name AS site_name, m.name AS city_name, s.airtable_status,
+               (SELECT array_agg(sar.airtable_record_id ORDER BY sar.airtable_record_id)
+                  FROM session_airtable_records sar WHERE sar.session_id = s.id) AS airtable_records,
                av.sold_seats, av.held_seats, av.external_seats, av.seat_limit, av.seats_left, av.waitlist_count,
                coalesce((SELECT i.first_name || ' ' || i.last_name FROM assignments a
                            JOIN instructors i ON i.id = a.instructor_id

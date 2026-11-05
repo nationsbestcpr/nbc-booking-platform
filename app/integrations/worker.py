@@ -42,13 +42,13 @@ def airtable_due() -> bool:
     from . import airtable, runs
     if not airtable.configured():
         return False
+    runs.reap_stale("airtable_sync")          # one cut off by a restart no longer blocks the next
     last = runs.last_finished("airtable_sync")
     if last is None:
         return True
-    started = last["started_at"]
-    age = (datetime.now(timezone.utc) - started).total_seconds()
-    if last["status"] == "running" and age < 30 * 60:
-        return False
+    if last["status"] == "running":
+        return False                          # still going (it shows its progress)
+    age = (datetime.now(timezone.utc) - last["started_at"]).total_seconds()
     if last["status"] == "failed":
         return age >= max(sync_minutes(), 5) * 60     # don't hammer a broken setup
     return age >= sync_minutes() * 60

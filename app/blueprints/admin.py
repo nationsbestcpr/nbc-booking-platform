@@ -425,8 +425,19 @@ def _integration_details(key: str) -> dict:
     """What each card shows beyond the shared fields."""
     from ..integrations import ghl, stripe_api, worker
     if key == "airtable":
-        from ..integrations import airtable
-        return {"every": worker.sync_minutes(), "base": airtable.masked_base_id() if airtable.base_id() else None}
+        from ..integrations import airtable, runs
+        counts = db.fetch_one("""
+            SELECT count(*) FILTER (WHERE s.status = 'scheduled' AND s.is_published) AS on_sale,
+                   count(*) FILTER (WHERE s.status = 'scheduled' AND NOT s.is_published) AS off_sale,
+                   count(*) FILTER (WHERE s.status = 'cancelled') AS cancelled,
+                   count(DISTINCT s.metro_id) AS cities
+              FROM sessions s
+             WHERE s.starts_at > now()
+               AND EXISTS (SELECT 1 FROM session_airtable_records r WHERE r.session_id = s.id)
+        """)
+        busy = runs.running("airtable_sync")
+        return {"every": worker.sync_minutes(), "base": airtable.masked_base_id() if airtable.base_id() else None,
+                "classes": counts, "now_running": busy[0] if busy else None}
     if key == "stripe":
         if not stripe_api.secret_key():
             from ..integrations import checkout
@@ -440,9 +451,22 @@ def _integration_details(key: str) -> dict:
     return {}
 
 
+@bp.get("/integrations/progress")
+@auth.permission_required("system.health_view")
+def integrations_progress():
+    """What background jobs are doing right now (polled by the Integrations page)."""
+    from flask import jsonify
+    from ..integrations import runs
+    runs.reap_stale("airtable_sync")
+    return jsonify(running=[{"id": r["id"], "kind": r["kind"], "step": r["step"], "done": r["done"],
+                             "total": r["total"], "seconds": r["seconds"]} for r in runs.running()])
+
+
 @bp.get("/integrations")
 @auth.permission_required("system.health_view")
 def integrations():
+    from ..integrations import runs
+    runs.reap_stale("airtable_sync")            # a sync cut off by a restart stops showing "Running"
     cards = [_integration_status(s) for s in INTEGRATIONS]
     issues = db.fetch_all("""
         SELECT id, source, severity, code, message, occurrences, last_seen_at

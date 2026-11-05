@@ -17,7 +17,15 @@
       {% if c.problem %}<dt>Problem</dt><dd><span class="status bad">{{ c.problem }}</span></dd>{% endif %}
       {% if c.webhook_url %}<dt>Webhook URL</dt><dd><code class="small">{{ c.webhook_url }}</code></dd>{% endif %}
       {% if c.key == 'ghl' %}<dt>Pipeline</dt><dd>{{ c.pipeline }}{% if c.stages %}<br><span class="small muted">{% for st in c.stages %}{{ st.internal_state.replace('_', ' ')|capitalize }} → {{ st.stage_name }}{{ ' · ' if not loop.last }}{% endfor %}</span>{% else %}<br><span class="small muted">Stages load by themselves when the app starts</span>{% endif %}</dd>{% endif %}
-      {% if c.runs %}<dt>Last run</dt><dd>{% if c.last_run %}<span class="status {{ {'succeeded': 'ok', 'partial': 'wait', 'failed': 'bad', 'running': 'wait'}[c.last_run.status] }}">{{ {'succeeded': 'Done', 'partial': 'Done with problems', 'failed': 'Failed', 'running': 'Running'}[c.last_run.status] }}</span> · <span class="num">{{ c.last_run.started_at|office_time }}</span>{% if c.last_run.error %}<br><span class="small muted">{{ c.last_run.error }}</span>{% endif %}{% else %}Never{% endif %}</dd>{% endif %}
+      {% if c.runs and c.now_running %}
+      <dt>Now</dt><dd><div class="run-live" data-run="{{ c.now_running.id }}">
+        <span class="status wait">Running</span> <span class="run-step">{{ c.now_running.step or 'Starting' }}</span>
+        <span class="run-count num">{% if c.now_running.total %}{{ c.now_running.done or 0 }} of {{ c.now_running.total }}{% endif %}</span>
+        <div class="run-bar" aria-hidden="true"><span style="width:{{ ((c.now_running.done or 0) * 100 // c.now_running.total) if c.now_running.total else 5 }}%"></span></div>
+        <span class="small muted">Started <span class="num">{{ c.now_running.started_at|office_time }}</span> · <span class="run-age num">{{ (c.now_running.seconds // 60) }} min {{ c.now_running.seconds % 60 }} s</span> ago. Updates by itself.</span>
+      </div></dd>
+      {% elif c.runs %}<dt>Last run</dt><dd>{% if c.last_run %}<span class="status {{ {'succeeded': 'ok', 'partial': 'wait', 'failed': 'bad', 'running': 'wait'}[c.last_run.status] }}">{{ {'succeeded': 'Done', 'partial': 'Done with problems', 'failed': 'Failed', 'running': 'Running'}[c.last_run.status] }}</span> · <span class="num">{{ c.last_run.started_at|office_time }}</span>{% if c.last_run.error %}<br><span class="small muted">{{ c.last_run.error }}</span>{% endif %}{% else %}Never{% endif %}</dd>{% endif %}
+      {% if c.classes %}<dt>Classes</dt><dd class="num"><a href="{{ url_for('admin.classes', status='on_sale') }}">{{ c.classes.on_sale }} on sale</a> · {{ c.classes.off_sale }} off sale · {{ c.classes.cancelled }} cancelled<br><span class="small muted">upcoming, in {{ c.classes.cities }} cit{{ 'y' if c.classes.cities == 1 else 'ies' }} · <a href="{{ url_for('admin.classes') }}">see all classes</a></span></dd>{% endif %}
       {% if c.webhook %}<dt>Last message in</dt><dd class="num">{{ c.last_webhook|office_time if c.last_webhook else 'None yet' }}</dd>{% endif %}
       {% if c.outbox %}<dt>Sent</dt><dd class="num">{{ c.jobs_done }}{% if c.unsynced %} · <span class="status bad">{{ c.unsynced }} not synced</span>{% endif %}</dd>{% endif %}
       {% if c.issue_source %}<dt>Open problems</dt><dd class="num">{{ c.problems.open }}{% if c.problems.errors %} <span class="status bad">{{ c.problems.errors }} error{{ 's' if c.problems.errors != 1 }}</span>{% endif %}</dd>{% endif %}
@@ -91,4 +99,22 @@
   <p class="muted small">No background jobs have run yet. The first will be the Airtable sync.</p>
   {% endif %}
 </section>
+<script>
+(function () {
+  var live = document.querySelector('.run-live');
+  if (!live) return;
+  var url = "{{ url_for('admin.integrations_progress') }}";
+  function tick() {
+    fetch(url, {credentials: 'same-origin'}).then(function (r) { return r.json(); }).then(function (d) {
+      var run = (d.running || []).filter(function (x) { return String(x.id) === live.dataset.run; })[0];
+      if (!run) { window.location.reload(); return; }              // finished: show the result
+      live.querySelector('.run-step').textContent = run.step || 'Starting';
+      live.querySelector('.run-count').textContent = run.total ? (run.done || 0) + ' of ' + run.total : '';
+      live.querySelector('.run-bar span').style.width = (run.total ? Math.floor(100 * (run.done || 0) / run.total) : 5) + '%';
+      live.querySelector('.run-age').textContent = Math.floor(run.seconds / 60) + ' min ' + (run.seconds % 60) + ' s';
+    }).catch(function () {});
+  }
+  setInterval(tick, 4000);
+})();
+</script>
 {% endblock %}

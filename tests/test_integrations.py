@@ -834,3 +834,51 @@ def test_only_classes_on_sale_or_cancelled_are_fetched(fake, run_sync):
     formula = next(dict(c[2]["params"])["filterByFormula"] for c in fake.calls
                    if "Class%20Schedule" in c[1] or "Class Schedule" in c[1])
     assert "FIND('Enrollware'" in formula and "FIND('CANCELLED'" in formula
+
+
+def test_progress_is_shown_and_unchanged_classes_are_not_rewritten(fake, run_sync, q, client, sign_in, app):
+    from app.integrations import runs
+    for t in ("9:00 AM", "1:00 PM", "6:00 PM"):
+        fake.add_class(start=t)
+    seen_steps = []
+    real = runs.progress
+    def spy(run_id, step, done=None, total=None, *, force=False):
+        seen_steps.append(step)
+        return real(run_id, step, done, total, force=True)
+    runs.progress = spy
+    try:
+        first = run_sync()
+        second = run_sync()
+    finally:
+        runs.progress = real
+    assert first["classes_created"] == 3 and second["classes_unchanged"] == 3 and second["classes_updated"] == 0
+    for step in ("Checking the base's tables and fields", "Reading the class schedule from Airtable",
+                 "Saving locations", "Saving classes"):
+        assert step in seen_steps
+    sign_in("admin@example.test")
+    page = text_of(client.get("/admin/integrations"))
+    assert "on sale" in page and "see all classes" in page
+    assert client.get("/admin/integrations/progress").get_json() == {"running": []}
+    classes = text_of(client.get(f"/admin/classes?city={fake.metro_slug}"))
+    assert "In Airtable" in classes and "Enrollware" in classes
+
+
+def test_a_cut_off_sync_stops_showing_running_and_two_never_overlap(fake, run_sync, q, app):
+    from app.integrations import runs
+    with app.app_context():
+        rid = runs.start("airtable_sync", "schedule")
+        with db.transaction() as conn:
+            conn.execute(text("UPDATE integration_runs SET started_at = now() - interval '1 hour' WHERE id = :i"),
+                         {"i": rid})
+        assert runs.reap_stale("airtable_sync") == 1
+    assert q("SELECT status FROM integration_runs WHERE id = :i", i=rid)[0]["status"] == "failed"
+    # While one sync holds the lock, a second is refused with what the first is doing.
+    with app.app_context():
+        lock = db.engine().connect()
+        lock.execute(text("SELECT pg_advisory_lock(:k)"), {"k": airtable_sync.LOCK_KEY})
+        try:
+            with pytest.raises(http.IntegrationError, match="already running"):
+                airtable_sync.run("button")
+        finally:
+            lock.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": airtable_sync.LOCK_KEY})
+            lock.close()

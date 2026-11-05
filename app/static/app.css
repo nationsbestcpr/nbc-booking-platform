@@ -297,3 +297,11 @@ fieldset.field { border: 0; padding: 0; margin: 0; }
 .field-map { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 4px 14px; font-size: 0.875rem; margin: 0; }
 .field-map dt { color: var(--muted); }
 .field-map dd { margin: 0; overflow-wrap: anywhere; }
+
+/* Integrations: live progress */
+.run-live { display: flex; flex-direction: column; gap: 6px; }
+.run-step { font-weight: 600; color: var(--navy); }
+.run-bar { height: 8px; border-radius: 999px; background: var(--line); overflow: hidden; max-width: 320px; }
+.run-bar span { display: block; height: 100%; background: var(--red); border-radius: 999px; transition: width .6s ease; }
+@media (prefers-reduced-motion: reduce) { .run-bar span { transition: none; } }
+.run-live .status { align-self: flex-start; }

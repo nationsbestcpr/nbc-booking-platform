@@ -64,3 +64,56 @@ def last_finished(kind: str) -> dict[str, Any] | None:
              WHERE kind = :k ORDER BY started_at DESC LIMIT 1
         """), {"k": kind}).mappings().first()
         return dict(row) if row else None
+
+
+# --- live progress -------------------------------------------------------------------
+
+STALE_AFTER_MINUTES = 10
+_last_progress: dict[int, float] = {}
+
+
+def progress(run_id: int, step: str, done: int | None = None, total: int | None = None,
+             *, force: bool = False) -> None:
+    """Say what a running job is doing ('Saving classes', 350, 1100). Written at most every
+    two seconds (unless the step changes, force=True) and doubles as the run's heartbeat."""
+    import time as _time
+    now = _time.monotonic()
+    if not force and now - _last_progress.get(run_id, 0.0) < 2.0:
+        return
+    _last_progress[run_id] = now
+    with db.transaction() as conn:
+        conn.execute(text("""
+            UPDATE integration_runs
+               SET stats = COALESCE(stats, '{}'::jsonb)
+                           || jsonb_build_object('step', CAST(:s AS text), 'done', CAST(:d AS int),
+                                                 'total', CAST(:t AS int), 'heartbeat', now())
+             WHERE id = :id AND status = 'running'
+        """), {"id": run_id, "s": step, "d": done, "t": total})
+
+
+def reap_stale(kind: str) -> int:
+    """A run still 'running' with no heartbeat for 10 minutes was cut off (the app
+    restarted mid-sync): mark it failed so the next one can start."""
+    with db.transaction() as conn:
+        return conn.execute(text("""
+            UPDATE integration_runs
+               SET status = 'failed', finished_at = now(),
+                   error = 'Stopped part-way (the app restarted or the worker stopped). The next sync starts over.'
+             WHERE kind = :k AND status = 'running'
+               AND COALESCE(CAST(stats->>'heartbeat' AS timestamptz), started_at)
+                   < now() - make_interval(mins => :m)
+        """), {"k": kind, "m": STALE_AFTER_MINUTES}).rowcount
+
+
+def running(kind: str | None = None) -> list[dict]:
+    """Runs in progress with their current step, for the Integrations page."""
+    with db.engine().connect() as conn:
+        return [dict(r) for r in conn.execute(text("""
+            SELECT id, kind, trigger, started_at, stats->>'step' AS step,
+                   CAST(stats->>'done' AS int) AS done, CAST(stats->>'total' AS int) AS total,
+                   CAST(stats->>'heartbeat' AS timestamptz) AS heartbeat,
+                   EXTRACT(EPOCH FROM now() - started_at)::int AS seconds
+              FROM integration_runs
+             WHERE status = 'running' AND (CAST(:k AS text) IS NULL OR kind = :k)
+             ORDER BY started_at DESC
+        """), {"k": kind}).mappings()]

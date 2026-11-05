@@ -249,28 +249,56 @@ def parse_day(v) -> date | None:
 
 # --- the run -----------------------------------------------------------------------
 
+LOCK_KEY = 7_202_610_002          # one Airtable sync at a time (worker or Sync now button)
+
+
 def run(trigger: str = "schedule", *, user_id: int | None = None, record_id: str | None = None) -> dict:
-    """Sync everything (or one Class Schedule record). Returns the run's stats."""
+    """Sync everything (or one Class Schedule record). Returns the run's stats.
+    Only one sync runs at a time; a second one is refused with what the first is doing."""
     if not airtable.configured():
         raise IntegrationError("Airtable isn't set up: add AIRTABLE_TOKEN and AIRTABLE_BASE_ID to the secrets.",
                                retry=False)
+    runs.reap_stale("airtable_sync")
+    lock = db.engine().connect()
+    try:
+        if not lock.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": LOCK_KEY}).scalar():
+            busy = runs.running("airtable_sync")
+            what = f" ({busy[0]['step']})" if busy and busy[0]["step"] else ""
+            raise IntegrationError(f"An Airtable sync is already running{what}. It shows its progress on the "
+                                   "Integrations page.", retry=False)
+        lock.commit()
+        return _run(trigger, user_id, record_id)
+    finally:
+        try:
+            lock.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": LOCK_KEY})
+            lock.commit()
+        finally:
+            lock.close()
+
+
+def _run(trigger: str, user_id: int | None, record_id: str | None) -> dict:
     run_id = runs.start("airtable_sync", trigger, user_id=user_id,
                         scope={"record_id": record_id} if record_id else None)
     stats = {"classes_seen": 0, "classes_created": 0, "classes_updated": 0, "classes_unchanged": 0,
              "classes_skipped": 0, "classes_removed": 0, "locations": 0, "products": 0, "problems": 0}
     try:
+        runs.progress(run_id, "Checking the base's tables and fields", force=True)
         mapping = airtable.resolve(airtable.read_schema())
         if not _check_mapping(mapping, run_id):
             runs.finish(run_id, "failed", stats, "Required tables or fields are missing in Airtable. "
                                                  "See the problems list on the Integrations page.")
             stats["status"] = "failed"
             return stats
+        runs.progress(run_id, "Reading the class schedule from Airtable", force=True)
         schedule = _fetch_schedule(mapping["schedule"], record_id, run_id, stats)
+        runs.progress(run_id, f"Reading courses ({len(schedule)} classes to check)", force=True)
         products = _sync_courses(mapping["courses"], run_id, stats)
-        sites, virtual, broken = _sync_locations(mapping["locations"], run_id, stats,
-                                                 _locations_in_use(schedule, mapping["schedule"]))
+        needed = _locations_in_use(schedule, mapping["schedule"])
+        runs.progress(run_id, "Reading locations", 0, len(needed), force=True)
+        sites, virtual, broken = _sync_locations(mapping["locations"], run_id, stats, needed)
         seen = _sync_schedule(mapping["schedule"], schedule, products, sites, virtual, broken, run_id, stats)
         if record_id is None:
+            runs.progress(run_id, "Taking classes that left the schedule off sale", force=True)
             _mark_removed(seen, run_id, stats)
         opened = open_test_cities()
         if opened:
@@ -338,9 +366,9 @@ def _check_mapping(mapping: dict, run_id: int) -> bool:
     return ok
 
 
-def _register(conn: Connection, record: dict, table: str, fields: dict) -> bool:
+def _register(conn: Connection, record: dict, table: str, fields: dict, digest: bytes | None = None) -> bool:
     """Upsert the airtable_records row. True when the record's fields changed."""
-    h = _hash(fields)
+    h = digest or _hash(fields)
     created = record.get("createdTime")
     row = conn.execute(text("""
         INSERT INTO airtable_records (record_id, base_id, table_name, fields_hash, airtable_created_at)
@@ -538,9 +566,11 @@ def _sync_locations(m: dict, run_id: int, stats: dict, needed: set[str] | None) 
     out: dict[str, dict] = {}
     virtual: set[str] = set()
     broken: set[str] = set()
+    run_id_for_progress = run_id
     for record in airtable.list_records(m["table"], list(m["fields"].values())):
         if needed is not None and record["id"] not in needed:
             continue
+        runs.progress(run_id_for_progress, "Saving locations", len(out) + len(broken), len(needed or ()))
         v = _values(record, m)
         if (_text(v.get("metro")) or "").strip().lower() == VIRTUAL:
             virtual.add(record["id"])
@@ -714,17 +744,26 @@ def _locations_in_use(records: list[dict], m: dict) -> set[str]:
 
 def _sync_schedule(m: dict, records: list[dict], products: dict, sites: dict, virtual: set[str],
                    broken: set[str], run_id: int, stats: dict) -> set[str]:
+    ids = [r["id"] for r in records]
+    with db.engine().connect() as c:
+        mapped = dict(c.execute(text("""SELECT airtable_record_id, session_id FROM session_airtable_records
+                                         WHERE airtable_record_id = ANY(:ids)"""), {"ids": ids}).all())
+        stored = dict(c.execute(text("""SELECT record_id, fields_hash FROM airtable_records
+                                         WHERE record_id = ANY(:ids)"""), {"ids": ids}).all())
+        families = {r["id"]: dict(r) for r in c.execute(text(
+            "SELECT id, one_instructor_max, default_duration_min FROM course_families")).mappings()}
+
     seen: set[str] = set()
+    quiet: list[str] = []
     groups: dict[tuple, list[ClassRow]] = {}
     for record in records:
         seen.add(record["id"])
         stats["classes_seen"] += 1
         try:
-            row = _parse_class(record, _values(record, m), products, sites, virtual, broken)
+            row = _parse_class(record, _values(record, m), products, sites, virtual, broken, mapped, families)
         except SkipQuietly:
             stats["classes_skipped"] += 1
-            with db.transaction() as conn:
-                runs.resolve(conn, source=SOURCE, external_ref=record["id"], codes=["CLASS_UNKNOWN_LOCATION"])
+            quiet.append(record["id"])
             continue
         except RowProblem as exc:
             stats["classes_skipped"] += 1
@@ -737,7 +776,18 @@ def _sync_schedule(m: dict, records: list[dict], products: dict, sites: dict, vi
             ("new", row.site["site_id"], row.main["family_id"], row.starts)
         groups.setdefault(key, []).append(row)
 
-    for rows in groups.values():
+    if quiet:
+        with db.transaction() as conn:
+            conn.execute(text("""UPDATE integration_issues SET resolved_at = now()
+                                  WHERE source = :src AND code = 'CLASS_UNKNOWN_LOCATION' AND resolved_at IS NULL
+                                    AND external_ref = ANY(:ids)"""), {"src": SOURCE, "ids": quiet})
+
+    total = len(groups)
+    for n, rows in enumerate(groups.values(), start=1):
+        runs.progress(run_id, "Saving classes", n - 1, total)
+        if all(r.existing_id and stored.get(r.record["id"]) == r.digest for r in rows):
+            stats["classes_unchanged"] += len(rows)        # nothing changed: no writes
+            continue
         try:
             result = _apply_class(rows, m)
             stats[f"classes_{result}"] += len(rows)
@@ -749,6 +799,11 @@ def _sync_schedule(m: dict, records: list[dict], products: dict, sites: dict, vi
             stats["classes_skipped"] += len(rows)
             for row in rows:
                 _problem(run_id, stats, row.record["id"], RowProblem(_db_code(exc), _db_reason(exc)), m["table"])
+    runs.progress(run_id, "Saving classes", total, total, force=True)
+    if seen:
+        with db.transaction() as conn:
+            conn.execute(text("UPDATE airtable_records SET last_seen_at = now() WHERE record_id = ANY(:ids)"),
+                         {"ids": list(seen)})
     return seen
 
 
@@ -795,6 +850,7 @@ class ClassRow:
     lead: str | None
     co: str | None
     room_name: str | None
+    digest: bytes = b""          # everything this row's class depends on; unchanged = nothing to save
 
     @property
     def main(self) -> dict:
@@ -802,7 +858,8 @@ class ClassRow:
 
 
 def _parse_class(record: dict, v: dict, products: dict, sites: dict, virtual: set[str],
-                 broken: set[str] = frozenset()) -> ClassRow | None:
+                 broken: set[str] = frozenset(), mapped: dict | None = None,
+                 families: dict | None = None) -> ClassRow | None:
     """Read one row. None for a row that's none of the engine's business: a planning row
     that was never on sale, or an online (virtual) class."""
     statuses = _statuses(v.get("status"))
@@ -812,9 +869,12 @@ def _parse_class(record: dict, v: dict, products: dict, sites: dict, virtual: se
         return None                  # an online class: not sold here
     if _is_record_ids(v.get("location")) and v["location"][0] in broken:
         raise SkipQuietly()          # its location has a problem of its own, listed once
-    with db.engine().connect() as c:
-        existing_id = c.execute(text("SELECT session_id FROM session_airtable_records WHERE airtable_record_id = :r"),
-                                {"r": record["id"]}).scalar()
+    if mapped is not None:
+        existing_id = mapped.get(record["id"])
+    else:
+        with db.engine().connect() as c:
+            existing_id = c.execute(text("SELECT session_id FROM session_airtable_records "
+                                         "WHERE airtable_record_id = :r"), {"r": record["id"]}).scalar()
     if not existing_id and not published:
         return None
 
@@ -835,9 +895,12 @@ def _parse_class(record: dict, v: dict, products: dict, sites: dict, virtual: se
         raise RowProblem("CLASS_NO_START", "it needs a date and a start time like 9:00 AM."
                          + (f" “{_text(v.get('start_time'))}” isn't one." if _text(v.get("start_time")) else ""))
     starts = datetime.combine(day, clock, zone).astimezone(timezone.utc)
-    with db.engine().connect() as c:
-        fam = c.execute(text("SELECT one_instructor_max, default_duration_min FROM course_families WHERE id = :f"),
-                        {"f": main["family_id"]}).mappings().one()
+    if families is not None:
+        fam = families[main["family_id"]]
+    else:
+        with db.engine().connect() as c:
+            fam = c.execute(text("SELECT one_instructor_max, default_duration_min FROM course_families "
+                                 "WHERE id = :f"), {"f": main["family_id"]}).mappings().one()
     dur = _number(v.get("duration"))
     minutes = (dur if dur and dur > 24 else dur * 60 if dur and dur > 0 else None) \
         or main.get("duration") or fam["default_duration_min"] or 240
@@ -851,7 +914,13 @@ def _parse_class(record: dict, v: dict, products: dict, sites: dict, virtual: se
     if len(course_rows) > 1:
         offers.append((course_rows[1], companion_price if companion_price is not None and companion_price >= 0
                        else course_rows[1]["price"]))
+    lead = None if _is_record_ids(v.get("lead_instructor")) else _text(v.get("lead_instructor"))
+    digest = _hash({"v": v, "site": [site["site_id"], site["time_zone"], site["room_max"], site["slug"]],
+                    "offers": [[p["id"], c, p["family_id"], p["delivery"]] for p, c in offers],
+                    "one_max": one_max, "starts": starts.isoformat(), "ends": ends.isoformat(),
+                    "rules": 2})
     return ClassRow(
+        digest=digest,
         record=record, values=v, statuses=statuses, published=published, cancelled=cancelled,
         existing_id=existing_id, site=site, course_rows=course_rows, starts=starts, ends=ends, one_max=one_max,
         offers=offers,
@@ -890,7 +959,7 @@ def _apply_class(rows: list[ClassRow], m: dict) -> str:
     with db.transaction() as conn:
         changed = False
         for r in rows:
-            changed = _register(conn, r.record, m["table"], r.values) or changed
+            changed = _register(conn, r.record, m["table"], r.values, r.digest) or changed
         room = _room(conn, site, room_name, one_max)
         capacity = min(one_max, room["max_student_count"])
         session = None
