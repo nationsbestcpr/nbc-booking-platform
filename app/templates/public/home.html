@@ -49,50 +49,93 @@
   {% endif %}
 
   <section class="section" id="classes" aria-labelledby="classes-title">
-    <div class="section-head">
-      <div class="stack">
-        <span class="eyebrow">Available classes</span>
-        <h2 class="title" id="classes-title">Find the CPR Class <span class="accent">That Fits You Best</span></h2>
-      </div>
-      {% if cities|length > 1 %}
-      <nav class="filters" aria-label="Filter by city">
-        <a class="filter" href="{{ url_for('public.home') }}#classes" aria-current="{{ 'true' if not city else 'false' }}">All cities</a>
-        {% for c in cities %}<a class="filter" href="{{ url_for('public.home', city=c.slug) }}#classes" aria-current="{{ 'true' if city == c.slug else 'false' }}">{{ c.name }}, {{ c.state_code }}</a>{% endfor %}
-      </nav>
-      {% elif cities %}
-      <p class="muted">Now booking in {{ cities[0].name }}, {{ cities[0].state_code }}. More cities soon.</p>
-      {% endif %}
+    <div class="stack">
+      <span class="eyebrow">Available classes</span>
+      <h2 class="title" id="classes-title">Find the CPR Class <span class="accent">That Fits You Best</span></h2>
     </div>
 
-    {% if classes %}
-    <div class="class-grid">
-      {% for c in classes %}
-      {% set d = local_dt(c.starts_at, c.time_zone) %}
-      <article class="class-card">
-        <div class="date-tile" aria-hidden="true">
-          <div class="dow">{{ d.strftime('%a') }}</div><div class="day num">{{ d.day }}</div><div class="mon">{{ d.strftime('%b') }}</div>
+    {% if not cities %}
+    <div class="empty">No classes are on sale right now. New dates are added every week.</div>
+    {% else %}
+    <form class="finder" method="get" action="{{ url_for('public.home') }}#classes" aria-label="Find a class">
+      <div class="field">
+        <label for="f-city">City</label>
+        <select id="f-city" name="city">
+          <option value="">Choose your city</option>
+          {% for st, list in states.items() %}<optgroup label="{{ st }}">{% for c in list %}<option value="{{ c.slug }}"{{ ' selected' if f.city == c.slug }}>{{ c.name }}, {{ c.state_code }} ({{ c.classes }})</option>{% endfor %}</optgroup>{% endfor %}
+          <option value="all"{{ ' selected' if f.city == 'all' }}>All cities</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="f-course">Course</label>
+        <select id="f-course" name="course">{% for v, l in courses %}<option value="{{ v }}"{{ ' selected' if f.course == v }}>{{ l }}</option>{% endfor %}</select>
+      </div>
+      <div class="field">
+        <label for="f-when">When</label>
+        <select id="f-when" name="when">{% for v, l in whens %}<option value="{{ v }}"{{ ' selected' if f.when == v }}>{{ l }}</option>{% endfor %}</select>
+      </div>
+      <div class="field">
+        <label for="f-from">From date</label>
+        <input type="date" id="f-from" name="date" value="{{ f.date }}">
+      </div>
+      <button class="pill" type="submit">Show classes <span class="arrow" aria-hidden="true">→</span></button>
+    </form>
+
+    {% if not f.city %}
+    <div class="city-picker" aria-label="Cities with classes">
+      <p class="muted">Classes in {{ cities|length }} cities. Pick yours:</p>
+      <div class="state-grid">
+        {% for st, list in states.items() %}
+        <div class="state-block">
+          <h3>{{ st }}</h3>
+          <ul>{% for c in list %}<li><a href="{{ url_for('public.home', city=c.slug, course=f.course or None, when=f.when or None) }}#classes">{{ c.name }}</a> <span class="muted small num">{{ c.classes }}</span></li>{% endfor %}</ul>
         </div>
-        <div class="class-body">
-          <h3>{{ c.course_name }}</h3>
-          <span class="meta num">{{ class_date(c.starts_at, c.time_zone) }} · {{ class_time(c.starts_at, c.ends_at, c.time_zone) }}</span>
-          <span class="meta">{{ c.site_name }}, {{ c.city_name }} · {{ c.delivery_mode|capitalize }}</span>
-          <div class="prices">{% for o in c.offers or [] %}<span>{{ o.name }} <strong class="num">{{ o.price|money }}</strong></span>{% endfor %}</div>
-          <div class="class-foot">
+        {% endfor %}
+      </div>
+    </div>
+    {% elif classes %}
+    <p class="muted small num results-line">
+      Showing {{ classes|length }} of {{ total }} class{{ 'es' if total != 1 }}{% if chosen %} in {{ chosen.name }}, {{ chosen.state_code }}{% endif %}.
+      {% if f.city != 'all' %}<a href="{{ url_for('public.home', course=f.course or None, when=f.when or None) }}#classes">Change city</a>{% endif %}
+    </p>
+    <div class="class-days">
+      {% set n = namespace(i=0) %}
+      {% for day, items in classes|groupby('local_date') %}
+      <section class="class-day" aria-label="{{ class_date(items[0].starts_at, items[0].time_zone) }}">
+        <h3 class="day-head"><span class="num">{{ local_dt(items[0].starts_at, items[0].time_zone).strftime('%A, %B %-d') }}</span></h3>
+        <ul class="class-rows">
+          {% for c in items %}{% set n.i = n.i + 1 %}
+          <li class="class-row" id="c{{ n.i }}">
+            <span class="cr-time num">{{ class_time(c.starts_at, c.ends_at, c.time_zone) }}</span>
+            <span class="cr-what"><strong>{{ c.course_name }}</strong><span class="muted small">{{ c.delivery_mode|capitalize }}</span></span>
+            <span class="cr-where">{{ c.site_name }}<span class="muted small">{{ c.site_city }}{% if f.city == 'all' %} · {{ c.city_name }}, {{ c.state_code }}{% endif %}</span></span>
+            <span class="cr-price">{% for o in c.offers or [] %}<span>{{ o.name }} <strong class="num">{{ o.price|money }}</strong></span>{% endfor %}</span>
             {% if c.seats_left <= 0 %}
-              <span class="seats full">Full · join the waitlist</span>
-              <button class="pill plain" type="button" aria-disabled="true" disabled>Join waitlist</button>
+              <span class="seats full">Full</span>
+              <span class="pill plain small-pill" aria-disabled="true">Waitlist soon</span>
             {% else %}
-              <span class="seats {{ 'low' if c.seats_left <= 3 }} num">{{ c.seats_left }} of {{ c.seat_limit }} seats left</span>
-              <a class="pill" href="{{ url_for('book.form', public_id=c.public_id) }}">Book now <span class="arrow" aria-hidden="true">→</span></a>
+              <span class="seats {{ 'low' if c.seats_left <= 3 }} num">{{ c.seats_left }} seat{{ 's' if c.seats_left != 1 }} left</span>
+              <a class="pill small-pill" href="{{ url_for('book.form', public_id=c.public_id) }}">Book <span class="arrow" aria-hidden="true">→</span></a>
             {% endif %}
-          </div>
-        </div>
-      </article>
+          </li>
+          {% endfor %}
+        </ul>
+      </section>
       {% endfor %}
     </div>
+    {% if classes|length < total %}
+    <p class="more"><a class="pill plain" href="{{ url_for('public.home', city=f.city, course=f.course or None, when=f.when or None, date=f.date or None, page=page + 1) }}#c{{ classes|length }}">Show more classes <span class="arrow" aria-hidden="true">→</span></a></p>
+    {% endif %}
     {% else %}
-    <div class="empty">No classes are on sale right now. New dates are added every week.</div>
+    <div class="empty">No classes match. Try another course or a wider date range.</div>
+    {% endif %}
     {% endif %}
   </section>
 </div>
+<script>
+  // Changing a filter shows the classes at once (the button still works without scripts).
+  document.querySelectorAll('.finder select').forEach(function (el) {
+    el.addEventListener('change', function () { el.form.submit(); });
+  });
+</script>
 {% endblock %}

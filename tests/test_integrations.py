@@ -800,7 +800,7 @@ def test_on_the_test_app_synced_cities_are_open_and_shown(fake, run_sync, q, cli
     assert city["booking_system"] == "engine" and city["cutover_at"] is not None
     page = text_of(client.get(f"/?city={fake.metro_slug}"))
     assert "Test site" in page and fake.site_name in page
-    assert "Book now" in page and session_for(q, rid)["is_published"]
+    assert "Book" in page and session_for(q, rid)["is_published"]
     # A city switched back to Enrollware by an admin stays switched back.
     with app.app_context(), db.transaction() as conn:
         conn.execute(text("UPDATE metros SET booking_system = 'enrollware' WHERE id = :m"), {"m": city["id"]})
@@ -872,6 +872,8 @@ def test_a_cut_off_sync_stops_showing_running_and_two_never_overlap(fake, run_sy
                          {"i": rid})
         assert runs.reap_stale("airtable_sync") == 1
     assert q("SELECT status FROM integration_runs WHERE id = :i", i=rid)[0]["status"] == "failed"
+    with app.app_context(), db.transaction() as conn:            # not left as the "last run" for other tests
+        conn.execute(text("DELETE FROM integration_runs WHERE id = :i"), {"i": rid})
     # While one sync holds the lock, a second is refused with what the first is doing.
     with app.app_context():
         lock = db.engine().connect()
@@ -882,3 +884,19 @@ def test_a_cut_off_sync_stops_showing_running_and_two_never_overlap(fake, run_sy
         finally:
             lock.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": airtable_sync.LOCK_KEY})
             lock.close()
+
+
+def test_with_several_cities_the_finder_asks_for_a_city_first(fake, run_sync, q, client, app, monkeypatch):
+    monkeypatch.setitem(app.config, "APP_ENV", "staging")
+    fake.add_class()
+    run_sync()
+    try:
+        html = client.get("/").get_data(as_text=True)
+        assert "Pick yours" in html and 'class="state-block"' in html and fake.metro in html
+        assert "Showing" not in html                       # no long list until a city is chosen
+        listed = client.get(f"/?city={fake.metro_slug}").get_data(as_text=True)
+        assert "Showing 1 of 1 class" in listed and fake.site_name in listed
+    finally:
+        with app.app_context(), db.transaction() as conn:
+            conn.execute(text("UPDATE metros SET booking_system = 'enrollware', cutover_at = NULL WHERE slug = :s"),
+                         {"s": fake.metro_slug})

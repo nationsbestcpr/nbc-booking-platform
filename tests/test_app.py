@@ -37,8 +37,9 @@ def test_landing_page_lists_classes_on_sale(client):
     assert "Find the CPR Class" in html
     assert "Henrico (Three Chopt)" in html
     assert "$108" in html and "$88" in html
-    assert "3 of 12 seats left" in html            # Moorefield, nearly full
-    assert "Full · join the waitlist" in html        # Henrico Jan 16
+    assert "3 seats left" in html                  # Moorefield, nearly full
+    assert ">Full<" in html                          # Henrico Jan 16
+    assert "Thursday" in html or "Saturday" in html or "day," in html   # grouped under day headings
     assert "Galleria" not in html                    # Houston is still on Enrollware
 
 
@@ -176,3 +177,14 @@ def test_webhooks_skip_csrf_and_check_signatures(client, monkeypatch):
     monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_x")
     assert client.post("/webhooks/stripe", data=b"{}").status_code == 400   # unsigned
     assert client.post("/webhooks/ghl").status_code == 501
+
+
+def test_class_finder_filters_and_pages(client):
+    page = client.get("/?city=richmond-va&course=BLS").get_data(as_text=True)
+    assert "Basic Life Support" in page and "Adult &amp; Pediatric" not in page.split('id="classes"')[1].split("</form>")[1]
+    assert "Change city" in page
+    all_ = client.get("/?city=all").get_data(as_text=True)
+    assert "Showing" in all_
+    # Unknown values are ignored instead of failing.
+    assert client.get("/?city=nowhere&course=X&when=9&date=bad").status_code == 200
+
