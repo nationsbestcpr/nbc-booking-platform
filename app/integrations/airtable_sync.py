@@ -40,6 +40,10 @@ from .http import IntegrationError
 SOURCE = "airtable"
 
 
+class SkipQuietly(Exception):
+    """Skip this row without listing a problem for it (the cause is listed once elsewhere)."""
+
+
 class RowProblem(Exception):
     def __init__(self, code: str, message: str, severity: str = "warning") -> None:
         super().__init__(message)
@@ -145,25 +149,41 @@ def time_zone(value: str | None, state: str | None) -> str | None:
     return _STATE_TZ.get((state or "").upper())
 
 
+def _state_code(text_: str) -> str | None:
+    t = text_.strip().rstrip(".")
+    if t.upper() in _STATES:
+        return t.upper()
+    return _STATE_NAMES.get(t.lower())
+
+
 def parse_address(full: str | None) -> dict:
-    """'123 Main St, Suite 4, Richmond, VA 23233' -> parts. Unknown parts are None."""
+    """An address as the base writes it, into parts (unknown parts are None):
+    '491 West Valley Ridge Boulevard, Lewisville, Texas, 75057'
+    '10050 Ralston Road, #6, Arvada, Colorado, 80004'
+    '123 Main St, Richmond, VA 23233' and '123 Main St, Richmond, Virginia 23233, USA'."""
     out = {"line1": None, "line2": None, "city": None, "state": None, "zip": None}
     if not full:
         return out
     parts = [p.strip() for p in re.split(r",|\n", full) if p.strip()]
-    if parts and parts[-1].upper() in {"USA", "US", "UNITED STATES"}:
+    if parts and parts[-1].upper().rstrip(".") in {"USA", "US", "U.S.A", "UNITED STATES"}:
         parts.pop()
+    if parts and re.fullmatch(r"\d{5}(?:-\d{4})?", parts[-1]):        # '..., Texas, 75057'
+        out["zip"] = parts.pop()
     if parts:
-        m = re.fullmatch(r"([A-Za-z]{2})\.?\s*(\d{5}(?:-\d{4})?)?", parts[-1])
-        if m and m.group(1).upper() in _STATES:
-            out["state"], out["zip"] = m.group(1).upper(), m.group(2)
+        last = parts[-1]
+        m = re.fullmatch(r"(.+?)\s+(\d{5}(?:-\d{4})?)", last)        # 'Texas 75057' / 'VA 23233'
+        state_part, zip_part = (m.group(1), m.group(2)) if m else (last, None)
+        code = _state_code(state_part)
+        if code:
+            out["state"] = code
+            out["zip"] = out["zip"] or zip_part
             parts.pop()
-        elif re.fullmatch(r"\d{5}(?:-\d{4})?", parts[-1]) and len(parts) >= 2:
-            out["zip"] = parts.pop()
-            m2 = re.fullmatch(r"(.*?)\s+([A-Za-z]{2})", parts[-1])
-            if m2 and m2.group(2).upper() in _STATES:
-                out["state"] = m2.group(2).upper()
-                parts[-1] = m2.group(1)
+        else:
+            m = re.fullmatch(r"(.*?)\s+([A-Za-z]{2})", state_part)      # 'Richmond VA' (no comma)
+            if m and m.group(2).upper() in _STATES:
+                out["state"] = m.group(2).upper()
+                out["zip"] = out["zip"] or zip_part
+                parts[-1] = m.group(1)
     if len(parts) >= 2:
         out["city"] = parts.pop()
     if parts:
@@ -247,9 +267,9 @@ def run(trigger: str = "schedule", *, user_id: int | None = None, record_id: str
             return stats
         schedule = _fetch_schedule(mapping["schedule"], record_id, run_id, stats)
         products = _sync_courses(mapping["courses"], run_id, stats)
-        sites, virtual = _sync_locations(mapping["locations"], run_id, stats,
-                                         _locations_in_use(schedule, mapping["schedule"]))
-        seen = _sync_schedule(mapping["schedule"], schedule, products, sites, virtual, run_id, stats)
+        sites, virtual, broken = _sync_locations(mapping["locations"], run_id, stats,
+                                                 _locations_in_use(schedule, mapping["schedule"]))
+        seen = _sync_schedule(mapping["schedule"], schedule, products, sites, virtual, broken, run_id, stats)
         if record_id is None:
             _mark_removed(seen, run_id, stats)
         opened = open_test_cities()
@@ -511,11 +531,13 @@ def parse_metro(raw: str | None) -> tuple[str, str | None] | None:
     return raw.strip(), None
 
 
-def _sync_locations(m: dict, run_id: int, stats: dict, needed: set[str] | None) -> tuple[dict[str, dict], set[str]]:
+def _sync_locations(m: dict, run_id: int, stats: dict, needed: set[str] | None) -> tuple[dict[str, dict], set[str], set[str]]:
     """Sync the locations the classes use (needed=None: all).
-    Returns ({location record id: site}, {ids of virtual locations, not sold here})."""
+    Returns ({location record id: site}, {virtual (online) location ids}, {ids of locations with a
+    problem, listed once for the location instead of once per class})."""
     out: dict[str, dict] = {}
     virtual: set[str] = set()
+    broken: set[str] = set()
     for record in airtable.list_records(m["table"], list(m["fields"].values())):
         if needed is not None and record["id"] not in needed:
             continue
@@ -529,10 +551,12 @@ def _sync_locations(m: dict, run_id: int, stats: dict, needed: set[str] | None) 
                 out[record["id"]] = site
                 stats["locations"] += 1
         except RowProblem as exc:
+            broken.add(record["id"])
             _problem(run_id, stats, record["id"], exc, m["table"])
         except DBAPIError as exc:
+            broken.add(record["id"])
             _problem(run_id, stats, record["id"], RowProblem("LOCATION_REFUSED", _db_reason(exc)), m["table"])
-    return out, virtual
+    return out, virtual, broken
 
 
 def _location(record: dict, m: dict, v: dict) -> dict | None:
@@ -665,9 +689,12 @@ def _fetch_schedule(m: dict, record_id: str | None, run_id: int, stats: dict) ->
                  WHERE me.airtable_record_id = :r AND o.airtable_record_id <> :r
             """), {"r": record_id}).scalars().all()
         return [rec] + [r for r in (airtable.get_record(m["table"], sid) for sid in siblings) if r]
-    when = m["fields"]["date"]
-    formula = (f"OR({airtable.formula_field(when)} = BLANK(), "
-               f"IS_AFTER({airtable.formula_field(when)}, DATEADD(TODAY(), -2, 'days')))")
+    when = airtable.formula_field(m["fields"]["date"])
+    status = airtable.formula_field(m["fields"]["status"])
+    # Only rows marked Enrollware or CANCELLED, from the day before yesterday on: about a
+    # dozen calls per sync. A row that loses Enrollware isn't fetched and comes off sale.
+    formula = (f"AND(OR({when} = BLANK(), IS_AFTER({when}, DATEADD(TODAY(), -2, 'days'))), "
+               f"OR(FIND('Enrollware', ARRAYJOIN({status}, ',')), FIND('CANCELLED', ARRAYJOIN({status}, ','))))")
     return list(airtable.list_records(m["table"], list(m["fields"].values()), formula))
 
 
@@ -685,15 +712,20 @@ def _locations_in_use(records: list[dict], m: dict) -> set[str]:
     return out
 
 
-def _sync_schedule(m: dict, records: list[dict], products: dict, sites: dict, virtual: set[str], run_id: int,
-                   stats: dict) -> set[str]:
+def _sync_schedule(m: dict, records: list[dict], products: dict, sites: dict, virtual: set[str],
+                   broken: set[str], run_id: int, stats: dict) -> set[str]:
     seen: set[str] = set()
     groups: dict[tuple, list[ClassRow]] = {}
     for record in records:
         seen.add(record["id"])
         stats["classes_seen"] += 1
         try:
-            row = _parse_class(record, _values(record, m), products, sites, virtual)
+            row = _parse_class(record, _values(record, m), products, sites, virtual, broken)
+        except SkipQuietly:
+            stats["classes_skipped"] += 1
+            with db.transaction() as conn:
+                runs.resolve(conn, source=SOURCE, external_ref=record["id"], codes=["CLASS_UNKNOWN_LOCATION"])
+            continue
         except RowProblem as exc:
             stats["classes_skipped"] += 1
             _problem(run_id, stats, record["id"], exc, m["table"])
@@ -769,14 +801,17 @@ class ClassRow:
         return self.course_rows[0]
 
 
-def _parse_class(record: dict, v: dict, products: dict, sites: dict, virtual: set[str]) -> ClassRow | None:
+def _parse_class(record: dict, v: dict, products: dict, sites: dict, virtual: set[str],
+                 broken: set[str] = frozenset()) -> ClassRow | None:
     """Read one row. None for a row that's none of the engine's business: a planning row
     that was never on sale, or an online (virtual) class."""
     statuses = _statuses(v.get("status"))
     published = any(s.lower() == airtable.PUBLISH_STATUS for s in statuses)
     cancelled = any(s.lower().startswith(airtable.CANCELLED_PREFIX) for s in statuses)
     if _is_record_ids(v.get("location")) and v["location"][0] in virtual:
-        return None
+        return None                  # an online class: not sold here
+    if _is_record_ids(v.get("location")) and v["location"][0] in broken:
+        raise SkipQuietly()          # its location has a problem of its own, listed once
     with db.engine().connect() as c:
         existing_id = c.execute(text("SELECT session_id FROM session_airtable_records WHERE airtable_record_id = :r"),
                                 {"r": record["id"]}).scalar()
@@ -993,7 +1028,8 @@ def _mark_removed(seen: set[str], run_id: int, stats: dict) -> None:
              WHERE s.starts_at > now() AND s.is_published
         """)) if r not in seen]
     for record_id in gone:
-        _unpublish_record(record_id, "The class is no longer in Airtable's schedule.", run_id, stats)
+        _unpublish_record(record_id, "The class is no longer marked Enrollware in Airtable (or was deleted).",
+                          run_id, stats)
 
 
 def check_fields() -> dict:

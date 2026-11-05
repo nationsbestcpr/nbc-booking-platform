@@ -46,7 +46,7 @@ transport: Callable[..., Any] = _requests_transport
 
 def request(method: str, url: str, *, service: str, headers: dict | None = None,
             params: Any = None, json: Any = None, data: Any = None,
-            timeout: float = 25, attempts: int = 3) -> Any:
+            timeout: float = 25, attempts: int = 3, rate_limit_wait: float | None = None) -> Any:
     """Make a call and return the decoded JSON body (or {} when empty)."""
     last: IntegrationError | None = None
     for attempt in range(1, attempts + 1):
@@ -59,7 +59,7 @@ def request(method: str, url: str, *, service: str, headers: dict | None = None,
             continue
         status = res.status_code
         if status == 429 or status >= 500:
-            wait = _retry_after(res.headers, attempt)
+            wait = rate_limit_wait if status == 429 and rate_limit_wait else _retry_after(res.headers, attempt)
             last = IntegrationError(f"{service}: {_reason(res)}", status=status)
             if attempt < attempts:
                 time.sleep(wait)

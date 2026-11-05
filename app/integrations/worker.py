@@ -94,7 +94,7 @@ def on_start() -> dict:
                 with db.transaction() as conn:
                     runs.issue(conn, source="ghl", code=code, severity=severity, external_ref=ref,
                                message=f"{prefix}: {exc}")
-    if airtable.configured():
+    if airtable.configured() and airtable_due():      # a quick restart doesn't sync again
         try:
             stats = airtable_sync.run("schedule")
             done["airtable"] = stats.get("status")

@@ -76,7 +76,7 @@ class FakePlatforms:
             ],
             "Master Locations": [
                 {"id": self.loc, "fields": {"Abbreviation": f"HH{tag}", "Name": f"Virginia - {self.metro} - {self.site_name}",
-                 "Address": "100 Main St, Suite 2, Norfolk, VA 23510", "Metro Area": f"Virginia - {self.metro}",
+                 "Address": "100 Main St, Suite 2, Norfolk, Virginia, 23510", "Metro Area": f"Virginia - {self.metro}",
                  "Time Zone": "Eastern", "Max Student Count": "14", "Access Code": "4321#",
                  "Parking": "Lot behind the hall", "Status": ["Currently Scheduling"], "Per Class Rate": 50}},
                 {"id": self.virtual_loc, "fields": {"Abbreviation": "Zoom", "Name": "VIRTUAL - Zoom",
@@ -406,6 +406,9 @@ def test_value_parsers():
     assert airtable_sync.time_zone(None, "TX") == "America/Chicago"
     parts = airtable_sync.parse_address("2000 Ridge Rd, Henrico, VA 23229, USA")
     assert (parts["line1"], parts["city"], parts["state"], parts["zip"]) == ("2000 Ridge Rd", "Henrico", "VA", "23229")
+    parts = airtable_sync.parse_address("491 West Valley Ridge Boulevard, Lewisville, Texas, 75057")   # the base's style
+    assert (parts["line1"], parts["city"], parts["state"], parts["zip"]) == \
+        ("491 West Valley Ridge Boulevard", "Lewisville", "TX", "75057")
 
 
 # --- Booking, Stripe and GHL --------------------------------------------------------------
@@ -813,3 +816,21 @@ def test_live_cities_wait_for_the_switch(fake, run_sync, q, app, monkeypatch):
     fake.add_class()
     run_sync()
     assert q("SELECT booking_system FROM metros WHERE slug = :s", s=fake.metro_slug)[0]["booking_system"] == "enrollware"
+
+
+def test_a_bad_location_is_one_problem_not_one_per_class(fake, run_sync, q):
+    fake.record(fake.loc)["fields"]["Address"] = "somewhere near the park"
+    classes = [fake.add_class(), fake.add_class(start="2:00 PM"), fake.add_class(start="6:00 PM")]
+    stats = run_sync()
+    assert stats["classes_skipped"] == 3 and stats["problems"] == 1
+    open_ = q("SELECT code, external_ref FROM integration_issues WHERE resolved_at IS NULL AND external_ref = ANY(:r)",
+              r=classes + [fake.loc])
+    assert [i["code"] for i in open_] == ["LOCATION_ADDRESS"]
+
+
+def test_only_classes_on_sale_or_cancelled_are_fetched(fake, run_sync):
+    fake.add_class()
+    run_sync()
+    formula = next(dict(c[2]["params"])["filterByFormula"] for c in fake.calls
+                   if "Class%20Schedule" in c[1] or "Class Schedule" in c[1])
+    assert "FIND('Enrollware'" in formula and "FIND('CANCELLED'" in formula

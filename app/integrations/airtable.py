@@ -133,7 +133,8 @@ def _get(path: str, params: Any = None) -> dict:
     if wait > 0:
         time.sleep(wait)
     _last_call = time.monotonic()
-    return request("GET", f"{API}/{path}", service="Airtable", params=params,
+    # Airtable asks for 30 s after a rate-limit answer: wait once, then give up until the next sync.
+    return request("GET", f"{API}/{path}", service="Airtable", params=params, attempts=2, rate_limit_wait=30,
                    headers={"Authorization": f"Bearer {token}"})
 
 
