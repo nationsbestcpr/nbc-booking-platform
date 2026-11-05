@@ -787,3 +787,29 @@ def test_airtable_access_problems_are_explained(fake, run_sync, q, monkeypatch):
     fake._airtable = real
     run_sync()
     assert not q("SELECT 1 FROM integration_issues WHERE code = 'SYNC_FAILED' AND resolved_at IS NULL")
+
+
+def test_on_the_test_app_synced_cities_are_open_and_shown(fake, run_sync, q, client, app, monkeypatch):
+    monkeypatch.setitem(app.config, "APP_ENV", "staging")
+    rid = fake.add_class()
+    stats = run_sync()
+    city = q("SELECT * FROM metros WHERE slug = :s", s=fake.metro_slug)[0]
+    assert city["booking_system"] == "engine" and city["cutover_at"] is not None
+    page = text_of(client.get(f"/?city={fake.metro_slug}"))
+    assert "Test site" in page and fake.site_name in page
+    assert "Book now" in page and session_for(q, rid)["is_published"]
+    # A city switched back to Enrollware by an admin stays switched back.
+    with app.app_context(), db.transaction() as conn:
+        conn.execute(text("UPDATE metros SET booking_system = 'enrollware' WHERE id = :m"), {"m": city["id"]})
+    run_sync()
+    assert q("SELECT booking_system FROM metros WHERE id = :m", m=city["id"])[0]["booking_system"] == "enrollware"
+    with app.app_context(), db.transaction() as conn:   # leave other tests' cities on Enrollware
+        conn.execute(text("UPDATE metros SET booking_system = 'enrollware', cutover_at = NULL WHERE id = :m"),
+                     {"m": city["id"]})
+
+
+def test_live_cities_wait_for_the_switch(fake, run_sync, q, app, monkeypatch):
+    monkeypatch.setitem(app.config, "APP_ENV", "production")
+    fake.add_class()
+    run_sync()
+    assert q("SELECT booking_system FROM metros WHERE slug = :s", s=fake.metro_slug)[0]["booking_system"] == "enrollware"

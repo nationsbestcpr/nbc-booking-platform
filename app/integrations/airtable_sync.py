@@ -252,6 +252,9 @@ def run(trigger: str = "schedule", *, user_id: int | None = None, record_id: str
         seen = _sync_schedule(mapping["schedule"], schedule, products, sites, virtual, run_id, stats)
         if record_id is None:
             _mark_removed(seen, run_id, stats)
+        opened = open_test_cities()
+        if opened:
+            stats["test_cities_opened"] = opened
         status = "partial" if stats["problems"] else "succeeded"
         runs.finish(run_id, status, stats)
         with db.transaction() as conn:
@@ -268,6 +271,28 @@ def run(trigger: str = "schedule", *, user_id: int | None = None, record_id: str
     except Exception as exc:
         runs.finish(run_id, "failed", stats, f"{exc.__class__.__name__}: {exc}")
         raise
+
+
+def test_site() -> bool:
+    """The test app (APP_ENV=staging): every city Airtable brings in books here at
+    once, so its classes show on the public page and can be test-booked. Live
+    (production) cities stay on Enrollware until an admin presses Start booking
+    here; that's the real cutover."""
+    from flask import current_app
+    return current_app.config["APP_ENV"] == "staging"
+
+
+def open_test_cities() -> int:
+    """On the test app, cities that were never switched (still on Enrollware, no
+    cutover time) start booking here. A city an admin switches back to Enrollware
+    keeps its cutover time, so it isn't reopened."""
+    if not test_site():
+        return 0
+    with db.transaction() as conn:
+        return conn.execute(text("""
+            UPDATE metros SET booking_system = 'engine', cutover_at = now()
+             WHERE booking_system = 'enrollware' AND cutover_at IS NULL AND is_active
+        """)).rowcount
 
 
 def _check_mapping(mapping: dict, run_id: int) -> bool:
@@ -544,10 +569,14 @@ def _location(record: dict, m: dict, v: dict) -> dict | None:
             market = re.sub(r"[^A-Z]", "", metro_name.upper())[:12] or metro_slug.upper()
             if conn.execute(text("SELECT 1 FROM metros WHERE market_code = :c"), {"c": market}).first():
                 market = f"{market}-{metro_state}"
+            open_now = test_site()
             metro_id = conn.execute(text("""
-                INSERT INTO metros (slug, name, state_code, market_code, time_zone)
-                VALUES (:s, :n, :st, :mc, :tz) RETURNING id
-            """), {"s": metro_slug, "n": metro_name, "st": metro_state, "mc": market, "tz": zone}).scalar_one()
+                INSERT INTO metros (slug, name, state_code, market_code, time_zone, booking_system, cutover_at)
+                VALUES (:s, :n, :st, :mc, :tz, CASE WHEN :open THEN 'engine' ELSE 'enrollware' END,
+                        CASE WHEN :open THEN now() END)
+                RETURNING id
+            """), {"s": metro_slug, "n": metro_name, "st": metro_state, "mc": market, "tz": zone,
+                   "open": open_now}).scalar_one()
 
         site = conn.execute(text("SELECT id, metro_id, slug FROM sites WHERE airtable_record_id = :r"),
                             {"r": record["id"]}).mappings().first()

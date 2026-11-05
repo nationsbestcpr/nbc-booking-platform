@@ -18,6 +18,12 @@
   </div></div>
   {% endif %}
 
+  {% if config.APP_ENV == 'staging' %}
+  <div class="preview-banner test-site" role="note"><div class="wrap">
+    <strong>Test site</strong><span>Bookings made here aren't real, and no real money is charged.</span>
+  </div></div>
+  {% endif %}
+
   <header class="topbar"><div class="wrap">
     <a class="logo" href="{{ url_for('public.home') }}" aria-label="Nation's Best CPR, home">
       <span class="logo-mark" aria-hidden="true"></span>
