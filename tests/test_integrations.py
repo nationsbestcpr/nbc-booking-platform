@@ -856,15 +856,36 @@ def test_console_refund_goes_to_the_card_through_stripe(fake, on_sale, client, s
     res = client.post(page, data={"csrf_token": csrf_from(client, page), "amount": "40.00",
                                   "reason": "customer_cancel", "note": ""})
     assert res.status_code == 302
+    assert "is going back to the card" in text_of(client.get(res.headers["Location"]))
     refund = q("SELECT * FROM refunds WHERE registration_id = :r", r=reg["id"])[0]
-    assert refund["status"] == "processing" and refund["payment_id"]
-    with app.app_context():
-        outbox.run_due(targets=["stripe"])
+    assert refund["payment_id"]                                # sent straight away, not left for the worker
     assert fake.stripe_refunds[-1]["amount"] == "4000"
     refund = q("SELECT status, stripe_refund_id FROM refunds WHERE id = :i", i=refund["id"])[0]
     assert refund["status"] == "succeeded" and refund["stripe_refund_id"]
     assert q("SELECT amount_refunded_cents FROM registrations WHERE id = :r", r=reg["id"])[0]["amount_refunded_cents"] == 4000
     assert "Open in Stripe (test)" in text_of(client.get(f"/console/bookings/{reg['public_id']}"))
+
+
+def test_customer_service_asks_manager_approves_and_stripe_refunds_at_once(fake, on_sale, client, sign_in, q):
+    cs = book(client, on_sale, seats=1).headers["Location"].rsplit("/", 1)[1]
+    stripe_post(client, completed_event(cs, 10800))
+    reg = q("""SELECT r.id, r.public_id FROM registrations r JOIN checkout_sessions c ON c.order_id = r.order_id
+                WHERE c.stripe_checkout_session_id = :cs""", cs=cs)[0]
+    sign_in("cs@example.test")
+    page = f"/console/bookings/{reg['public_id']}/refund"
+    client.post(page, data={"csrf_token": csrf_from(client, page), "amount": "108", "reason": "customer_cancel"})
+    refund = q("SELECT id, status FROM refunds WHERE registration_id = :r", r=reg["id"])[0]
+    assert refund["status"] == "requested"
+    before = len(fake.stripe_refunds)
+    sign_in("manager@example.test")
+    booking = f"/console/bookings/{reg['public_id']}"
+    assert "Approve" in text_of(client.get(booking))                 # managers can decide from the booking too
+    res = client.post(f"/console/refunds/{refund['id']}/approve",
+                      data={"csrf_token": csrf_from(client, booking), "back": booking})
+    assert res.headers["Location"] == booking
+    assert "Approved. Refunded: $108.00 is going back to the card" in text_of(client.get(booking))
+    assert len(fake.stripe_refunds) == before + 1 and fake.stripe_refunds[-1]["amount"] == "10800"
+    assert q("SELECT status FROM refunds WHERE id = :i", i=refund["id"])[0]["status"] == "succeeded"
 
 
 def test_production_never_books_without_payment(fake, on_sale, client, app, monkeypatch):

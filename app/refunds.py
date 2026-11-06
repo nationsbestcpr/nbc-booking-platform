@@ -123,7 +123,20 @@ def request(registration_id: int, amount_cents: int, reason: str, note: str) -> 
         audit.record(conn, "refund.request" if wait else "refund.issue", "registration", registration_id,
                      after={"refund_id": refund_id, "amount_cents": amount_cents, "reason": reason})
         status = "requested" if wait else _send(conn, refund_id)
+    if status == "processing":
+        status = deliver(refund_id)
     return {"id": refund_id, "status": status}
+
+
+def deliver(refund_id: int) -> str:
+    """Send a queued refund to Stripe now rather than at the worker's next pass.
+    Returns the refund's status afterwards ('succeeded', or 'processing' / 'failed')."""
+    from .integrations import outbox
+    try:
+        outbox.deliver_now(f"refund-{refund_id}")
+    except Exception:          # stays queued; the worker retries and the Refunds page shows it
+        pass
+    return db.fetch_value("SELECT status FROM refunds WHERE id = :id", id=refund_id)
 
 
 def _send(conn: Connection, refund_id: int) -> str:
@@ -186,7 +199,8 @@ def approve(refund_id: int) -> str:
                               WHERE id = :id"""), {"u": user.id, "id": refund_id})
         audit.record(conn, "refund.approve", "registration", row["registration_id"],
                      after={"refund_id": refund_id, "amount_cents": row["amount_cents"]})
-        return _send(conn, refund_id)
+        status = _send(conn, refund_id)
+    return deliver(refund_id) if status == "processing" else status
 
 
 def turn_down(refund_id: int, why: str) -> None:

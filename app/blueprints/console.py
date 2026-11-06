@@ -209,6 +209,8 @@ def roster(uid: int, f: dict) -> dict:
         by_class.setdefault(seat["session_id"], []).append(seat)
     for c in found:
         c["students"] = by_class.get(c["id"], [])
+        c["can_refund"] = db.fetch_value("SELECT user_has_permission(:u, 'refund.issue', s.metro_id) "
+                                         "FROM sessions s WHERE s.id = :s", u=uid, s=c["id"])
     query = {k: v for k, v in f.items() if k != "page" and v and not (k == "when" and v == "upcoming")
              and not (k == "status" and v == "live")}
     return {"classes": found, "total": total, "page": page, "pages": pages,
@@ -276,7 +278,7 @@ def find_booking(public_id: str):
           FROM payments WHERE order_id = :o ORDER BY created_at
     """, o=r["order_id"]) if show_money else []
     refunds = db.fetch_all("""
-        SELECT f.amount_cents, f.reason, f.source, f.status, f.requires_manager_approval, f.stripe_refund_id,
+        SELECT f.id, f.amount_cents, f.reason, f.source, f.status, f.requires_manager_approval, f.stripe_refund_id,
                f.created_at, f.processed_at, f.failure_reason, a.display_name AS requested_by
           FROM refunds f LEFT JOIN user_accounts a ON a.id = f.requested_by_user_id
          WHERE f.registration_id = :r OR (f.registration_id IS NULL AND f.order_id = :o)
@@ -307,6 +309,9 @@ def find_booking(public_id: str):
     """, r=r["id"], o=r["order_id"])
     actions = [{"key": k, "label": label, "allowed": user.can(perm, r["metro_id"])}
                for k, (label, perm) in ACTIONS.items()]
+    can_decide = user.can("refund.approve_large", r["metro_id"])
+    for f in refunds:
+        f["can_decide"] = can_decide and f["status"] == "requested"
     return render_template("console/booking.html", r=r, seats=seats, payments=payments, refunds=refunds,
                            transfers=transfers, notes=notes, history=history, actions=actions,
                            show_money=show_money, can_note=user.can("student.note", r["metro_id"]), **_ctx())
@@ -407,12 +412,23 @@ def find_booking_refund(public_id: str):
         done = refunds.request(r["id"], amount, form["reason"], form["note"])
     except refunds.RefundError as exc:
         return _refund_page(r, str(exc), form, 400)
-    flash({"requested": f"Refund of ${amount / 100:,.2f} sent to a manager to approve. It shows under Refunds "
-                        "until they do.",
-           "processing": f"Refund of ${amount / 100:,.2f} is on its way to the card through Stripe.",
-           "succeeded": f"Refund of ${amount / 100:,.2f} recorded (test booking: no card was charged)."}
-          [done["status"]], "ok")
+    flash(*_refund_message(done["id"]))
     return redirect(url_for("console.find_booking", public_id=public_id))
+
+
+def _refund_message(refund_id: int, prefix: str = "") -> tuple[str, str]:
+    f = db.fetch_one("SELECT status, amount_cents, payment_id, failure_reason FROM refunds WHERE id = :id",
+                     id=refund_id)
+    amount = f"${f['amount_cents'] / 100:,.2f}"
+    if f["status"] == "requested":
+        return f"Refund of {amount} sent to a manager to approve. It's under Refunds → Waiting for a manager.", "ok"
+    if f["status"] == "succeeded":
+        return prefix + (f"Refunded: {amount} is going back to the card (Stripe)." if f["payment_id"] else
+                         f"Refund of {amount} recorded (test booking: no card was charged)."), "ok"
+    if f["status"] == "failed":
+        return prefix + f"Stripe refused the refund of {amount}: {f['failure_reason']}", "error"
+    return prefix + (f"Refund of {amount} is queued for Stripe; it goes through in a minute or two "
+                     "(watch Refunds → On their way)."), "ok"
 
 
 REFUND_TABS = [("waiting", "Waiting for a manager", ("requested",)),
@@ -458,7 +474,24 @@ def refunds_list():
                    for k, label, st in REFUND_TABS]
     for row in rows:
         row["can_decide"] = row["status"] == "requested" and user.can("refund.approve_large", row["metro_id"])
-    return render_template("console/refunds.html", rows=rows, tab=tab, status_tabs=status_tabs, q=q,
+    # Start a refund: find the paid seat by student, buyer, phone or booking number.
+    who = request.args.get("who", "").strip()[:120]
+    candidates = db.fetch_all(f"""
+        SELECT r.public_id, r.status, r.attendee_first_name, r.attendee_last_name, r.attendee_email,
+               r.amount_paid_cents, r.amount_refunded_cents, o.buyer_email,
+               s.starts_at, s.ends_at, s.time_zone, cf.name AS course_name, si.name AS site_name,
+               EXISTS (SELECT 1 FROM refunds f WHERE f.registration_id = r.id
+                        AND f.status IN ('requested', 'approved', 'processing')) AS refund_pending
+          FROM registrations r JOIN orders o ON o.id = r.order_id JOIN sessions s ON s.id = r.session_id
+          JOIN sites si ON si.id = s.site_id JOIN course_families cf ON cf.id = s.course_family_id
+         WHERE user_has_permission(:uid, 'refund.issue', s.metro_id)
+           AND r.amount_paid_cents > r.amount_refunded_cents
+           AND {_SEAT_WHERE}
+         ORDER BY s.starts_at DESC LIMIT 25
+    """, uid=user.id, status="all", channel="", q=who, digits=re.sub(r"\D", "", who),
+        ref=who.lower().replace("#", "").strip()) if len(who) >= 2 else []
+    return render_template("console/refunds.html", rows=rows, tab=tab, status_tabs=status_tabs, q=q, who=who,
+                           candidates=candidates, can_issue=user.has_permission("refund.issue"),
                            reasons=refunds.REASONS, threshold=refunds.threshold_cents(), **_ctx())
 
 
@@ -469,9 +502,8 @@ def refund_decide(refund_id: int, decision: str):
         abort(404)
     try:
         if decision == "approve":
-            status = refunds.approve(refund_id)
-            flash("Approved. " + ("The refund is on its way to the card through Stripe." if status == "processing"
-                                  else "Recorded (test booking: no card was charged)."), "ok")
+            refunds.approve(refund_id)
+            flash(*_refund_message(refund_id, "Approved. "))
         else:
             refunds.turn_down(refund_id, request.form.get("why", ""))
             flash("Turned down. The person who asked can see it under Refunds → Failed or turned down.", "ok")

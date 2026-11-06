@@ -1,4 +1,5 @@
 {% extends "dash/layout.html" %}
+{% import "console/_decide.html" as d with context %}
 {% block title %}{{ r.attendee_first_name }} {{ r.attendee_last_name }} · Booking{% endblock %}
 {% block heading %}{{ r.attendee_first_name }} {{ r.attendee_last_name }} <span class="accent">{{ r.course_name }}</span>{% endblock %}
 {% block subhead %}{% set st = reg_status.get(r.status, ('off', r.status)) %}
@@ -79,7 +80,8 @@
     <tbody>{% for f in refunds %}{% set fs = refund_status.get(f.status, ('off', f.status)) %}
       <tr><td class="num">{{ f.amount_cents|money }}</td>
         <td>{{ f.reason|replace('_', ' ')|capitalize }}<br><span class="small muted">{{ {'console': 'By ' ~ (f.requested_by or 'staff'), 'engine_auto': 'Automatic', 'stripe_dashboard': 'Done in Stripe'}.get(f.source, f.source) }}{% if f.requires_manager_approval %} · needs a manager{% endif %}</span></td>
-        <td><span class="status {{ fs[0] }}">{{ fs[1] }}</span>{% if f.failure_reason %}<br><span class="small muted">{{ f.failure_reason }}</span>{% endif %}</td>
+        <td><span class="status {{ fs[0] }}">{{ fs[1] }}</span>{% if f.failure_reason %}<br><span class="small muted">{{ f.failure_reason }}</span>{% endif %}
+          {% if f.can_decide %}{{ d.decide(f, url_for('console.find_booking', public_id=r.public_id)) }}{% endif %}</td>
         <td class="num small">{{ (f.processed_at or f.created_at)|office_time }}</td></tr>
     {% endfor %}</tbody>
   </table></div>

@@ -58,6 +58,22 @@ def _backoff_seconds(attempts: int) -> int:
     return min(60, 2 ** max(attempts - 1, 0)) * 60
 
 
+def deliver_now(key: str) -> str | None:
+    """Send one queued job straight away (e.g. a refund a manager just approved), instead
+    of waiting up to 15 seconds for the worker. Best effort: if it fails it stays queued
+    and the worker retries it as usual. Returns 'succeeded' / 'failed' / 'dead', or None
+    when the job isn't waiting (already sent, or the worker has it)."""
+    from . import checkout, ghl, stripe_api  # noqa: F401  (handler registrations)
+    with db.transaction() as conn:
+        job = conn.execute(text("""
+            UPDATE outbox_jobs SET status = 'running', locked_at = now(), locked_by = :w, attempts = attempts + 1
+             WHERE id = (SELECT id FROM outbox_jobs WHERE idempotency_key = :k AND status IN ('pending', 'failed')
+                           AND run_after <= now() FOR UPDATE SKIP LOCKED)
+            RETURNING *
+        """), {"w": WORKER_NAME, "k": key}).mappings().first()
+    return _run_one(dict(job)) if job else None
+
+
 def run_due(limit: int = 25, targets: list[str] | None = None) -> dict[str, int]:
     """Deliver up to `limit` due jobs, claiming one at a time. Returns counts by result.
 

@@ -183,7 +183,7 @@ def seat(app, q):
               JOIN session_availability a ON a.session_id = sp.session_id
               JOIN sessions s ON s.id = sp.session_id JOIN metros m ON m.id = s.metro_id
              WHERE a.seats_left > 0 AND s.starts_at > now() AND m.slug = 'richmond-va' AND sp.is_offered
-             ORDER BY s.starts_at LIMIT 1""")).mappings().one()
+             ORDER BY a.seats_left DESC, s.starts_at LIMIT 1""")).mappings().one()
         o = conn.execute(text("""INSERT INTO orders (channel, buyer_first_name, buyer_last_name, buyer_email, livemode,
                                     subtotal_cents, total_cents, status, paid_at, amount_paid_cents)
                                  VALUES ('web', 'Ref', 'Und', :e, false, :p, :p, 'paid', now(), :p) RETURNING id"""),
@@ -196,7 +196,10 @@ def seat(app, q):
                              VALUES (:o, :h, :s, :p, 'Ref', 'Und', :e, :c, 'confirmed', now(), :c)"""),
                      {"o": o, "h": h, "s": sp["session_id"], "p": sp["product_id"], "e": email, "c": sp["price_cents"]})
         conn.execute(text("UPDATE seat_holds SET status = 'converted', released_at = now() WHERE id = :h"), {"h": h})
-    return q("SELECT id, public_id, amount_paid_cents FROM registrations WHERE attendee_email = :e", e=email)[0]
+    yield q("SELECT id, public_id, amount_paid_cents FROM registrations WHERE attendee_email = :e", e=email)[0]
+    with app.app_context(), db.transaction() as conn:     # give the seat back, so other tests' seat counts hold
+        conn.execute(text("""UPDATE registrations SET status = 'cancelled', cancelled_at = now(),
+                                    cancel_reason_code = 'admin' WHERE attendee_email = :e"""), {"e": email})
 
 
 def ask_refund(client, seat, amount: str, reason: str = "customer_cancel", note: str = ""):
@@ -270,3 +273,13 @@ def test_threshold_lets_small_refunds_through_without_a_manager(app, client, sig
     finally:
         with app.app_context(), db.transaction() as conn:
             conn.execute(text("UPDATE app_settings SET value = 'null' WHERE key = 'large_refund_threshold_cents'"))
+
+
+
+def test_refund_can_be_started_from_refunds_and_from_find(client, sign_in, seat):
+    sign_in("cs@example.test")
+    page = text_of(client.get("/console/refunds?who=Ref Und"))
+    assert "Start a refund" in page and f"/console/bookings/{seat['public_id']}/refund" in page
+    assert "No paid seats match" in text_of(client.get("/console/refunds?who=nobody-at-all"))
+    find = text_of(client.get("/console/find?q=Ref Und"))
+    assert f"/console/bookings/{seat['public_id']}/refund" in find and ">Open</a>" in find

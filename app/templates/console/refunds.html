@@ -4,15 +4,44 @@
 {% block heading %}<span class="accent">Refunds</span>{% endblock %}
 {% block subhead %}<p>Every refund in your cities: who asked, who approved, and whether the money is back. To start one, open the student's booking and press Refund.</p>{% endblock %}
 {% block panel %}
+{% if can_issue %}
+<section class="panel" id="new" aria-labelledby="new-title">
+  <h2 id="new-title">Start a refund</h2>
+  <form class="desk-search" method="get" action="{{ url_for('console.refunds_list') }}#new" role="search">
+    <input type="hidden" name="tab" value="{{ tab }}">
+    <label for="who">Find the student who paid</label>
+    <div class="desk-search-row">
+      <input type="search" id="who" name="who" value="{{ who }}" placeholder="Name, email, phone, or booking number" autocomplete="off" required minlength="2">
+      <button class="pill" type="submit">Find <span class="arrow" aria-hidden="true">→</span></button>
+    </div>
+  </form>
+  {% if who %}
+    {% if candidates %}
+    <div class="scroll-x"><table class="table">
+      <thead><tr><th>Student</th><th>Class</th><th>Paid</th><th>Status</th><th></th></tr></thead>
+      <tbody>{% for c in candidates %}{% set st = reg_status.get(c.status, ('off', c.status)) %}
+        <tr><td><strong>{{ c.attendee_first_name }} {{ c.attendee_last_name }}</strong><br><span class="small muted">{{ c.attendee_email }}{% if c.buyer_email|lower != c.attendee_email|lower %} · paid by {{ c.buyer_email }}{% endif %}</span></td>
+          <td class="small">{{ c.course_name }}<br><span class="muted num">{{ class_date(c.starts_at, c.time_zone) }} · {{ c.site_name }}</span></td>
+          <td class="num small">{{ c.amount_paid_cents|money }}{% if c.amount_refunded_cents %}<br><span class="muted">{{ c.amount_refunded_cents|money }} back</span>{% endif %}</td>
+          <td><span class="status {{ st[0] }}">{{ st[1] }}</span>{% if c.refund_pending %}<br><span class="status wait">Refund pending</span>{% endif %}</td>
+          <td><a class="btn-small primary" href="{{ url_for('console.find_booking_action', public_id=c.public_id, action='refund') }}">Refund</a></td></tr>
+      {% endfor %}</tbody>
+    </table></div>
+    {% else %}
+    <div class="empty">No paid seats match “{{ who }}” in your cities.</div>
+    {% endif %}
+  {% endif %}
+</section>
+{% endif %}
+
 <section class="panel">
   <nav class="filters" aria-label="Refunds by status">
     {% for t in status_tabs %}<a class="filter{{ ' active' if t.key == tab }}" href="{{ url_for('console.refunds_list', tab=t.key, q=q or None) }}"{% if t.key == tab %} aria-current="page"{% endif %}>{{ t.label }} <span class="num">{{ t.count }}</span></a>{% endfor %}
   </nav>
   <form class="toolbar" method="get" action="{{ url_for('console.refunds_list') }}" role="search">
     <input type="hidden" name="tab" value="{{ tab }}">
-    <div class="field"><label for="rq">Student</label><input type="search" id="rq" name="q" value="{{ q }}" placeholder="Name or email"></div>
+    <div class="field"><label for="rq">Search these refunds</label><input type="search" id="rq" name="q" value="{{ q }}" placeholder="Student name or email"></div>
     <button class="pill plain" type="submit">Search</button>
-    <a class="pill" href="{{ url_for('console.find') }}">Start a refund: find the student <span class="arrow" aria-hidden="true">→</span></a>
   </form>
   {% if threshold is none %}<p class="muted small">Until the large-refund amount is set in Business settings, every refund asked for by customer service waits for a manager.</p>{% endif %}
   {% if rows %}

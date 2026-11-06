@@ -39,14 +39,18 @@
       {% if current_user.has_permission('class.view') %}<br><a href="{{ url_for('admin.classes_detail', sid=c.id) }}">Class list →</a>{% endif %}</span>
   </div>
   <div class="scroll-x"><table class="table">
-    <thead><tr><th>Student</th><th>Contact</th><th>Course</th><th>Status</th>{% if show_money %}<th>Paid</th>{% endif %}<th>Booked</th></tr></thead>
+    <thead><tr><th>Student</th><th>Contact</th><th>Course</th><th>Status</th>{% if show_money %}<th>Paid</th>{% endif %}<th>Booked</th><th></th></tr></thead>
     <tbody>{% for s in c.students %}{% set st = reg_status.get(s.status, ('off', s.status)) %}
       <tr><td><a href="{{ url_for('console.find_booking', public_id=s.public_id) }}"><strong>{{ s.attendee_first_name }} {{ s.attendee_last_name }}</strong></a>{% if s.checked_in_at %}<br><span class="small muted">Checked in</span>{% endif %}</td>
         <td class="small">{{ s.attendee_email }}{% if s.attendee_phone_e164 %}<br><span class="num">{{ s.attendee_phone_e164 }}</span>{% endif %}</td>
         <td class="small">{{ s.product_name }}</td>
         <td><span class="status {{ st[0] }}">{{ st[1] }}</span>{% if s.refund_pending %}<br><span class="status wait">Refund pending</span>{% endif %}</td>
         {% if show_money %}<td class="num small">{{ s.amount_paid_cents|money }}{% if s.amount_refunded_cents %}<br><span class="muted">{{ s.amount_refunded_cents|money }} back</span>{% endif %}</td>{% endif %}
-        <td class="small">{{ channels.get(s.channel, s.channel) }}{% if s.buyer_email|lower != s.attendee_email|lower %}<br><span class="muted">by {{ s.buyer_first_name }} {{ s.buyer_last_name }}</span>{% endif %}</td></tr>
+        <td class="small">{{ channels.get(s.channel, s.channel) }}{% if s.buyer_email|lower != s.attendee_email|lower %}<br><span class="muted">by {{ s.buyer_first_name }} {{ s.buyer_last_name }}</span>{% endif %}</td>
+        <td><div class="row-actions">
+          <a class="btn-small" href="{{ url_for('console.find_booking', public_id=s.public_id) }}">Open</a>
+          {% if c.can_refund and s.amount_paid_cents > s.amount_refunded_cents %}<a class="btn-small primary" href="{{ url_for('console.find_booking_action', public_id=s.public_id, action='refund') }}">Refund</a>{% endif %}
+        </div></td></tr>
     {% endfor %}</tbody>
   </table></div>
 </section>
