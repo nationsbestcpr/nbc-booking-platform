@@ -115,12 +115,14 @@ INSERT INTO permissions (code, area, description, own_records_only) VALUES
   ('audit.view',               'Admin',       'See the full action log', false),
   ('report.view',              'Admin',       'See reports and numbers', false);
 
+-- The Integrations page (system.health_view, system.issue_resolve) is admin-only (0006).
+
 -- customer_service
 INSERT INTO role_permissions (role_code, permission_code)
 SELECT 'customer_service', unnest(ARRAY[
   'class.view', 'student.view', 'student.edit', 'student.note',
   'booking.create_phone', 'booking.create_invoice', 'booking.transfer', 'booking.transfer_bulk', 'booking.cancel',
-  'payment.view', 'refund.issue', 'waitlist.view', 'waitlist.manage', 'system.health_view']);
+  'payment.view', 'refund.issue', 'waitlist.view', 'waitlist.manage']);
 
 -- manager = customer service + the manager-only decisions
 INSERT INTO role_permissions (role_code, permission_code)
@@ -128,7 +130,7 @@ SELECT 'manager', permission_code FROM role_permissions WHERE role_code = 'custo
 UNION
 SELECT 'manager', unnest(ARRAY[
   'refund.approve_large', 'class.capacity_override', 'class.packet_view', 'booking.attendance',
-  'teaching.coverage_view', 'audit.view', 'report.view', 'system.issue_resolve', 'content.approve']);
+  'teaching.coverage_view', 'audit.view', 'report.view', 'content.approve']);
 
 -- operations
 INSERT INTO role_permissions (role_code, permission_code)
@@ -136,7 +138,7 @@ SELECT 'operations', unnest(ARRAY[
   'class.view', 'class.packet_view', 'class.roster_export', 'class.sync_now', 'booking.attendance',
   'waitlist.view', 'instructor.view', 'instructor.manage',
   'teaching.coverage_view', 'teaching.post_offer', 'teaching.award', 'teaching.helper_assign',
-  'pay.view_all', 'alert.coverage', 'system.health_view', 'system.issue_resolve', 'content.edit']);
+  'pay.view_all', 'alert.coverage', 'content.edit']);
 
 -- helper_recruiting
 INSERT INTO role_permissions (role_code, permission_code)
@@ -149,7 +151,7 @@ SELECT 'location_approver', unnest(ARRAY['class.view', 'waitlist.view', 'alert.s
 
 -- viewer
 INSERT INTO role_permissions (role_code, permission_code)
-SELECT 'viewer', unnest(ARRAY['class.view', 'waitlist.view', 'teaching.coverage_view', 'report.view', 'system.health_view']);
+SELECT 'viewer', unnest(ARRAY['class.view', 'waitlist.view', 'teaching.coverage_view', 'report.view']);
 
 -- user (every account) and student (has booked)
 INSERT INTO role_permissions (role_code, permission_code)

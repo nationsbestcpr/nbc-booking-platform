@@ -540,5 +540,11 @@ SELECT pg_temp.check(
   AND NOT EXISTS (SELECT 1 FROM role_permissions WHERE permission_code = 'user.impersonate'),
   'user.impersonate exists and no role but admin (all permissions) has it');
 
+-- 0006: only admins see the Integrations page.
+SELECT pg_temp.check(
+  NOT EXISTS (SELECT 1 FROM role_permissions WHERE permission_code IN ('system.health_view', 'system.issue_resolve'))
+  AND (SELECT grants_all FROM roles WHERE code = 'admin'),
+  'sync status and data problems are for admins only');
+
 \echo 'All schema checks passed.'
 ROLLBACK;

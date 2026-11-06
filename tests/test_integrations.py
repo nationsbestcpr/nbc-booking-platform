@@ -685,9 +685,11 @@ def test_airtable_button_syncs_one_class(fake, run_sync, client, sign_in, q):
 
 
 def test_sync_buttons_need_their_permission(fake, client, sign_in):
-    sign_in("cs@example.test")         # customer service: sees status, can't run the sync
-    assert client.get("/admin/integrations").status_code == 200
+    sign_in("cs@example.test")         # customer service: no Integrations page, can't run the sync
+    assert client.get("/admin/integrations").status_code == 403
     assert client.get(f"/admin/sync?record={rec_id()}").status_code == 403
+    sign_in("admin@example.test")
+    assert client.get("/admin/integrations").status_code == 200
 
 
 def test_ghl_custom_field_ids_are_edited_in_business_settings(fake, on_sale, client, sign_in, q, app):

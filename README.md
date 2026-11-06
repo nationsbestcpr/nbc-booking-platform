@@ -58,6 +58,11 @@ keep the admin dashboard, with a link to the console. Which dashboard a role
 opens is `roles.dashboard_key` (`CONSOLE_DASHBOARDS` in `app/auth.py`), and
 every list only shows the cities the person's role covers.
 
+**Integrations is admin-only.** Sync status, the unsynced list and data
+problems (`system.health_view`, `system.issue_resolve`) belong to the admin
+role only (migration 0006); an admin can tick them for another role on
+Roles & permissions if that's ever needed.
+
 **View as and roles.** On Admin → Users, each row has **View as** and
 **Roles**; a user's page has both too. An admin can give or remove roles and
 press **View as** to open the app

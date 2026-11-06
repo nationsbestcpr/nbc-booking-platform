@@ -88,7 +88,10 @@ def test_signed_out_people_are_sent_to_sign_in(client):
     ("alder1@example.test", ["/my", "/account/profile", "/account/settings"],
      ["/teach", "/admin", "/admin/users", "/admin/roles", "/admin/integrations"]),
     ("marcus.hale@example.test", ["/teach", "/my"], ["/admin", "/admin/users", "/admin/integrations"]),
-    ("cs@example.test", ["/admin", "/admin/integrations"], ["/admin/users", "/admin/roles", "/teach"]),
+    ("cs@example.test", ["/admin", "/console"], ["/admin/users", "/admin/roles", "/admin/integrations", "/teach"]),
+    ("manager@example.test", ["/console", "/console/approvals"], ["/admin/integrations", "/admin/users"]),
+    ("ops@example.test", ["/admin"], ["/admin/integrations"]),
+    ("viewer@example.test", ["/admin"], ["/admin/integrations"]),
     ("admin@example.test", ["/admin", "/admin/users", "/admin/roles", "/admin/roles/viewer", "/admin/integrations"], []),
 ])
 def test_each_page_needs_its_permission(client, sign_in, email, allowed, refused):
@@ -102,7 +105,7 @@ def test_each_page_needs_its_permission(client, sign_in, email, allowed, refused
 def test_tabs_follow_permissions(client, sign_in):
     sign_in("cs@example.test")
     page = client.get("/admin").get_data(as_text=True)
-    assert ">Integrations</a>" in page and ">Users</a>" not in page and ">Roles &amp; permissions</a>" not in page
+    assert ">Integrations</a>" not in page and ">Users</a>" not in page and ">Roles &amp; permissions</a>" not in page
     sign_in("admin@example.test")
     page = client.get("/admin").get_data(as_text=True)
     assert ">Users</a>" in page and ">Roles &amp; permissions</a>" in page and ">Integrations</a>" in page
@@ -331,10 +334,10 @@ def test_sidebar_sections_follow_permissions(client, sign_in):
     sign_in("cs@example.test")
     nav = sidebar(client.get("/console").get_data(as_text=True))
     for shown in (">Today</a>", ">Find a student</a>", ">Book by phone or invoice</a>", ">Classes</a>",
-                  ">All bookings</a>", ">Waiting lists</a>", ">Integrations</a>", ">Password</a>"):
+                  ">All bookings</a>", ">Waiting lists</a>", ">Password</a>"):
         assert shown in nav
-    for hidden in (">Refund approvals</a>", ">Users</a>", ">Instructors</a>", ">Action log</a>",
-                   ">Business settings</a>"):
+    for hidden in (">Refund approvals</a>", ">Integrations</a>", ">Users</a>", ">Instructors</a>",
+                   ">Action log</a>", ">Business settings</a>"):
         assert hidden not in nav
     sign_in("marcus.hale@example.test")
     nav = sidebar(client.get("/teach").get_data(as_text=True))
