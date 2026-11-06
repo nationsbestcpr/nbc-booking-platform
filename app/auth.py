@@ -13,10 +13,12 @@ Passwords are stored only as salted scrypt hashes (werkzeug). Google and
 Microsoft sign-in are in app/oauth.py.
 
 "View as" (impersonation): someone with 'user.impersonate' (admins) can open
-the app as another account to see what they see. It is read-only: while
-viewing as someone, every change (any POST but "Return to my account" and
-sign-out) is refused. It ends by itself after VIEW_AS_MINUTES, can't target
-an admin or a switched-off account, and its start and end are in the action log.
+the app as another account and use it with that account's access, to see and
+test what they see and do. Everything done meanwhile is recorded in the action
+log as the admin, acting as that account (audit.record). Their password,
+profile and sign-in can't be changed this way. It ends by itself after
+VIEW_AS_MINUTES, can't target an admin or a switched-off account, and its
+start and end are in the action log.
 """
 
 from __future__ import annotations
@@ -345,7 +347,8 @@ def safe_next(target: str | None) -> str:
 # --- View as (impersonation) -----------------------------------------------------------
 
 VIEW_AS_MINUTES = 60
-VIEW_AS_ALLOWED_POSTS = ("admin.view_as_stop", "account.sign_out")
+# While viewing as someone, these stay theirs alone: their password, profile and sign-in.
+VIEW_AS_BLOCKED_POSTS = ("me.settings", "me.profile", "account.sign_in", "account.create_account")
 
 
 class ViewAsError(ValueError):
@@ -361,7 +364,7 @@ def viewing_as() -> dict | None:
 
 
 def start_view_as(target_id: int, back: str | None = None) -> dict:
-    """Switch this browser to the target account (read-only). Returns the target.
+    """Switch this browser to the target account (with its access). Returns the target.
     `back` is the admin page to return to afterwards (the Users list or the user's page)."""
     admin = current_user()
     if admin is None or "user.impersonate" not in admin.permissions or viewing_as():
@@ -423,9 +426,9 @@ def init_app(app: Flask) -> None:
             from flask import flash
             flash(f"“View as” ended after {VIEW_AS_MINUTES} minutes; you're back on your own account.", "ok")
             return redirect(url_for("me.dashboard") if current_user() else url_for("public.home"))
-        if request.method not in ("GET", "HEAD", "OPTIONS") and request.endpoint not in VIEW_AS_ALLOWED_POSTS:
+        if request.method not in ("GET", "HEAD", "OPTIONS") and request.endpoint in VIEW_AS_BLOCKED_POSTS:
             from flask import render_template
-            return render_template("errors/error.html", code=403, title="Changes are switched off",
-                                   message="You're viewing as someone else, so nothing can be changed. "
-                                           "Use “Return to my account” at the top of the page first."), 403
+            return render_template("errors/error.html", code=403, title="That stays theirs",
+                                   message="While viewing as someone, their password, profile and sign-in "
+                                           "can't be changed. Use “Return to my account” at the top first."), 403
         return None

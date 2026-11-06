@@ -26,7 +26,7 @@
 
   {% if viewing_as and current_user %}
   <div class="view-as-bar" role="status"><div class="wrap">
-    <span><strong>Viewing as {{ current_user.display_name }}</strong> ({{ current_user.main_role.name }}) · read-only: nothing can be changed. Started by {{ viewing_as.admin_name }}.</span>
+    <span><strong>Viewing as {{ current_user.display_name }}</strong> ({{ current_user.main_role.name }}) · you have their access; anything you do is logged as {{ viewing_as.admin_name }}.</span>
     <form method="post" action="{{ url_for('admin.view_as_stop') }}">{{ csrf_input() }}<button class="pill small-pill" type="submit">Return to my account</button></form>
   </div></div>
   {% endif %}

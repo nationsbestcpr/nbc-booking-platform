@@ -19,13 +19,21 @@ from . import auth
 def record(conn: Connection, action: str, entity_type: str, entity_id: int | None = None, *,
            before: Any = None, after: Any = None, reason: str | None = None) -> None:
     user = auth.current_user()
+    actor_id = user.id
+    viewing = auth.viewing_as()
+    if viewing:
+        # An admin using "View as": the admin did it, from this account's role.
+        actor_id = viewing["admin_id"]
+        mark = {"viewing_as_user_id": user.id, "viewing_as": user.display_name}
+        after = {**after, **mark} if isinstance(after, dict) else ({**mark, "value": after} if after is not None
+                                                                   else mark)
     conn.execute(text("""
         INSERT INTO audit_log (actor_type, user_account_id, acting_role, action, entity_type, entity_id,
                                reason, before, after, ip)
         VALUES ('user', :uid, :role, :action, :etype, :eid, :reason,
                 CAST(:before AS jsonb), CAST(:after AS jsonb), CAST(:ip AS inet))
     """), {
-        "uid": user.id, "role": user.main_role["code"], "action": action, "etype": entity_type,
+        "uid": actor_id, "role": user.main_role["code"], "action": action, "etype": entity_type,
         "eid": entity_id, "reason": reason,
         "before": None if before is None else json.dumps(before, default=str),
         "after": None if after is None else json.dumps(after, default=str),

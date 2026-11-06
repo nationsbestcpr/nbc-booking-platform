@@ -60,14 +60,35 @@ def test_admin_sees_the_app_as_a_student_and_comes_back(client, sign_in, uid, q)
     assert "Started viewing the app as this account" in text_of(client.get(f"/admin/users/{student}"))
 
 
-def test_nothing_can_be_changed_while_viewing_as(client, sign_in, uid, q):
+def test_viewing_as_acts_with_their_access_logged_as_the_admin(client, sign_in, uid, q):
+    sign_in("admin@example.test")
+    admin, cs = uid("admin@example.test"), uid("cs@example.test")
+    view_as(client, cs)
+    reg = q("SELECT id, public_id FROM registrations WHERE attendee_email = 'alder1@example.test' LIMIT 1")[0]
+    path = f"/console/bookings/{reg['public_id']}"
+    body = f"Added while viewing as {uuid.uuid4().hex[:6]}"
+    res = client.post(f"{path}/notes", data={"csrf_token": csrf_from(client, path), "body": body})
+    assert res.status_code == 302                                         # changes work with their access
+    note = q("SELECT author_user_id FROM notes WHERE body = :b", b=body)[0]
+    assert note["author_user_id"] == cs
+    log = q("SELECT user_account_id, acting_role, after FROM audit_log WHERE action = 'booking.note_add' "
+            "ORDER BY id DESC LIMIT 1")[0]
+    assert log["user_account_id"] == admin and log["acting_role"] == "customer_service"   # who really did it
+    assert log["after"]["viewing_as_user_id"] == cs
+    stop(client)
+
+
+def test_their_password_and_profile_stay_theirs(client, sign_in, uid, q):
     sign_in("admin@example.test")
     student = uid("alder1@example.test")
     view_as(client, student)
     res = client.post("/account/profile", data={"csrf_token": csrf_from(client, "/account/profile"),
                                                 "display_name": "Changed By Admin"})
-    assert res.status_code == 403 and "Changes are switched off" in text_of(res)
+    assert res.status_code == 403 and "That stays theirs" in text_of(res)
     assert q("SELECT display_name FROM user_accounts WHERE id = :i", i=student)[0]["display_name"] == "Alex Alder"
+    res = client.post("/account/settings", data={"csrf_token": csrf_from(client, "/account/settings"),
+                                                 "current_password": "x", "new_password": "long-enough-2"})
+    assert res.status_code == 403
     stop(client)
 
 

@@ -58,7 +58,7 @@
       <form method="post" action="{{ url_for('admin.view_as', uid=account.id) }}" class="view-as-form">{{ csrf_input() }}
         <input type="hidden" name="back" value="{{ url_for('admin.users_detail', uid=account.id) }}">
         <button class="btn-small primary" type="submit">View as {{ account.display_name.split(' ')[0] }}</button>
-        <span class="small muted">See the app exactly as they do: their dashboard, bookings and pages. Read-only; ends after an hour.</span></form>
+        <span class="small muted">Use the app exactly as they do, with their access: their dashboard, pages and actions. What you do is logged as you; their password and profile stay theirs. Ends after an hour.</span></form>
     {% endif %}
     {% if is_self %}
       <p class="muted small">This is your own account.</p>

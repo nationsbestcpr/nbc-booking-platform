@@ -24,7 +24,7 @@
         <td><div class="row-actions">
           {% if u.can_view_as %}<form method="post" action="{{ url_for('admin.view_as', uid=u.id) }}">{{ csrf_input() }}
             <input type="hidden" name="back" value="{{ back }}">
-            <button class="btn-small primary" type="submit" title="Open the app as {{ u.display_name }} (read-only)">View as</button></form>{% endif %}
+            <button class="btn-small primary" type="submit" title="Use the app as {{ u.display_name }}, with their access">View as</button></form>{% endif %}
           <a class="btn-small" href="{{ url_for('admin.users_detail', uid=u.id) }}">Roles</a>
         </div></td></tr>
     {% endfor %}

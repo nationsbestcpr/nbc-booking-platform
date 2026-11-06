@@ -41,7 +41,15 @@ def _refusal_message(exc: DBAPIError) -> str | None:
 
 
 def describe(entry: dict, role_names: dict[str, str], account_name: str | None = None) -> str:
-    """One action-log row in plain English."""
+    """One action-log row in plain English (noting "View as" when an admin acted as someone)."""
+    text_ = _describe(entry, role_names, account_name)
+    after = entry.get("after")
+    if isinstance(after, dict) and after.get("viewing_as"):
+        text_ += f" (while viewing as {after['viewing_as']})"
+    return text_
+
+
+def _describe(entry: dict, role_names: dict[str, str], account_name: str | None = None) -> str:
     after, before = entry.get("after") or {}, entry.get("before") or {}
     who = f" for {account_name}" if account_name else ""
     action = entry["action"]
@@ -72,7 +80,7 @@ def describe(entry: dict, role_names: dict[str, str], account_name: str | None =
         where = "here" if after.get("booking_system") == "engine" else "in Enrollware"
         return f"Switched {after.get('city', 'a city')} to book {where}"
     if action == "user.view_as_start":
-        return f"Started viewing the app as this account{who} (read-only)"
+        return f"Started viewing the app as this account{who}"
     if action == "user.view_as_stop":
         return f"Stopped viewing as this account{who}" + (" (timed out)" if after.get("reason") == "timed out" else "")
     if action == "user.password_reset":
@@ -285,7 +293,7 @@ def users_revoke(uid: int, grant_id: int):
 @bp.post("/users/<int:uid>/view-as")
 @auth.permission_required("user.impersonate")
 def view_as(uid: int):
-    """See the app exactly as this account does (read-only, ends after an hour)."""
+    """Use the app as this account does, with its access (logged as the admin; ends after an hour)."""
     try:
         with db.transaction() as conn:
             audit.record(conn, "user.view_as_start", "user_account", uid)
@@ -294,14 +302,13 @@ def view_as(uid: int):
         flash(str(exc), "error")
         back = request.form.get("back")
         return redirect(back if auth.is_safe_next(back) else url_for("admin.users_detail", uid=uid))
-    flash(f"You're viewing as {target['display_name']}. Nothing can be changed until you return to your account.",
-          "ok")
+    flash(f"You're viewing as {target['display_name']}, with their access. Anything you do is logged as you.", "ok")
     return redirect(url_for("me.dashboard"))
 
 
 @bp.post("/view-as/stop")
 def view_as_stop():
-    """Back to your own account (the only change allowed while viewing as someone)."""
+    """Back to your own account."""
     if not auth.viewing_as():
         return redirect(url_for("me.dashboard"))
     viewed, back = auth.stop_view_as()
