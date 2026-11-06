@@ -58,8 +58,9 @@ keep the admin dashboard, with a link to the console. Which dashboard a role
 opens is `roles.dashboard_key` (`CONSOLE_DASHBOARDS` in `app/auth.py`), and
 every list only shows the cities the person's role covers.
 
-**View as and roles.** On a user's page (Admin → Users → Roles and access)
-an admin can give or remove roles and press **View as** to open the app
+**View as and roles.** On Admin → Users, each row has **View as** and
+**Roles**; a user's page has both too. An admin can give or remove roles and
+press **View as** to open the app
 exactly as that account sees it. Viewing as someone is read-only (every
 change is refused until "Return to my account"), ends by itself after an
 hour, can't be used on another admin, and its start and end are in the

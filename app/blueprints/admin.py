@@ -147,7 +147,8 @@ def users():
     status = request.args.get("status", "")
     rows = db.fetch_all("""
         SELECT a.id, a.email, a.display_name, a.status, a.last_sign_in_at, a.created_at,
-               coalesce(string_agg(r.name, ', ' ORDER BY r.sort_order) FILTER (WHERE r.code IS NOT NULL), '') AS roles
+               coalesce(string_agg(r.name, ', ' ORDER BY r.sort_order) FILTER (WHERE r.code IS NOT NULL), '') AS roles,
+               coalesce(bool_or(r.grants_all), false) AS is_admin
           FROM user_accounts a
           LEFT JOIN user_roles ur ON ur.user_account_id = a.id AND ur.revoked_at IS NULL
           LEFT JOIN roles r ON r.code = ur.role_code
@@ -160,8 +161,12 @@ def users():
          LIMIT 201
     """, q=q, role=role, status=status)
     roles = db.fetch_all("SELECT code, name FROM roles ORDER BY sort_order")
+    me = auth.current_user()
+    for u in rows:     # same rules as start_view_as (which checks them again)
+        u["can_view_as"] = ("user.impersonate" in me.permissions and u["id"] != me.id
+                            and u["status"] == "active" and not u["is_admin"])
     return render_template("admin/users.html", rows=rows[:200], more=len(rows) > 200, q=q, role=role,
-                           status=status, roles=roles, tabs=areas.tabs_for(auth.current_user()))
+                           status=status, roles=roles, back=request.full_path.rstrip("?"), tabs=areas.tabs_for(me))
 
 
 def _load_account(uid: int) -> dict:
@@ -284,10 +289,11 @@ def view_as(uid: int):
     try:
         with db.transaction() as conn:
             audit.record(conn, "user.view_as_start", "user_account", uid)
-            target = auth.start_view_as(uid)       # raises before anything is committed if not allowed
+            target = auth.start_view_as(uid, back=request.form.get("back"))   # raises before the commit if not allowed
     except auth.ViewAsError as exc:
         flash(str(exc), "error")
-        return redirect(url_for("admin.users_detail", uid=uid))
+        back = request.form.get("back")
+        return redirect(back if auth.is_safe_next(back) else url_for("admin.users_detail", uid=uid))
     flash(f"You're viewing as {target['display_name']}. Nothing can be changed until you return to your account.",
           "ok")
     return redirect(url_for("me.dashboard"))
@@ -298,11 +304,11 @@ def view_as_stop():
     """Back to your own account (the only change allowed while viewing as someone)."""
     if not auth.viewing_as():
         return redirect(url_for("me.dashboard"))
-    viewed = auth.stop_view_as()
+    viewed, back = auth.stop_view_as()
     if auth.current_user():
         with db.transaction() as conn:
             audit.record(conn, "user.view_as_stop", "user_account", viewed)
-        return redirect(url_for("admin.users_detail", uid=viewed) if viewed else url_for("me.dashboard"))
+        return redirect(back or (url_for("admin.users_detail", uid=viewed) if viewed else url_for("me.dashboard")))
     return redirect(url_for("public.home"))
 
 

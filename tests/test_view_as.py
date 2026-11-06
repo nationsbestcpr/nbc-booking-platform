@@ -123,3 +123,20 @@ def test_admin_removes_a_role_and_sees_it_in_removed_roles(client, sign_in, post
     after = text_of(client.get(page))
     assert "Removed roles" in after and "Customer service" in after.split("Removed roles")[1]
     assert not q("SELECT 1 FROM user_roles WHERE id = :g AND revoked_at IS NULL", g=grant)
+
+
+def test_view_as_straight_from_the_users_list_and_back_to_it(client, sign_in, uid):
+    sign_in("admin@example.test")
+    listing = "/admin/users?q=example.test"
+    page = client.get(listing).get_data(as_text=True)
+    student, admin = uid("alder1@example.test"), uid("admin@example.test")
+    assert f'action="/admin/users/{student}/view-as"' in page
+    assert f'action="/admin/users/{admin}/view-as"' not in page           # not yourself, not another admin
+    res = client.post(f"/admin/users/{student}/view-as",
+                      data={"csrf_token": csrf_from(client, listing), "back": listing})
+    assert res.headers["Location"] == "/dashboard"
+    assert "Viewing as Alex Alder" in text_of(client.get("/my"))
+    assert stop(client).headers["Location"] == listing                     # back where the admin was
+    res = client.post(f"/admin/users/{student}/view-as",
+                      data={"csrf_token": csrf_from(client, listing), "back": "https://evil.example/"})
+    assert stop(client).headers["Location"] == f"/admin/users/{student}"   # an off-site address is ignored

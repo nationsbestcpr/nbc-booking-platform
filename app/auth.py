@@ -360,8 +360,9 @@ def viewing_as() -> dict | None:
             "since": session.get("view_as_since", 0)}
 
 
-def start_view_as(target_id: int) -> dict:
-    """Switch this browser to the target account (read-only). Returns the target."""
+def start_view_as(target_id: int, back: str | None = None) -> dict:
+    """Switch this browser to the target account (read-only). Returns the target.
+    `back` is the admin page to return to afterwards (the Users list or the user's page)."""
     admin = current_user()
     if admin is None or "user.impersonate" not in admin.permissions or viewing_as():
         abort(403)
@@ -384,21 +385,22 @@ def start_view_as(target_id: int) -> dict:
     session.clear()
     session.update({"user_id": target["id"], "verified": target["email_verified_at"] is not None,
                     "view_as_admin_id": admin.id, "view_as_admin_name": admin.display_name,
-                    "view_as_since": int(time.time())})
+                    "view_as_since": int(time.time()), "view_as_back": back if is_safe_next(back) else None})
     if csrf:
         session["_csrf"] = csrf
     g.pop("current_user", None)
     return target
 
 
-def stop_view_as() -> int | None:
-    """Back to the admin's own account. Returns the account that was being viewed."""
+def stop_view_as() -> tuple[int | None, str | None]:
+    """Back to the admin's own account. Returns (the account that was being viewed,
+    the admin page to go back to)."""
     info = viewing_as()
     if not info:
-        return None
-    viewed = session.get("user_id")
+        return None, None
+    viewed, back = session.get("user_id"), session.get("view_as_back")
     _start_session(info["admin_id"])         # signed out instead if the admin was switched off meanwhile
-    return viewed
+    return viewed, back
 
 
 def init_app(app: Flask) -> None:
@@ -414,7 +416,7 @@ def init_app(app: Flask) -> None:
         import time
         if time.time() - info["since"] > VIEW_AS_MINUTES * 60:
             from . import audit
-            viewed = stop_view_as()
+            viewed, _back = stop_view_as()
             if current_user():
                 with db.transaction() as conn:
                     audit.record(conn, "user.view_as_stop", "user_account", viewed, after={"reason": "timed out"})

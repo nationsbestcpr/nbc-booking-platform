@@ -21,7 +21,12 @@
       <tr><td><a href="{{ url_for('admin.users_detail', uid=u.id) }}">{{ u.display_name }}</a></td><td>{{ u.email }}</td><td>{{ u.roles or '—' }}</td>
         <td><span class="status {{ {'active': 'ok', 'suspended': 'bad', 'invited': 'wait'}.get(u.status, 'off') }}">{{ u.status|capitalize }}</span></td>
         <td class="num">{{ u.last_sign_in_at|office_time }}</td>
-        <td><a class="btn-small" href="{{ url_for('admin.users_detail', uid=u.id) }}">Roles and access</a></td></tr>
+        <td><div class="row-actions">
+          {% if u.can_view_as %}<form method="post" action="{{ url_for('admin.view_as', uid=u.id) }}">{{ csrf_input() }}
+            <input type="hidden" name="back" value="{{ back }}">
+            <button class="btn-small primary" type="submit" title="Open the app as {{ u.display_name }} (read-only)">View as</button></form>{% endif %}
+          <a class="btn-small" href="{{ url_for('admin.users_detail', uid=u.id) }}">Roles</a>
+        </div></td></tr>
     {% endfor %}
     </tbody>
   </table></div>

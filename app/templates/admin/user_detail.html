@@ -56,6 +56,7 @@
     </dl>
     {% if can_view_as %}
       <form method="post" action="{{ url_for('admin.view_as', uid=account.id) }}" class="view-as-form">{{ csrf_input() }}
+        <input type="hidden" name="back" value="{{ url_for('admin.users_detail', uid=account.id) }}">
         <button class="btn-small primary" type="submit">View as {{ account.display_name.split(' ')[0] }}</button>
         <span class="small muted">See the app exactly as they do: their dashboard, bookings and pages. Read-only; ends after an hour.</span></form>
     {% endif %}

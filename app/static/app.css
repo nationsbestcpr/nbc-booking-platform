@@ -404,3 +404,4 @@ button[disabled].pill { opacity: 0.5; cursor: not-allowed; }
 .view-as-bar .pill { background: var(--white); color: var(--red-deep); }
 .view-as-form { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin: 10px 0 14px; }
 .panel form + h3 { margin-top: 18px; }
+.row-actions { display: flex; gap: 6px; flex-wrap: nowrap; justify-content: flex-end; align-items: center; } .row-actions form { margin: 0; }
