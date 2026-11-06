@@ -57,7 +57,7 @@ class FakePlatforms:
                               "Max Seats", "Duration in Minutes", "Companion Duration (min)", "Status",
                               "Concurrent Group Key"],
             "Master Locations": ["Abbreviation", "Name", "Address", "Metro Area", "Time Zone", "Max Student Count",
-                                 "Access Code", "Parking", "Status", "Per Class Rate"],
+                                 "Access Code", "Parking", "Status", "Per Class Rate", "Latitude", "Longitude"],
             "Class Schedule": ["Calendar", "Status", "Date", "Start Time", "Abbreviation", "Course Type", "Course NAME",
                                "Instructor Assigned", "ASSIGN INSTRUCTOR (Name)",
                                "Duration in Minutes (from Duration (min))", "Start Date/Time"],
@@ -78,7 +78,8 @@ class FakePlatforms:
                 {"id": self.loc, "fields": {"Abbreviation": f"HH{tag}", "Name": f"Virginia - {self.metro} - {self.site_name}",
                  "Address": "100 Main St, Suite 2, Norfolk, Virginia, 23510", "Metro Area": f"Virginia - {self.metro}",
                  "Time Zone": "Eastern", "Max Student Count": "14", "Access Code": "4321#",
-                 "Parking": "Lot behind the hall", "Status": ["Currently Scheduling"], "Per Class Rate": 50}},
+                 "Parking": "Lot behind the hall", "Status": ["Currently Scheduling"], "Per Class Rate": 50,
+                 "Latitude": 36.8508, "Longitude": -76.2859}},
                 {"id": self.virtual_loc, "fields": {"Abbreviation": "Zoom", "Name": "VIRTUAL - Zoom",
                  "Metro Area": "VIRTUAL", "Status": ["VIRTUAL"]}},
                 {"id": rec_id(), "fields": {"Abbreviation": "Old", "Name": "Somewhere unused",
@@ -886,16 +887,19 @@ def test_a_cut_off_sync_stops_showing_running_and_two_never_overlap(fake, run_sy
             lock.close()
 
 
-def test_with_several_cities_the_finder_asks_for_a_city_first(fake, run_sync, q, client, app, monkeypatch):
+def test_the_home_page_lists_every_city_and_puts_nearby_classes_first(fake, run_sync, q, client, app, monkeypatch):
     monkeypatch.setitem(app.config, "APP_ENV", "staging")
-    fake.add_class()
+    fake.add_class(day=(date.today() + timedelta(days=2)).isoformat())       # Norfolk, sooner than the demo classes
     run_sync()
     try:
         html = client.get("/").get_data(as_text=True)
-        assert "Pick yours" in html and 'class="state-block"' in html and fake.metro in html
-        assert "Showing" not in html                       # no long list until a city is chosen
-        listed = client.get(f"/?city={fake.metro_slug}").get_data(as_text=True)
-        assert "Showing 1 of 1 class" in listed and fake.site_name in listed
+        assert fake.site_name in html and "Henrico" in html                  # mixed cities, no city picker
+        assert "Pick yours" not in html
+        near = client.get("/?lat=36.85&lng=-76.29").get_data(as_text=True)  # in Norfolk
+        assert "within 75 miles of you" in near and fake.site_name in near and "Henrico" not in near
+        assert " mi<" in near and "Show all cities" in near
+        far = client.get("/?lat=47.61&lng=-122.33").get_data(as_text=True)  # Seattle: nothing near
+        assert "No classes within 75 miles of you yet" in far and "Henrico" in far
     finally:
         with app.app_context(), db.transaction() as conn:
             conn.execute(text("UPDATE metros SET booking_system = 'enrollware', cutover_at = NULL WHERE slug = :s"),

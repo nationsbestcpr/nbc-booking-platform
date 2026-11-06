@@ -180,11 +180,14 @@ def test_webhooks_skip_csrf_and_check_signatures(client, monkeypatch):
 
 
 def test_class_finder_filters_and_pages(client):
-    page = client.get("/?city=richmond-va&course=BLS").get_data(as_text=True)
-    assert "Basic Life Support" in page and "Adult &amp; Pediatric" not in page.split('id="classes"')[1].split("</form>")[1]
-    assert "Change city" in page
-    all_ = client.get("/?city=all").get_data(as_text=True)
-    assert "Showing" in all_
+    page = client.get("/?course=BLS").get_data(as_text=True)
+    listing = page.split('id="classes"')[1].split("</form>")[1]
+    assert "Basic Life Support" in listing and "Adult &amp; Pediatric" not in listing
+    five = client.get("/?per=5").get_data(as_text=True)
+    assert five.count('class="class-row"') == 5 and "1–5 of 7 upcoming classes" in five
+    assert 'aria-current="page">1<' in five and "page=2" in five and "Next ›" in five
+    second = client.get("/?per=5&page=2").get_data(as_text=True)
+    assert second.count('class="class-row"') == 2 and "6–7 of 7" in second and "‹ Previous" in second
+    assert "Use my location" in client.get("/").get_data(as_text=True)
     # Unknown values are ignored instead of failing.
-    assert client.get("/?city=nowhere&course=X&when=9&date=bad").status_code == 200
-
+    assert client.get("/?city=nowhere&course=X&when=9&date=bad&per=7&page=99&lat=x&lng=999").status_code == 200

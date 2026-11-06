@@ -341,3 +341,16 @@ fieldset.field { border: 0; padding: 0; margin: 0; }
   .class-row .cr-what, .class-row .cr-where { flex-direction: row; flex-wrap: wrap; gap: 0 8px; align-items: baseline; }
   .class-row .small-pill { justify-self: end; }
 }
+
+/* Near me + pages */
+.near-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin: 10px 0 4px; }
+.near-bar:empty { display: none; }
+.pager { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 20px; }
+.pager .pg { min-width: 2.4rem; height: 2.4rem; padding: 0 10px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 999px; border: 1.5px solid var(--line); background: var(--white); color: var(--navy); font-weight: 600; text-decoration: none; }
+.pager a.pg:hover { border-color: var(--navy); }
+.pager .pg.current { background: var(--navy); border-color: var(--navy); color: var(--white); }
+.pager .pg.gap { border: 0; background: none; min-width: 1.2rem; }
+.per-page { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.per-page select { font: 400 0.9375rem var(--font); padding: 7px 10px; border-radius: 10px; border: 1.5px solid var(--line); background: var(--white); }
+@media (max-width: 640px) { .per-page { margin-left: 0; width: 100%; } }
