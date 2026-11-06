@@ -534,5 +534,11 @@ SELECT pg_temp.check(
   user_has_permission((SELECT id FROM user_accounts WHERE email = 'google-booker@example.test'), 'self.bookings_view'),
   'the account that booked a seat becomes a student, whatever emails were typed');
 
+-- 0005: only admins can "view as" someone else (unless an admin ticks it for another role).
+SELECT pg_temp.check(
+  EXISTS (SELECT 1 FROM permissions WHERE code = 'user.impersonate')
+  AND NOT EXISTS (SELECT 1 FROM role_permissions WHERE permission_code = 'user.impersonate'),
+  'user.impersonate exists and no role but admin (all permissions) has it');
+
 \echo 'All schema checks passed.'
 ROLLBACK;

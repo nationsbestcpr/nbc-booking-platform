@@ -58,6 +58,15 @@ keep the admin dashboard, with a link to the console. Which dashboard a role
 opens is `roles.dashboard_key` (`CONSOLE_DASHBOARDS` in `app/auth.py`), and
 every list only shows the cities the person's role covers.
 
+**View as and roles.** On a user's page (Admin → Users → Roles and access)
+an admin can give or remove roles and press **View as** to open the app
+exactly as that account sees it. Viewing as someone is read-only (every
+change is refused until "Return to my account"), ends by itself after an
+hour, can't be used on another admin, and its start and end are in the
+action log. It needs the `user.impersonate` permission (migration 0005),
+which only the admin role has. User and Student are kept by the system and
+can't be removed by hand.
+
 **Booking needs an account.** Pressing Book while signed out opens the
 sign-in page with the class shown beside it; signing in, or creating an
 account, comes straight back to the same class and number of seats. The

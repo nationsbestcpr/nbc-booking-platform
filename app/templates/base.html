@@ -24,6 +24,13 @@
   </div></div>
   {% endif %}
 
+  {% if viewing_as and current_user %}
+  <div class="view-as-bar" role="status"><div class="wrap">
+    <span><strong>Viewing as {{ current_user.display_name }}</strong> ({{ current_user.main_role.name }}) · read-only: nothing can be changed. Started by {{ viewing_as.admin_name }}.</span>
+    <form method="post" action="{{ url_for('admin.view_as_stop') }}">{{ csrf_input() }}<button class="pill small-pill" type="submit">Return to my account</button></form>
+  </div></div>
+  {% endif %}
+
   <header class="topbar"><div class="wrap">
     <a class="logo" href="{{ url_for('public.home') }}" aria-label="Nation's Best CPR, home">
       <span class="logo-mark" aria-hidden="true"></span>

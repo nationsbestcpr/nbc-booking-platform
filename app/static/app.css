@@ -397,3 +397,10 @@ fieldset.field { border: 0; padding: 0; margin: 0; }
 button[disabled].pill { opacity: 0.5; cursor: not-allowed; }
 .field textarea { font: inherit; padding: 12px 14px; border-radius: 12px; border: 1.5px solid var(--line); resize: vertical; }
 .steps + .pill, .panel > .pill[disabled] { align-self: flex-start; }
+
+/* "View as" (impersonation) */
+.view-as-bar { background: var(--red); color: var(--white); padding: 10px 0; position: sticky; top: 0; z-index: 50; }
+.view-as-bar .wrap { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.view-as-bar .pill { background: var(--white); color: var(--red-deep); }
+.view-as-form { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin: 10px 0 14px; }
+.panel form + h3 { margin-top: 18px; }

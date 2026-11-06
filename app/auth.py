@@ -9,8 +9,14 @@ account's roles (user_roles) decide what the person sees.
   * 'instructor' and staff roles are granted by an admin only. Choosing
     "I'm an instructor" at sign-up is recorded (signup_intent) but grants nothing.
 
-Passwords are stored only as salted scrypt hashes (werkzeug). Microsoft 365
-sign-in for staff and emailed sign-in links come in later phases.
+Passwords are stored only as salted scrypt hashes (werkzeug). Google and
+Microsoft sign-in are in app/oauth.py.
+
+"View as" (impersonation): someone with 'user.impersonate' (admins) can open
+the app as another account to see what they see. It is read-only: while
+viewing as someone, every change (any POST but "Return to my account" and
+sign-out) is refused. It ends by itself after VIEW_AS_MINUTES, can't target
+an admin or a switched-off account, and its start and end are in the action log.
 """
 
 from __future__ import annotations
@@ -336,7 +342,88 @@ def safe_next(target: str | None) -> str:
     return target if is_safe_next(target) else landing()
 
 
+# --- View as (impersonation) -----------------------------------------------------------
+
+VIEW_AS_MINUTES = 60
+VIEW_AS_ALLOWED_POSTS = ("admin.view_as_stop", "account.sign_out")
+
+
+class ViewAsError(ValueError):
+    """Why this account can't be viewed as, worded for the admin."""
+
+
+def viewing_as() -> dict | None:
+    """{'admin_id', 'admin_name', 'since'} while someone is viewing as another account."""
+    if not session.get("view_as_admin_id"):
+        return None
+    return {"admin_id": session["view_as_admin_id"], "admin_name": session.get("view_as_admin_name", ""),
+            "since": session.get("view_as_since", 0)}
+
+
+def start_view_as(target_id: int) -> dict:
+    """Switch this browser to the target account (read-only). Returns the target."""
+    admin = current_user()
+    if admin is None or "user.impersonate" not in admin.permissions or viewing_as():
+        abort(403)
+    if target_id == admin.id:
+        raise ViewAsError("That's your own account.")
+    target = db.fetch_one("""
+        SELECT a.id, a.display_name, a.status, a.email_verified_at,
+               EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.code = ur.role_code
+                        WHERE ur.user_account_id = a.id AND ur.revoked_at IS NULL AND r.grants_all) AS is_admin
+          FROM user_accounts a WHERE a.id = :id
+    """, id=target_id)
+    if target is None:
+        abort(404)
+    if target["is_admin"]:
+        raise ViewAsError("Admins can't be viewed as: they see everything already.")
+    if target["status"] != "active":
+        raise ViewAsError("This account is switched off, so there's nothing to view.")
+    import time
+    csrf = session.get("_csrf")
+    session.clear()
+    session.update({"user_id": target["id"], "verified": target["email_verified_at"] is not None,
+                    "view_as_admin_id": admin.id, "view_as_admin_name": admin.display_name,
+                    "view_as_since": int(time.time())})
+    if csrf:
+        session["_csrf"] = csrf
+    g.pop("current_user", None)
+    return target
+
+
+def stop_view_as() -> int | None:
+    """Back to the admin's own account. Returns the account that was being viewed."""
+    info = viewing_as()
+    if not info:
+        return None
+    viewed = session.get("user_id")
+    _start_session(info["admin_id"])         # signed out instead if the admin was switched off meanwhile
+    return viewed
+
+
 def init_app(app: Flask) -> None:
     @app.context_processor
     def inject_user():
-        return {"current_user": current_user()}
+        return {"current_user": current_user(), "viewing_as": viewing_as()}
+
+    @app.before_request
+    def view_as_is_read_only():
+        info = viewing_as()
+        if not info:
+            return None
+        import time
+        if time.time() - info["since"] > VIEW_AS_MINUTES * 60:
+            from . import audit
+            viewed = stop_view_as()
+            if current_user():
+                with db.transaction() as conn:
+                    audit.record(conn, "user.view_as_stop", "user_account", viewed, after={"reason": "timed out"})
+            from flask import flash
+            flash(f"“View as” ended after {VIEW_AS_MINUTES} minutes; you're back on your own account.", "ok")
+            return redirect(url_for("me.dashboard") if current_user() else url_for("public.home"))
+        if request.method not in ("GET", "HEAD", "OPTIONS") and request.endpoint not in VIEW_AS_ALLOWED_POSTS:
+            from flask import render_template
+            return render_template("errors/error.html", code=403, title="Changes are switched off",
+                                   message="You're viewing as someone else, so nothing can be changed. "
+                                           "Use “Return to my account” at the top of the page first."), 403
+        return None

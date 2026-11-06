@@ -14,9 +14,10 @@
       {% for g in grants %}
         <tr><td><strong>{{ g.name }}</strong></td><td>{{ g.city or 'All cities' }}</td>
           <td class="small"><span class="num">{{ g.granted_at|office_time }}</span><br><span class="muted">{{ g.granted_by or ('Automatically' if g.is_self_service else 'At set-up') }}</span></td>
-          <td>{% if g.is_self_service %}<span class="muted small">Automatic</span>{% else %}
-            <form class="inline" method="post" action="{{ url_for('admin.users_revoke', uid=account.id, grant_id=g.id) }}">{{ csrf_input() }}
-              <button class="btn-small danger" type="submit">Remove</button></form>{% endif %}</td></tr>
+          <td>{% if g.is_self_service %}<span class="muted small" title="Given and kept by the system: every account is a user, and booking a class makes a student">Automatic</span>{% else %}
+            <form class="inline" method="post" action="{{ url_for('admin.users_revoke', uid=account.id, grant_id=g.id) }}"
+                  onsubmit="return confirm('Remove the {{ g.name }} role{{ ' for ' ~ g.city if g.city }} from {{ account.display_name }}?');">{{ csrf_input() }}
+              <button class="btn-small danger" type="submit">Remove role</button></form>{% endif %}</td></tr>
       {% endfor %}
       </tbody>
     </table></div>
@@ -36,7 +37,13 @@
         <select id="city_id" name="city_id"><option value="">All cities</option>{% for c in cities %}<option value="{{ c.id }}">{{ c.name }}, {{ c.state_code }}</option>{% endfor %}</select></div>
       <button class="pill plain" type="submit">Give role</button>
     </form>
-    <p class="muted small">Student and User are given automatically. Only an admin can give the Admin role. A city limits a staff role to that city's classes.</p>
+    <p class="muted small">Student and User are given and kept automatically (every account is a user; booking a class makes a student), so they can't be removed here. Only an admin can give or remove the Admin role, and the last admin can't be removed. A city limits a staff role to that city's classes.</p>
+    {% if removed %}
+    <h3>Removed roles</h3>
+    <ul class="list">{% for g in removed %}
+      <li><span>{{ g.name }}{% if g.city %} · {{ g.city }}{% endif %}<br><span class="meta num">Removed {{ g.revoked_at|office_time }}{% if g.revoked_by %} by {{ g.revoked_by }}{% endif %}</span></span></li>
+    {% endfor %}</ul>
+    {% endif %}
   </section>
 
   <section class="panel" aria-labelledby="acct-title">
@@ -47,6 +54,11 @@
       <dt>Created</dt><dd class="num">{{ account.created_at|office_time }}</dd>
       <dt>Last sign-in</dt><dd class="num">{{ account.last_sign_in_at|office_time }}</dd>
     </dl>
+    {% if can_view_as %}
+      <form method="post" action="{{ url_for('admin.view_as', uid=account.id) }}" class="view-as-form">{{ csrf_input() }}
+        <button class="btn-small primary" type="submit">View as {{ account.display_name.split(' ')[0] }}</button>
+        <span class="small muted">See the app exactly as they do: their dashboard, bookings and pages. Read-only; ends after an hour.</span></form>
+    {% endif %}
     {% if is_self %}
       <p class="muted small">This is your own account.</p>
     {% elif account.status == 'active' %}

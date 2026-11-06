@@ -106,6 +106,7 @@ INSERT INTO permissions (code, area, description, own_records_only) VALUES
   -- Administration
   ('user.manage',              'Admin',       'Invite people; grant and revoke roles', false),
   ('role.manage',              'Admin',       'Change which permissions each role grants', false),
+  ('user.impersonate',         'Admin',       'View the app as another account (read-only), to see what they see', false),
   ('settings.manage',          'Admin',       'Change business settings (hold minutes, alert days, ...)', false),
   ('content.edit',             'Admin',       'Edit public page wording', false),
   ('content.approve',          'Admin',       'Approve public page wording', false),

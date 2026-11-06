@@ -15,12 +15,13 @@
   <p class="muted small num">{{ rows|length }}{{ '+' if more }} account{{ 's' if rows|length != 1 }}{% if more %} · showing the first 200: narrow the search{% endif %}</p>
   {% if rows %}
   <div class="scroll-x"><table class="table">
-    <thead><tr><th>Name</th><th>Email</th><th>Roles</th><th>Status</th><th>Last sign-in</th></tr></thead>
+    <thead><tr><th>Name</th><th>Email</th><th>Roles</th><th>Status</th><th>Last sign-in</th><th></th></tr></thead>
     <tbody>
     {% for u in rows %}
       <tr><td><a href="{{ url_for('admin.users_detail', uid=u.id) }}">{{ u.display_name }}</a></td><td>{{ u.email }}</td><td>{{ u.roles or '—' }}</td>
         <td><span class="status {{ {'active': 'ok', 'suspended': 'bad', 'invited': 'wait'}.get(u.status, 'off') }}">{{ u.status|capitalize }}</span></td>
-        <td class="num">{{ u.last_sign_in_at|office_time }}</td></tr>
+        <td class="num">{{ u.last_sign_in_at|office_time }}</td>
+        <td><a class="btn-small" href="{{ url_for('admin.users_detail', uid=u.id) }}">Roles and access</a></td></tr>
     {% endfor %}
     </tbody>
   </table></div>

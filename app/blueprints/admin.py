@@ -71,6 +71,10 @@ def describe(entry: dict, role_names: dict[str, str], account_name: str | None =
     if action == "city.booking_system":
         where = "here" if after.get("booking_system") == "engine" else "in Enrollware"
         return f"Switched {after.get('city', 'a city')} to book {where}"
+    if action == "user.view_as_start":
+        return f"Started viewing the app as this account{who} (read-only)"
+    if action == "user.view_as_stop":
+        return f"Stopped viewing as this account{who}" + (" (timed out)" if after.get("reason") == "timed out" else "")
     if action == "user.password_reset":
         return f"Reset the password{who}"
     return action.replace("_", " ").replace(".", ": ")
@@ -199,9 +203,21 @@ def users_detail(uid: int):
     names = _role_names()
     for h in history:
         h["text"] = describe(h, names)
+    removed = db.fetch_all("""
+        SELECT r.name, m.name AS city, ur.revoked_at, b.display_name AS revoked_by
+          FROM user_roles ur
+          JOIN roles r ON r.code = ur.role_code
+          LEFT JOIN metros m ON m.id = ur.scope_metro_id
+          LEFT JOIN user_accounts b ON b.id = ur.revoked_by_user_id
+         WHERE ur.user_account_id = :id AND ur.revoked_at IS NOT NULL
+         ORDER BY ur.revoked_at DESC LIMIT 10
+    """, id=uid)
+    me = auth.current_user()
+    can_view_as = ("user.impersonate" in me.permissions and uid != me.id and account["status"] == "active"
+                   and not any(g["grants_all"] for g in grants))
     return render_template("admin/user_detail.html", account=account, grants=grants, grantable=grantable,
-                           cities=cities, history=history, is_self=uid == auth.current_user().id,
-                           tabs=areas.tabs_for(auth.current_user()))
+                           cities=cities, history=history, removed=removed, is_self=uid == me.id,
+                           can_view_as=can_view_as, tabs=areas.tabs_for(me))
 
 
 @bp.post("/users/<int:uid>/roles")
@@ -259,6 +275,35 @@ def users_revoke(uid: int, grant_id: int):
     name = db.fetch_value("SELECT name FROM roles WHERE code = :c", c=row["role_code"])
     flash(f"Removed the {name} role from {account['display_name']}.", "ok")
     return redirect(url_for("admin.users_detail", uid=uid))
+
+
+@bp.post("/users/<int:uid>/view-as")
+@auth.permission_required("user.impersonate")
+def view_as(uid: int):
+    """See the app exactly as this account does (read-only, ends after an hour)."""
+    try:
+        with db.transaction() as conn:
+            audit.record(conn, "user.view_as_start", "user_account", uid)
+            target = auth.start_view_as(uid)       # raises before anything is committed if not allowed
+    except auth.ViewAsError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("admin.users_detail", uid=uid))
+    flash(f"You're viewing as {target['display_name']}. Nothing can be changed until you return to your account.",
+          "ok")
+    return redirect(url_for("me.dashboard"))
+
+
+@bp.post("/view-as/stop")
+def view_as_stop():
+    """Back to your own account (the only change allowed while viewing as someone)."""
+    if not auth.viewing_as():
+        return redirect(url_for("me.dashboard"))
+    viewed = auth.stop_view_as()
+    if auth.current_user():
+        with db.transaction() as conn:
+            audit.record(conn, "user.view_as_stop", "user_account", viewed)
+        return redirect(url_for("admin.users_detail", uid=viewed) if viewed else url_for("me.dashboard"))
+    return redirect(url_for("public.home"))
 
 
 @bp.post("/users/<int:uid>/status")
