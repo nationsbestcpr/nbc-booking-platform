@@ -20,3 +20,5 @@ if [ ! -x .venv/bin/python ]; then
 fi
 .venv/bin/python -m pip install --quiet -r requirements/app.txt
 echo "Python packages ready in .venv"
+# Which commit this copy is, for /healthz and error pages (the published copy may have no .git).
+git rev-parse --short HEAD > .version 2>/dev/null || true

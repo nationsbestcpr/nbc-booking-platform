@@ -58,6 +58,7 @@ def create_app(overrides: dict | None = None) -> Flask:
         (production shows only the reference, which matches the line in the logs)."""
         import secrets as _secrets
         from flask import g
+        from . import version
         original = getattr(e, "original_exception", None) or e
         ref = _secrets.token_hex(4)
         app.logger.error("Error %s on %s %s", ref, request.method, request.path, exc_info=original)
@@ -76,7 +77,8 @@ def create_app(overrides: dict | None = None) -> Flask:
             user = None
         try:
             return render_template("errors/error.html", code=500, title="Something went wrong on our side",
-                                   message=f"Please try again. If it keeps happening, tell us reference {ref}.",
+                                   message=f"Please try again. If it keeps happening, tell us reference {ref} "
+                                           f"(version {version.commit()}).",
                                    detail=detail), 500
         except Exception:
             return (f"Something went wrong on our side. Reference {ref}." +

@@ -222,3 +222,6 @@ __marimo__/
 # Replit start-up log (scripts/replit-start.sh)
 .start.log
 .start.rc
+
+# Commit of this copy, written by scripts/replit-setup.sh
+.version

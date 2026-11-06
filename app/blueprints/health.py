@@ -19,8 +19,15 @@ def healthz():
         return jsonify(status="error", database="unreachable", detail=exc.__class__.__name__), 503
     app_env = current_app.config["APP_ENV"]
     ok = roles and db_env == app_env
+    from .. import schema_check, version
+    try:
+        missing = schema_check.missing()
+    except Exception as exc:  # the check itself must never break the health check
+        missing = [f"(couldn't check: {exc.__class__.__name__})"]
     return jsonify(
         status="ok" if ok else "degraded",
+        version=version.commit(),
+        database_missing=missing,
         app_env=app_env,
         database_env=db_env,
         database_env_matches=db_env == app_env,
