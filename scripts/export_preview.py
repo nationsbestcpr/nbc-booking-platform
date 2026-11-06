@@ -47,6 +47,17 @@ SIGNED_IN = {
 # Dashboards: key -> (demo email, [(path, file, title, note)]). Each account's
 # tabs link to its own copies of Profile and Settings.
 DASHBOARDS = {
+    "console": ("cs@example.test", [
+        ("/console", "console.html", "Booking console: today", "Customer service and managers land here: search, today's classes, what needs a look."),
+        ("/console/find?q=alder", "console-find.html", "Booking console: find a student", "Name, email, phone or booking number."),
+        ("/console/bookings/{booking:alder1@example.test}", "console-booking.html", "Booking console: one booking",
+         "Seats, payments, refunds, moves, GHL, notes; transfer, cancel and refund buttons."),
+        ("/console/bookings/{booking:alder1@example.test}/transfer", "console-transfer.html",
+         "Booking console: move to another class", "Placeholder: what the transfer will do."),
+        ("/console/new", "console-new.html", "Booking console: book by phone or invoice", "Pick the class first."),
+        ("/account/profile", "console-profile.html", "Booking console: profile", "Name, email, roles."),
+        ("/account/settings", "console-settings.html", "Booking console: password", "Change password."),
+    ]),
     "admin": ("admin@example.test", [
         ("/admin", "admin.html", "Admin: dashboard", "Counts, next classes and recent actions."),
         ("/admin/classes", "admin-classes.html", "Admin: classes", "Every class with live seats, waiting and lead instructor."),
@@ -99,11 +110,18 @@ def main(out_dir: Path) -> None:
     with app.app_context():
         sessions = dict(db.connection().execute(text(
             "SELECT DISTINCT ON (slug) slug, id FROM sessions ORDER BY slug, id")).all())
+        bookings = {k: str(v) for k, v in db.connection().execute(text(
+            "SELECT DISTINCT ON (attendee_email) attendee_email, public_id FROM registrations "
+            "ORDER BY attendee_email, id")).all()}
 
     def real_path(path: str) -> str:
         def sub(m: re.Match) -> str:
             ref = m.group(1)
-            return str(sessions[ref.split(":", 1)[1]]) if ref.startswith("session:") else str(ids[ref])
+            if ref.startswith("session:"):
+                return str(sessions[ref.split(":", 1)[1]])
+            if ref.startswith("booking:"):
+                return bookings[ref.split(":", 1)[1]]
+            return str(ids[ref])
         return re.sub(r"\{([^}]+)\}", sub, path)
 
     public_files = {path: name for path, name, *_ in PUBLIC}

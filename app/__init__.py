@@ -26,7 +26,7 @@ def create_app(overrides: dict | None = None) -> Flask:
     filters.init_app(app)
     cli.init_app(app)
 
-    from .blueprints import account, admin, admin_integrations, admin_records, book, health, me, public, teach, webhooks  # noqa: F401
+    from .blueprints import account, admin, admin_integrations, admin_records, book, console, health, me, public, teach, webhooks  # noqa: F401
 
     app.register_blueprint(health.bp)
     app.register_blueprint(webhooks.bp)
@@ -36,6 +36,7 @@ def create_app(overrides: dict | None = None) -> Flask:
     app.register_blueprint(me.bp)
     app.register_blueprint(teach.bp)
     app.register_blueprint(admin.bp)
+    app.register_blueprint(console.bp)
 
     def error_page(code: int, title: str, message: str):
         return render_template("errors/error.html", code=code, title=title, message=message), code

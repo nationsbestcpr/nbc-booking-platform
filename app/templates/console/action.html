@@ -1,0 +1,47 @@
+{% extends "dash/layout.html" %}
+{% block title %}{{ title }} · {{ r.attendee_first_name }} {{ r.attendee_last_name }}{% endblock %}
+{% block heading %}{{ title }} <span class="accent">{{ r.attendee_first_name }} {{ r.attendee_last_name }}</span>{% endblock %}
+{% block subhead %}<p>{{ r.course_name }} · <span class="num">{{ class_date(r.starts_at, r.time_zone) }} · {{ class_time(r.starts_at, r.ends_at, r.time_zone) }}</span> · {{ r.site_name }}</p>{% endblock %}
+{% block panel %}
+<p class="small"><a href="{{ url_for('console.find_booking', public_id=r.public_id) }}">← Back to the booking</a></p>
+
+<p class="notice warn" role="status"><strong>Coming next.</strong> This page is in place so the desk can see where it will live. It doesn't change the booking, Stripe or GHL yet.</p>
+
+<section class="panel" aria-labelledby="facts-title">
+  <h2 id="facts-title">What the rules will look at</h2>
+  <dl class="kv">
+    <dt>Time until class</dt><dd class="num">{% if r.hours_to_class > 0 %}{{ (r.hours_to_class // 24)|int }} days {{ (r.hours_to_class % 24)|int }} hours{% else %}Class has started or finished{% endif %}</dd>
+    <dt>Course</dt><dd>{{ r.course_name }}{% if r.course_code == 'IT' %} <span class="small muted">(Instructor Training rules)</span>{% endif %}</dd>
+    <dt>Transfers used</dt><dd class="num">{{ r.transfers_used }}</dd>
+    <dt>Paid for this seat</dt><dd class="num">{{ r.amount_paid_cents|money }}{% if r.amount_refunded_cents %} · {{ r.amount_refunded_cents|money }} already refunded{% endif %}</dd>
+    <dt>Policy</dt><dd>{% if policy %}{{ policy.title }} <span class="small muted">v{{ policy.version }}{% if policy.approved_by %} · {{ policy.approved_by }}{% endif %}</span>{% else %}<span class="status wait">Not loaded yet</span> <span class="small muted">The written rules (7-day refunds, one free transfer 24 hours or more before class, Instructor Training rules) get loaded as data before this goes live.</span>{% endif %}</dd>
+    {% if action == 'refund' %}<dt>Manager approval above</dt><dd>{% if threshold %}<span class="num">{{ threshold|money }}</span>{% else %}<span class="status wait">Amount not decided yet</span>{% endif %}</dd>{% endif %}
+  </dl>
+</section>
+
+<section class="panel" aria-labelledby="steps-title">
+  <h2 id="steps-title">What this will do</h2>
+  <ol class="steps">
+  {% if action == 'transfer' %}
+    <li>Pick the new class from the same city's classes with seats (the same search as the website).</li>
+    <li>The rules work out whether the move is free, has a fee, or has a price difference to charge or refund.</li>
+    <li>The seat moves in one step: it can't be lost or double-booked on the way. The old class gets the seat back.</li>
+    <li>GHL: the same opportunity is updated with the new date and place, so the customer gets the "class changed" message.</li>
+    <li>Recorded in the booking's history and the action log, with who did it and why.</li>
+  {% elif action == 'cancel' %}
+    <li>Choose why: the customer asked, under-24-hour notice, late arrival, duplicate booking.</li>
+    <li>The rules say whether they get money back, and how much; anything to refund goes to the Refund step.</li>
+    <li>The seat goes back on sale at once (or to the first person on the waiting list).</li>
+    <li>GHL: the opportunity moves to Cancelled, which sends the cancellation message.</li>
+    <li>Recorded in the booking's history and the action log.</li>
+  {% else %}
+    <li>The rules suggest the amount for this seat; the desk can lower it, not raise it beyond what was paid.</li>
+    <li>Above the manager threshold, the refund waits under Refund approvals for a manager; the database refuses it otherwise.</li>
+    <li>Sent to Stripe (test mode on the test site); the card is refunded and the receipt comes from Stripe.</li>
+    <li>Refunds done straight in the Stripe dashboard are caught too, so the numbers here stay right.</li>
+    <li>Recorded in the booking's history and the action log.</li>
+  {% endif %}
+  </ol>
+  <button class="pill red" type="button" disabled aria-disabled="true" style="align-self:flex-start">{{ title }} <span class="arrow" aria-hidden="true">→</span></button>
+</section>
+{% endblock %}

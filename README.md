@@ -50,6 +50,14 @@ a seat makes them a **student** automatically. Choosing "Instructor" at
 sign-up is recorded for the team to verify; the **instructor** and staff
 roles are only ever granted by an admin.
 
+**Staff land where their role works.** Customer service and managers open
+the **booking console** (`/console`): search by name, email, phone or booking
+number, today's classes, what needs a look, and each booking's full page
+(seats, payments with a link to Stripe, refunds, moves, GHL, notes). Admins
+keep the admin dashboard, with a link to the console. Which dashboard a role
+opens is `roles.dashboard_key` (`CONSOLE_DASHBOARDS` in `app/auth.py`), and
+every list only shows the cities the person's role covers.
+
 **Booking needs an account.** Pressing Book while signed out opens the
 sign-in page with the class shown beside it; signing in, or creating an
 account, comes straight back to the same class and number of seats. The
@@ -360,5 +368,7 @@ above before the first publish.
 | 3. Seat holds and Stripe Checkout | Done |
 | 4. GHL contacts and opportunities (engine → GHL) | Done |
 | Accounts for booking: sign in before booking, Google and Microsoft sign-in, My classes dashboard | Done |
-| 2. Search pages and SEO | Next |
+| Booking console skeleton: desk for customer service and managers (find a student, booking page, notes; transfer, cancel, refund, phone and invoice booking pages laid out) | Done |
+| Booking console actions: transfer, cancel, refund (with manager approval), phone and invoice bookings | Next |
+| 2. Search pages and SEO | To do |
 | 4. GHL webhooks (GHL → engine) · 4a tracking · 4c instructor portal · Airtable write-back | To do |

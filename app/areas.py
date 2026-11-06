@@ -1,8 +1,9 @@
 """Dashboard areas and their sidebar navigation.
 
 Each signed-in account opens one area, worked out from its roles
-(CurrentUser.area): staff roles -> admin, the instructor role -> instructor,
-everyone else -> student. A sidebar item with permissions shows only to
+(CurrentUser.area): customer service and managers -> console (the booking
+console), admins and other staff roles -> admin, the instructor role ->
+instructor, everyone else -> student. A sidebar item with permissions shows only to
 accounts holding at least one of them, and a section with no visible items
 is left out, so what each role sees is set by role data, not by code.
 
@@ -20,9 +21,32 @@ Item = tuple[str, str, tuple[str, ...]]          # (endpoint, label, any of thes
 
 # area -> (title, home endpoint, [(section label, [items])])
 AREAS: dict[str, tuple[str, str, list[tuple[str, list[Item]]]]] = {
+    "console": ("Booking console", "console.home", [
+        ("Desk", [
+            ("console.home", "Today", ()),
+            ("console.find", "Find a student", ("student.view",)),
+            ("console.new_booking", "Book by phone or invoice", ("booking.create_phone", "booking.create_invoice")),
+            ("console.approvals", "Refund approvals", ("refund.approve_large",)),
+        ]),
+        ("Classes", [
+            ("admin.classes", "Classes", ("class.view",)),
+            ("admin.bookings", "All bookings", ("student.view",)),
+            ("admin.waitlists", "Waiting lists", ("waitlist.view",)),
+            ("admin.instructors", "Instructors", ("instructor.view",)),
+        ]),
+        ("System", [
+            ("admin.integrations", "Integrations", ("system.health_view",)),
+            ("admin.log", "Action log", ("audit.view",)),
+        ]),
+        ("My account", [
+            ("me.profile", "Profile", ()),
+            ("me.settings", "Password", ()),
+        ]),
+    ]),
     "admin": ("Admin", "admin.home", [
         ("Overview", [
             ("admin.home", "Dashboard", ()),
+            ("console.home", "Booking console", ("student.view",)),
         ]),
         ("Classes", [
             ("admin.classes", "Classes", ("class.view",)),

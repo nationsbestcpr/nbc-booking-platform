@@ -1,0 +1,8 @@
+{#- The desk's search box: one field for name, email, phone or booking number. -#}
+<form class="desk-search" method="get" action="{{ url_for('console.find') }}" role="search">
+  <label for="desk-q">Find a student or booking</label>
+  <div class="desk-search-row">
+    <input type="search" id="desk-q" name="q" value="{{ q or '' }}" placeholder="Name, email, phone, or booking number" autocomplete="off" required minlength="2">
+    <button class="pill" type="submit">Search <span class="arrow" aria-hidden="true">→</span></button>
+  </div>
+</form>

@@ -1,0 +1,17 @@
+{#- A list of seats (rows from console._SEAT), each opening the booking. -#}
+{% macro seat_table(rows, empty='Nothing here.') %}
+{% if rows %}
+<div class="scroll-x"><table class="table">
+  <thead><tr><th>Student</th><th>Class</th><th>Status</th><th>Booked</th></tr></thead>
+  <tbody>{% for r in rows %}{% set st = reg_status.get(r.status, ('off', r.status)) %}
+    <tr><td><a href="{{ url_for('console.find_booking', public_id=r.public_id) }}"><strong>{{ r.attendee_first_name }} {{ r.attendee_last_name }}</strong></a><br>
+          <span class="muted small">{{ r.attendee_email }}{% if r.buyer_email|lower != r.attendee_email|lower %} · booked by {{ r.buyer_email }}{% endif %}</span></td>
+      <td>{{ r.course_name }} · {{ r.product_name }}<br><span class="muted small num">{{ class_date(r.starts_at, r.time_zone) }} · {{ class_time(r.starts_at, r.ends_at, r.time_zone) }} · {{ r.site_name }}, {{ r.city_name }}</span></td>
+      <td><span class="status {{ st[0] }}">{{ st[1] }}</span></td>
+      <td class="num small">{{ r.created_at|office_time }}<br><span class="muted">{{ channels.get(r.channel, r.channel) }} · #{{ r.order_public_id|string|truncate(8, true, '') }}</span></td></tr>
+  {% endfor %}</tbody>
+</table></div>
+{% else %}
+<div class="empty">{{ empty }}</div>
+{% endif %}
+{% endmacro %}

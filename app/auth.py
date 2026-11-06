@@ -31,6 +31,10 @@ from . import db
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
+# Roles whose dashboard is the booking console (roles.dashboard_key).
+CONSOLE_DASHBOARDS = ("manager", "customer_service")
+
+
 @dataclass
 class CurrentUser:
     id: int
@@ -64,10 +68,13 @@ class CurrentUser:
 
     @property
     def area(self) -> str:
-        """Which dashboard area this account opens: 'admin' for staff roles,
-        'instructor' for a role whose dashboard is the instructor one, else
-        'student' (customers: users and students). Decided by role data."""
+        """Which dashboard area this account opens, decided by role data:
+        'console' (the booking console) for customer service and managers,
+        'admin' for admins and other staff roles, 'instructor' for a role whose
+        dashboard is the instructor one, else 'student' (users and students)."""
         if self.is_staff:
+            if not self.is_admin and any(r.get("dashboard_key") in CONSOLE_DASHBOARDS for r in self.roles):
+                return "console"
             return "admin"
         if any(r.get("dashboard_key") == "instructor" for r in self.roles):
             return "instructor"
@@ -308,12 +315,25 @@ def has_password(user_id: int) -> bool:
         uid=user_id))
 
 
-def safe_next(target: str | None) -> str:
-    """Only follow redirects within this site."""
-    if (target and target.startswith("/") and not target.startswith(("//", "/\\"))
-            and not any(c in target for c in "\r\n\t\\")):
-        return target
+def is_safe_next(target: str | None) -> bool:
+    """A path on this site (never another site, whatever the spelling)."""
+    return bool(target and target.startswith("/") and not target.startswith(("//", "/\\"))
+                and not any(c in target for c in "\r\n\t\\"))
+
+
+def landing() -> str:
+    """Where someone goes after signing in with nowhere particular to go: staff and
+    instructors to their dashboard (the booking console, admin or teaching),
+    customers to the classes."""
+    user = current_user()
+    if user and user.area in ("console", "admin", "instructor"):
+        return url_for("me.dashboard")
     return url_for("public.home")
+
+
+def safe_next(target: str | None) -> str:
+    """Only follow redirects within this site; otherwise go where the account belongs."""
+    return target if is_safe_next(target) else landing()
 
 
 def init_app(app: Flask) -> None:

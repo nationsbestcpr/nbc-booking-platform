@@ -1,0 +1,30 @@
+{% extends "dash/layout.html" %}
+{% block title %}Book by phone or invoice{% endblock %}
+{% block heading %}Book by Phone <span class="accent">or Invoice</span>{% endblock %}
+{% block subhead %}<p>{{ s.course_name }} · <span class="num">{{ class_date(s.starts_at, s.time_zone) }} · {{ class_time(s.starts_at, s.ends_at, s.time_zone) }}</span> · {{ s.site_name }}, {{ s.city_name }} · <span class="num">{{ s.seats_left }}</span> seats left</p>{% endblock %}
+{% block panel %}
+<p class="small"><a href="{{ url_for('console.new_booking') }}#pick">← Pick another class</a></p>
+<p class="notice warn" role="status"><strong>Coming next.</strong> The form is laid out so the desk can see it; it doesn't book anything yet.</p>
+<div class="cols">
+  <section class="panel" aria-labelledby="phone-title">
+    <h2 id="phone-title">2a. Caller pays by card</h2>
+    <p class="muted small">The seat is held while we text and email them a secure payment link (Stripe). Card details are never typed into this site.</p>
+    <ol class="steps">
+      <li>Enter the buyer and each attendee (name and email; phone for texts).</li>
+      <li>Send the payment link: the seats are held for the same time as an online booking.</li>
+      <li>Once they pay, it's the same as an online booking: confirmation from GHL, seat on their account.</li>
+    </ol>
+    <button class="pill red" type="button" disabled aria-disabled="true">Send payment link <span class="arrow" aria-hidden="true">→</span></button>
+  </section>
+  <section class="panel" aria-labelledby="inv-title">
+    <h2 id="inv-title">2b. Company pays by invoice</h2>
+    <p class="muted small">For employers and groups: seats are confirmed now and the money is due by the invoice date.</p>
+    <ol class="steps">
+      <li>Company, billing contact, PO number if they have one.</li>
+      <li>Each attendee (name and email).</li>
+      <li>Stripe sends the invoice; the booking shows "Payment due" until it's paid.</li>
+    </ol>
+    <button class="pill red" type="button" disabled aria-disabled="true">Book and invoice <span class="arrow" aria-hidden="true">→</span></button>
+  </section>
+</div>
+{% endblock %}

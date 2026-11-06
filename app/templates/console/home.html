@@ -1,0 +1,61 @@
+{% extends "dash/layout.html" %}
+{% import "console/_seats.html" as seats with context %}
+{% block title %}Booking console{% endblock %}
+{% block heading %}Hi, {{ current_user.first_name }} <span class="accent">Today at the Desk</span>{% endblock %}
+{% block subhead %}<p>Find a student, see today's classes, and the bookings that need a look.</p>{% endblock %}
+{% block panel %}
+<section class="panel">
+  {% include "console/_search.html" %}
+</section>
+
+<div class="stats">
+  <div class="stat"><strong class="num">{{ stats.classes_soon }}</strong><span>Classes today and tomorrow</span></div>
+  <div class="stat"><strong class="num">{{ stats.booked_today }}</strong><span>Seats booked in the last 24 hours</span></div>
+  <div class="stat{{ ' alert-stat' if stats.payment_due }}"><strong class="num">{{ stats.payment_due }}</strong><span>Invoices not paid yet</span></div>
+  <div class="stat{{ ' alert-stat' if stats.displaced }}"><strong class="num">{{ stats.displaced }}</strong><span>Need a new date (class cancelled)</span></div>
+  {% if current_user.has_permission('refund.approve_large') %}
+  <div class="stat{{ ' alert-stat' if stats.approvals }}"><strong class="num">{{ stats.approvals }}</strong><span><a href="{{ url_for('console.approvals') }}">Refunds waiting for you</a></span></div>
+  {% endif %}
+  {% if current_user.has_permission('system.health_view') %}
+  <div class="stat{{ ' alert-stat' if stats.unsynced }}"><strong class="num">{{ stats.unsynced }}</strong><span><a href="{{ url_for('admin.integrations') }}">Changes not sent to GHL or Stripe yet</a></span></div>
+  {% endif %}
+</div>
+
+<div class="cols">
+  <section class="panel" aria-labelledby="soon-title">
+    <div class="panel-head"><h2 id="soon-title">Today and tomorrow</h2>
+      {% if current_user.has_permission('class.view') %}<a href="{{ url_for('admin.classes') }}" style="color:var(--navy);font-weight:600">All classes →</a>{% endif %}</div>
+    {% if soon %}
+    <ul class="list">
+      {% for c in soon %}
+      <li><span>{% if current_user.has_permission('class.view') %}<a href="{{ url_for('admin.classes_detail', sid=c.id) }}" style="color:var(--navy);font-weight:700">{{ c.course_name }}</a>{% else %}<strong>{{ c.course_name }}</strong>{% endif %}<br>
+        <span class="meta num">{{ class_date(c.starts_at, c.time_zone) }} · {{ class_time(c.starts_at, c.ends_at, c.time_zone) }} · {{ c.site_name }}, {{ c.city_name }}</span></span>
+        <span class="small num" style="margin-left:auto;text-align:right">{{ c.sold_seats }} / {{ c.seat_limit }} booked{% if c.waitlist_count %}<br>{{ c.waitlist_count }} waiting{% endif %}</span></li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <div class="empty">No classes today or tomorrow in your cities.</div>
+    {% endif %}
+  </section>
+  <section class="panel" aria-labelledby="attn-title">
+    <h2 id="attn-title">Needs a look</h2>
+    {% if attention %}
+    <ul class="list">
+      {% for r in attention %}{% set st = reg_status.get(r.status) %}
+      <li><span><a href="{{ url_for('console.find_booking', public_id=r.public_id) }}" style="color:var(--navy);font-weight:700">{{ r.attendee_first_name }} {{ r.attendee_last_name }}</a><br>
+        <span class="meta num">{{ r.course_name }} · {{ class_date(r.starts_at, r.time_zone) }} · {{ r.site_name }}</span></span>
+        <span class="status {{ st[0] }}" style="margin-left:auto">{{ st[1] }}</span></li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <div class="empty">Nothing waiting. Unpaid invoices and seats in cancelled classes show here.</div>
+    {% endif %}
+  </section>
+</div>
+
+<section class="panel" aria-labelledby="recent-title">
+  <div class="panel-head"><h2 id="recent-title">Latest bookings</h2>
+    {% if current_user.has_permission('student.view') %}<a href="{{ url_for('admin.bookings') }}" style="color:var(--navy);font-weight:600">All bookings →</a>{% endif %}</div>
+  {{ seats.seat_table(recent, 'No bookings yet in your cities.') }}
+</section>
+{% endblock %}

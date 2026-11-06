@@ -66,7 +66,10 @@ def as_admin(sign_in):
     ("riley.brooks@example.test", "/my"),
     ("alder1@example.test", "/my"),
     ("marcus.hale@example.test", "/teach"),
-    ("cs@example.test", "/admin"),
+    ("cs@example.test", "/console"),
+    ("manager@example.test", "/console"),
+    ("opslead@example.test", "/console"),          # manager + operations: the desk first
+    ("ops@example.test", "/admin"),
     ("admin@example.test", "/admin"),
 ])
 def test_dashboard_opens_the_area_for_the_account(client, sign_in, email, area):
@@ -326,10 +329,12 @@ def sidebar(page: str) -> str:
 
 def test_sidebar_sections_follow_permissions(client, sign_in):
     sign_in("cs@example.test")
-    nav = sidebar(client.get("/admin").get_data(as_text=True))
-    for shown in (">Classes</a>", ">Bookings</a>", ">Waiting lists</a>", ">Integrations</a>", ">Password</a>"):
+    nav = sidebar(client.get("/console").get_data(as_text=True))
+    for shown in (">Today</a>", ">Find a student</a>", ">Book by phone or invoice</a>", ">Classes</a>",
+                  ">All bookings</a>", ">Waiting lists</a>", ">Integrations</a>", ">Password</a>"):
         assert shown in nav
-    for hidden in (">Users</a>", ">Instructors</a>", ">Action log</a>", ">Business settings</a>"):
+    for hidden in (">Refund approvals</a>", ">Users</a>", ">Instructors</a>", ">Action log</a>",
+                   ">Business settings</a>"):
         assert hidden not in nav
     sign_in("marcus.hale@example.test")
     nav = sidebar(client.get("/teach").get_data(as_text=True))

@@ -98,7 +98,7 @@ def start(provider: str, next_url: str | None) -> str:
     spec = PROVIDERS[provider]
     state, nonce, verifier = secrets.token_urlsafe(24), secrets.token_urlsafe(24), secrets.token_urlsafe(48)
     session[SESSION_KEY] = {"provider": provider, "state": state, "nonce": nonce, "verifier": verifier,
-                            "next": auth.safe_next(next_url), "at": int(time.time())}
+                            "next": next_url if auth.is_safe_next(next_url) else None, "at": int(time.time())}
     params = {"client_id": _secret(spec["id_env"]), "response_type": "code", "redirect_uri": redirect_uri(provider),
               "scope": "openid email profile", "state": state, "nonce": nonce, "prompt": "select_account",
               "code_challenge": _b64url(hashlib.sha256(verifier.encode()).digest()),
@@ -123,7 +123,7 @@ def finish(provider: str, args) -> tuple[int, str, str | None]:
     claims = _exchange(provider, args["code"], saved["verifier"])
     who = _identity(provider, claims, saved["nonce"])
     user_id, note = sign_in(who)
-    return user_id, saved.get("next") or url_for("public.home"), note
+    return user_id, saved.get("next") or auth.landing(), note
 
 
 def _exchange(provider: str, code: str, verifier: str) -> dict:

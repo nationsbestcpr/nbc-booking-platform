@@ -45,7 +45,7 @@
 </div>
 {% endmacro %}
 
-{% macro class_rows(found, empty='No classes match. Try another course or a wider date range.') %}
+{% macro class_rows(found, empty='No classes match. Try another course or a wider date range.', book_endpoint='book.form', book_label='Book') %}
 {% if found.classes %}
 <p class="muted small num results-line">
   {{ (found.page - 1) * found.f.per + 1 }}–{{ (found.page - 1) * found.f.per + found.classes|length }} of {{ found.total }} upcoming class{{ 'es' if found.total != 1 }}{% if found.chosen %} in {{ found.chosen.name }}, {{ found.chosen.state_code }}{% endif %}
@@ -66,7 +66,7 @@
           <span class="pill plain small-pill" aria-disabled="true">Waitlist soon</span>
         {% else %}
           <span class="seats {{ 'low' if c.seats_left <= 3 }} num">{{ c.seats_left }} seat{{ 's' if c.seats_left != 1 }} left</span>
-          <a class="pill small-pill" href="{{ url_for('book.form', public_id=c.public_id) }}">Book <span class="arrow" aria-hidden="true">→</span></a>
+          <a class="pill small-pill" href="{{ url_for(book_endpoint, public_id=c.public_id) }}">{{ book_label }} <span class="arrow" aria-hidden="true">→</span></a>
         {% endif %}
       </li>
       {% endfor %}
@@ -101,13 +101,13 @@
 {% endmacro %}
 
 {#- The whole search: filters, "near me", the list and the pages. -#}
-{% macro search(found, endpoint, anchor='classes', empty_none='No classes are on sale right now. New dates are added every week.') %}
+{% macro search(found, endpoint, anchor='classes', empty_none='No classes are on sale right now. New dates are added every week.', book_endpoint='book.form', book_label='Book') %}
 {% if not found.cities %}
 <div class="empty">{{ empty_none }}</div>
 {% else %}
 {{ finder(found, endpoint, anchor) }}
 {{ near_bar(found, endpoint, anchor) }}
-{{ class_rows(found) }}
+{{ class_rows(found, book_endpoint=book_endpoint, book_label=book_label) }}
 {{ pager(found, endpoint, anchor) }}
 {% endif %}
 {% endmacro %}

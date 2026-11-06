@@ -1,0 +1,135 @@
+{% extends "dash/layout.html" %}
+{% block title %}{{ r.attendee_first_name }} {{ r.attendee_last_name }} · Booking{% endblock %}
+{% block heading %}{{ r.attendee_first_name }} {{ r.attendee_last_name }} <span class="accent">{{ r.course_name }}</span>{% endblock %}
+{% block subhead %}{% set st = reg_status.get(r.status, ('off', r.status)) %}
+<p><span class="status {{ st[0] }}">{{ st[1] }}</span> · <span class="num">{{ class_date(r.starts_at, r.time_zone) }} · {{ class_time(r.starts_at, r.ends_at, r.time_zone) }}</span> · {{ r.site_name }}, {{ r.city_name }}</p>{% endblock %}
+{% block panel %}
+<p class="small"><a href="{{ url_for('console.find') }}">← Find another student</a></p>
+
+<section class="panel" aria-labelledby="act-title">
+  <h2 id="act-title">What do they need?</h2>
+  <div class="actions-row">
+    {% for a in actions %}
+      {% if a.allowed %}<a class="pill plain" href="{{ url_for('console.find_booking_action', public_id=r.public_id, action=a.key) }}">{{ a.label }}</a>
+      {% else %}<span class="pill plain" aria-disabled="true" title="Your role can't do this">{{ a.label }}</span>{% endif %}
+    {% endfor %}
+    <a class="pill plain" href="#notes">Add a note</a>
+  </div>
+  <p class="muted small">Class starts {% if r.hours_to_class > 0 %}in <span class="num">{{ (r.hours_to_class // 24)|int }} days {{ (r.hours_to_class % 24)|int }} hours</span>{% else %}<strong>in the past</strong>{% endif %} · transfers used: <span class="num">{{ r.transfers_used }}</span> · <span class="num">{{ r.seats_left }}</span> of {{ r.seat_limit }} seats left in this class.</p>
+</section>
+
+<div class="cols">
+  <section class="panel" aria-labelledby="who-title">
+    <h2 id="who-title">Student</h2>
+    <dl class="kv">
+      <dt>Name on certificate</dt><dd>{{ r.attendee_first_name }} {{ r.attendee_last_name }}</dd>
+      <dt>Email</dt><dd><a href="mailto:{{ r.attendee_email }}">{{ r.attendee_email }}</a></dd>
+      <dt>Phone</dt><dd class="num">{{ r.attendee_phone_e164 or '—' }}</dd>
+      <dt>Course</dt><dd>{{ r.product_full_name }}</dd>
+      {% if r.prerequisites_done_at %}<dt>Prerequisites</dt><dd>Received {{ r.prerequisites_done_at|office_time }}</dd>{% endif %}
+      {% if r.checked_in_at %}<dt>Checked in</dt><dd class="num">{{ r.checked_in_at|office_time }}</dd>{% endif %}
+      {% if r.cancelled_at %}<dt>Cancelled</dt><dd class="num">{{ r.cancelled_at|office_time }}{% if r.cancel_reason %} · {{ r.cancel_reason }}{% endif %}</dd>{% endif %}
+    </dl>
+  </section>
+  <section class="panel" aria-labelledby="class-title">
+    <h2 id="class-title">Class</h2>
+    <dl class="kv">
+      <dt>When</dt><dd class="num">{{ class_date(r.starts_at, r.time_zone) }} · {{ class_time(r.starts_at, r.ends_at, r.time_zone) }}</dd>
+      <dt>Where</dt><dd>{{ r.site_name }}<br><span class="small muted">{{ r.address_line1 }}, {{ r.site_city }}, {{ r.site_state }}</span></dd>
+      <dt>Type</dt><dd>{{ r.delivery_mode|capitalize }}</dd>
+      <dt>Class status</dt><dd>{{ r.class_status|replace('_', ' ')|capitalize }}</dd>
+    </dl>
+    {% if current_user.has_permission('class.view') %}<p class="small"><a href="{{ url_for('admin.classes_detail', sid=r.session_id) }}">Class list and seats →</a></p>{% endif %}
+  </section>
+</div>
+
+<section class="panel" aria-labelledby="order-title">
+  <div class="panel-head"><h2 id="order-title">Order <span class="muted small num">#{{ r.order_public_id|string|truncate(8, true, '') }}</span></h2>
+    <span class="small muted">{{ channels.get(r.channel, r.channel) }} · {{ r.ordered_at|office_time }}{% if not r.livemode %} · <span class="status wait">Test</span>{% endif %}</span></div>
+  <dl class="kv">
+    <dt>Booked by</dt><dd>{{ r.buyer_first_name }} {{ r.buyer_last_name }} · <a href="mailto:{{ r.buyer_email }}">{{ r.buyer_email }}</a>{% if r.buyer_phone_e164 %} · <span class="num">{{ r.buyer_phone_e164 }}</span>{% endif %}
+      {% if r.buyer_user_id and current_user.has_permission('user.manage') %}<br><a class="small" href="{{ url_for('admin.users_detail', uid=r.buyer_user_id) }}">Their account →</a>{% endif %}</dd>
+    {% if seats|length > 1 %}<dt>Seats in this order</dt><dd><ul class="plain-list">{% for s in seats %}{% set st = reg_status.get(s.status, ('off', s.status)) %}
+      <li>{% if s.public_id == r.public_id %}<strong>{{ s.attendee_first_name }} {{ s.attendee_last_name }}</strong> (this one){% else %}<a href="{{ url_for('console.find_booking', public_id=s.public_id) }}">{{ s.attendee_first_name }} {{ s.attendee_last_name }}</a>{% endif %} · <span class="status {{ st[0] }}">{{ st[1] }}</span></li>{% endfor %}</ul></dd>{% endif %}
+    {% if show_money %}
+    <dt>This seat</dt><dd class="num">{{ r.unit_price_cents|money }}{% if r.discount_cents %} − {{ r.discount_cents|money }} discount{% endif %} · paid {{ r.amount_paid_cents|money }}{% if r.amount_refunded_cents %} · refunded {{ r.amount_refunded_cents|money }}{% endif %}</dd>
+    <dt>Order total</dt><dd class="num">{{ r.total_cents|money }}</dd>
+    {% endif %}
+  </dl>
+  {% if show_money %}
+  <h3 class="sub-head">Payments</h3>
+  {% if payments %}
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>How</th><th>Amount</th><th>Status</th><th>Received</th><th>Stripe</th></tr></thead>
+    <tbody>{% for p in payments %}
+      <tr><td>{{ {'card': 'Card', 'invoice': 'Invoice', 'manual': 'Recorded by hand'}.get(p.method, p.method) }}{% if p.manual_reference %}<br><span class="small muted">{{ p.manual_reference }}</span>{% endif %}</td>
+        <td class="num">{{ p.amount_cents|money }}</td>
+        <td><span class="status {{ {'succeeded': 'ok', 'pending': 'wait', 'failed': 'bad', 'disputed': 'bad'}.get(p.status, 'off') }}">{{ {'succeeded': 'Paid', 'pending': 'Pending', 'failed': 'Failed', 'disputed': 'Disputed'}.get(p.status, p.status) }}</span></td>
+        <td class="num small">{{ p.received_at|office_time if p.received_at else '—' }}</td>
+        <td class="small">{% if p.stripe_payment_intent_id %}<a href="https://dashboard.stripe.com/{{ '' if p.livemode else 'test/' }}payments/{{ p.stripe_payment_intent_id }}" target="_blank" rel="noopener">Open in Stripe{{ '' if p.livemode else ' (test)' }}</a>{% else %}—{% endif %}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}
+  <p class="muted small">No payments{% if not r.livemode %}: a test booking made without Stripe{% endif %}.</p>
+  {% endif %}
+  <h3 class="sub-head">Refunds</h3>
+  {% if refunds %}
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>Amount</th><th>Why</th><th>Status</th><th>When</th></tr></thead>
+    <tbody>{% for f in refunds %}{% set fs = refund_status.get(f.status, ('off', f.status)) %}
+      <tr><td class="num">{{ f.amount_cents|money }}</td>
+        <td>{{ f.reason|replace('_', ' ')|capitalize }}<br><span class="small muted">{{ {'console': 'By ' ~ (f.requested_by or 'staff'), 'engine_auto': 'Automatic', 'stripe_dashboard': 'Done in Stripe'}.get(f.source, f.source) }}{% if f.requires_manager_approval %} · needs a manager{% endif %}</span></td>
+        <td><span class="status {{ fs[0] }}">{{ fs[1] }}</span>{% if f.failure_reason %}<br><span class="small muted">{{ f.failure_reason }}</span>{% endif %}</td>
+        <td class="num small">{{ (f.processed_at or f.created_at)|office_time }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}
+  <p class="muted small">No refunds.</p>
+  {% endif %}
+  {% endif %}
+</section>
+
+{% if transfers %}
+<section class="panel" aria-labelledby="tr-title">
+  <h2 id="tr-title">Moves between classes</h2>
+  <ul class="list">{% for t in transfers %}
+    <li><span>From {{ class_date(t.from_starts_at, t.from_tz) }} · {{ t.from_site }} → {{ class_date(t.to_starts_at, t.to_tz) }} · {{ t.to_site }}<br>
+      <span class="meta num">{{ t.created_at|office_time }} · {{ t.reason|replace('_', ' ')|capitalize }}{% if t.performed_by %} · {{ t.performed_by }}{% endif %}{% if t.fee_cents %} · fee {{ t.fee_cents|money }}{% endif %}</span></span></li>
+  {% endfor %}</ul>
+</section>
+{% endif %}
+
+<div class="cols">
+  <section class="panel" id="notes" aria-labelledby="notes-title">
+    <h2 id="notes-title">Notes</h2>
+    {% if can_note %}
+    <form method="post" action="{{ url_for('console.find_booking_note', public_id=r.public_id) }}" class="stack">
+      {{ csrf_input() }}
+      <div class="field"><label for="note-body">Add a note</label>
+        <textarea id="note-body" name="body" rows="3" maxlength="4000" required placeholder="What they asked for, what you told them"></textarea>
+        <span class="hint">Staff only. Texts and emails with the customer stay in GHL.</span></div>
+      <button class="btn-small primary" type="submit" style="align-self:flex-start">Save note</button>
+    </form>
+    {% endif %}
+    {% if notes %}
+    <ul class="list">{% for n in notes %}
+      <li><span>{{ n.body }}<br><span class="meta num">{{ n.author }} · {{ n.created_at|office_time }}</span></span></li>
+    {% endfor %}</ul>
+    {% else %}
+    <p class="muted small">No notes yet.</p>
+    {% endif %}
+  </section>
+  <section class="panel" aria-labelledby="sync-title">
+    <h2 id="sync-title">GHL and history</h2>
+    <dl class="kv">
+      <dt>GHL opportunity</dt><dd>{% if r.ghl_opportunity_id %}<code class="small">{{ r.ghl_opportunity_id }}</code><br><span class="small muted">Stage: {{ r.ghl_stage_pushed or '—' }} · sent {{ r.ghl_synced_at|office_time if r.ghl_synced_at else '—' }}</span>{% else %}<span class="muted">Not sent yet</span>{% endif %}</dd>
+      <dt>Booking number</dt><dd><code class="small">{{ r.public_id }}</code></dd>
+    </dl>
+    {% if history %}
+    <ul class="list">{% for h in history %}
+      <li><span>{{ h.action|replace('booking.', '')|replace('_', ' ')|capitalize }}<br><span class="meta num">{{ h.actor or 'System' }} · {{ h.occurred_at|office_time }}</span></span></li>
+    {% endfor %}</ul>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

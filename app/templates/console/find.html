@@ -1,0 +1,16 @@
+{% extends "dash/layout.html" %}
+{% import "console/_seats.html" as seats with context %}
+{% block title %}Find a student{% endblock %}
+{% block heading %}Find a <span class="accent">Student</span>{% endblock %}
+{% block subhead %}<p>Search by the student's or buyer's name, email or phone, or the booking number from their confirmation.</p>{% endblock %}
+{% block panel %}
+<section class="panel">
+  {% include "console/_search.html" %}
+  {% if q|length >= 2 %}
+  <p class="muted small num">{{ rows|length }}{{ '+' if more }} seat{{ 's' if rows|length != 1 }} found{% if more %} · showing 50: add more of the name or email{% endif %}</p>
+  {{ seats.seat_table(rows, 'No bookings match “' ~ q ~ '” in your cities. Try the email, or the last 7 digits of the phone.') }}
+  {% elif q %}
+  <p class="muted small">Type at least 2 letters.</p>
+  {% endif %}
+</section>
+{% endblock %}

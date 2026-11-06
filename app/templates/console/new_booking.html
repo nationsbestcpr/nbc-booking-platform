@@ -1,0 +1,12 @@
+{% extends "dash/layout.html" %}
+{% import "_classes.html" as cl with context %}
+{% block title %}Book by phone or invoice{% endblock %}
+{% block heading %}Book by Phone <span class="accent">or Invoice</span>{% endblock %}
+{% block subhead %}<p>For callers and companies. Pick the class first, then the people and how they'll pay.</p>{% endblock %}
+{% block panel %}
+<section class="panel" id="pick" aria-labelledby="pick-title">
+  <h2 id="pick-title">1. Pick the class</h2>
+  {{ cl.search(found, 'console.new_booking', anchor='pick', book_endpoint='console.new_booking_class', book_label='Choose') }}
+</section>
+{{ cl.script() }}
+{% endblock %}

@@ -382,3 +382,18 @@ fieldset.field { border: 0; padding: 0; margin: 0; }
   .booking-card { grid-template-columns: auto 1fr; }
   .bc-side { grid-column: 1 / -1; flex-direction: row; justify-content: space-between; align-items: center; }
 }
+
+/* Booking console */
+.desk-search { display: flex; flex-direction: column; gap: 8px; }
+.desk-search label { font-weight: 700; color: var(--navy); }
+.desk-search-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.desk-search-row input { flex: 1 1 280px; min-width: 0; padding: 12px 16px; border-radius: 999px; border: 1.5px solid var(--line); font: inherit; }
+.desk-search-row input:focus-visible { outline: 3px solid var(--red); outline-offset: 2px; }
+.actions-row { display: flex; flex-wrap: wrap; gap: 10px; margin: 6px 0 10px; }
+.actions-row [aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
+.sub-head { font-size: 1rem; color: var(--navy); margin: 18px 0 8px; }
+.plain-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.steps { margin: 0 0 16px; padding-left: 1.25rem; display: flex; flex-direction: column; gap: 6px; }
+button[disabled].pill { opacity: 0.5; cursor: not-allowed; }
+.field textarea { font: inherit; padding: 12px 14px; border-radius: 12px; border: 1.5px solid var(--line); resize: vertical; }
+.steps + .pill, .panel > .pill[disabled] { align-self: flex-start; }
