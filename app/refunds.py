@@ -44,17 +44,16 @@ def threshold_cents() -> int | None:
     return int(value) if isinstance(value, (int, float)) else None
 
 
-def refundable(conn: Connection, registration_id: int) -> dict:
+def refundable(conn: Connection, registration_id: int, *, lock: bool = True) -> dict:
     """What this seat paid, what's back or on its way, and the card payment to refund.
-    Locks the seat so two refunds can't both take the same money."""
+    With lock (when about to refund), locks the seat so two refunds can't take the same money."""
     row = conn.execute(text("""
         SELECT r.id, r.order_id, r.amount_paid_cents, r.amount_refunded_cents, s.metro_id, o.livemode,
                (SELECT coalesce(sum(f.amount_cents), 0) FROM refunds f
                  WHERE f.registration_id = r.id AND f.status IN ('requested', 'approved', 'processing')) AS pending
           FROM registrations r JOIN orders o ON o.id = r.order_id JOIN sessions s ON s.id = r.session_id
          WHERE r.id = :r
-           FOR NO KEY UPDATE OF r
-    """), {"r": registration_id}).mappings().one()
+    """ + ("   FOR NO KEY UPDATE OF r" if lock else "")), {"r": registration_id}).mappings().one()
     payment = conn.execute(text("""
         SELECT p.id, p.amount_cents,
                p.amount_cents - coalesce((SELECT sum(f.amount_cents) FROM refunds f WHERE f.payment_id = p.id
@@ -73,9 +72,7 @@ def refundable(conn: Connection, registration_id: int) -> dict:
 
 def preview(registration_id: int) -> dict:
     """For the refund form: what's left to refund, and whether this person's refund needs a manager."""
-    with db.engine().connect() as conn:
-        info = refundable(conn, registration_id)
-        conn.rollback()
+    info = refundable(db.connection(), registration_id, lock=False)     # just reading: no lock
     return {**info, "threshold": threshold_cents()}
 
 

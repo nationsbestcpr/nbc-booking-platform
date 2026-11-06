@@ -5,6 +5,7 @@
   <span class="eyebrow">Error {{ code }}</span>
   <h1 class="title">{{ title }}</h1>
   <p class="muted">{{ message }}</p>
+  {% if detail %}<details class="error-detail" open><summary>Details for the developer (test site only)</summary><pre>{{ detail }}</pre></details>{% endif %}
   <p><a class="pill" href="{{ url_for('public.home') }}#classes">See available classes <span class="arrow" aria-hidden="true">→</span></a></p>
 </div>
 {% endblock %}

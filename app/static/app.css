@@ -419,3 +419,4 @@ button[disabled].pill { opacity: 0.5; cursor: not-allowed; }
 .roster-class .panel-head { align-items: flex-start; }
 .roster-class h2 { font-size: 1.05rem; margin: 0 0 2px; }
 .roster-filters input[type="date"] { padding: 11px 14px; border-radius: 12px; border: 1.5px solid var(--line); font: inherit; min-height: 46px; }
+.error-detail pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--mist); padding: 12px; border-radius: 12px; font-size: 0.85rem; }

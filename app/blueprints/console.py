@@ -487,7 +487,8 @@ def refunds_list():
          WHERE user_has_permission(:uid, 'refund.issue', s.metro_id)
            AND r.amount_paid_cents > r.amount_refunded_cents
            AND {_SEAT_WHERE}
-         ORDER BY s.starts_at DESC LIMIT 25
+         ORDER BY r.status IN ('confirmed', 'awaiting_payment', 'displaced', 'completed') DESC,
+                  s.starts_at DESC, r.id DESC LIMIT 25
     """, uid=user.id, status="all", channel="", q=who, digits=re.sub(r"\D", "", who),
         ref=who.lower().replace("#", "").strip()) if len(who) >= 2 else []
     return render_template("console/refunds.html", rows=rows, tab=tab, status_tabs=status_tabs, q=q, who=who,

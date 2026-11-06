@@ -196,7 +196,8 @@ def seat(app, q):
                              VALUES (:o, :h, :s, :p, 'Ref', 'Und', :e, :c, 'confirmed', now(), :c)"""),
                      {"o": o, "h": h, "s": sp["session_id"], "p": sp["product_id"], "e": email, "c": sp["price_cents"]})
         conn.execute(text("UPDATE seat_holds SET status = 'converted', released_at = now() WHERE id = :h"), {"h": h})
-    yield q("SELECT id, public_id, amount_paid_cents FROM registrations WHERE attendee_email = :e", e=email)[0]
+    yield q("SELECT id, public_id, amount_paid_cents, attendee_email FROM registrations WHERE attendee_email = :e",
+            e=email)[0]
     with app.app_context(), db.transaction() as conn:     # give the seat back, so other tests' seat counts hold
         conn.execute(text("""UPDATE registrations SET status = 'cancelled', cancelled_at = now(),
                                     cancel_reason_code = 'admin' WHERE attendee_email = :e"""), {"e": email})
@@ -278,8 +279,28 @@ def test_threshold_lets_small_refunds_through_without_a_manager(app, client, sig
 
 def test_refund_can_be_started_from_refunds_and_from_find(client, sign_in, seat):
     sign_in("cs@example.test")
-    page = text_of(client.get("/console/refunds?who=Ref Und"))
+    page = text_of(client.get(f"/console/refunds?who={seat['attendee_email']}"))
     assert "Start a refund" in page and f"/console/bookings/{seat['public_id']}/refund" in page
     assert "No paid seats match" in text_of(client.get("/console/refunds?who=nobody-at-all"))
-    find = text_of(client.get("/console/find?q=Ref Und"))
+    find = text_of(client.get(f"/console/find?q={seat['attendee_email']}"))
     assert f"/console/bookings/{seat['public_id']}/refund" in find and ">Open</a>" in find
+
+
+def test_a_crash_shows_staff_the_error_on_the_test_site_only(app, client, sign_in, monkeypatch):
+    from app.blueprints import console as console_bp
+
+    def boom(*a, **k):
+        raise RuntimeError("refund preview exploded")
+    monkeypatch.setattr(console_bp, "_refund_page", boom)
+    monkeypatch.setitem(app.config, "PROPAGATE_EXCEPTIONS", False)
+    sign_in("cs@example.test")
+    with app.app_context():
+        reg = db.connection().execute(text("SELECT public_id FROM registrations WHERE status = 'confirmed' "
+                                           "AND amount_paid_cents > 0 LIMIT 1")).scalar_one()
+    res = client.get(f"/console/bookings/{reg}/refund")
+    page = text_of(res)
+    assert res.status_code == 500 and "Something went wrong on our side" in page and "reference" in page
+    assert "RuntimeError: refund preview exploded" in page               # test site: staff see the cause
+    monkeypatch.setitem(app.config, "APP_ENV", "production")
+    page = text_of(client.get(f"/console/bookings/{reg}/refund"))
+    assert "refund preview exploded" not in page                         # live site: only the reference

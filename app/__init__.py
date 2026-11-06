@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from flask import Flask, render_template
+from flask import Flask, request, render_template
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from . import areas, auth, cli, db, filters, security
@@ -47,4 +47,34 @@ def create_app(overrides: dict | None = None) -> Flask:
                                                           "Ask an admin to give your account the role this page needs."))
     app.register_error_handler(404, lambda e: error_page(404, "Page not found",
                                                           "The class may have moved or finished. See the classes on sale."))
+
+    @app.errorhandler(500)
+    def server_error(e):
+        """Log the real error with a short reference; on the test site, show staff what broke
+        (production shows only the reference, which matches the line in the logs)."""
+        import secrets as _secrets
+        from flask import g
+        original = getattr(e, "original_exception", None) or e
+        ref = _secrets.token_hex(4)
+        app.logger.error("Error %s on %s %s", ref, request.method, request.path, exc_info=original)
+        conn = g.pop("db_conn", None)          # the failed request's connection may be unusable now
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        detail = None
+        try:
+            user = auth.current_user()
+            if app.config["APP_ENV"] != "production" and user and user.is_staff:
+                detail = f"{original.__class__.__name__}: {original}"[:1500]
+        except Exception:
+            user = None
+        try:
+            return render_template("errors/error.html", code=500, title="Something went wrong on our side",
+                                   message=f"Please try again. If it keeps happening, tell us reference {ref}.",
+                                   detail=detail), 500
+        except Exception:
+            return (f"Something went wrong on our side. Reference {ref}." +
+                    (f"\n\n{detail}" if detail else "")), 500, {"Content-Type": "text/plain; charset=utf-8"}
     return app

@@ -31,6 +31,9 @@ def init_app(app: Flask) -> None:
     app.extensions["db_engine"] = create_engine(
         _normalise_url(app.config["DATABASE_URL"]),
         pool_pre_ping=True,
+        # No server-side prepared statements: they break behind a connection pooler
+        # (PgBouncer / Neon "-pooler" addresses), which hosted Postgres may put in front.
+        connect_args={"prepare_threshold": None},
         pool_size=5,
         max_overflow=5,
         future=True,

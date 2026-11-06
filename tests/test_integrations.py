@@ -872,6 +872,9 @@ def test_customer_service_asks_manager_approves_and_stripe_refunds_at_once(fake,
     reg = q("""SELECT r.id, r.public_id FROM registrations r JOIN checkout_sessions c ON c.order_id = r.order_id
                 WHERE c.stripe_checkout_session_id = :cs""", cs=cs)[0]
     sign_in("cs@example.test")
+    for path in ("/console", "/console/find", f"/console/find?q={reg['public_id']}", "/console/refunds?who=Dana",
+                 f"/console/bookings/{reg['public_id']}", f"/console/bookings/{reg['public_id']}/refund"):
+        assert client.get(path).status_code == 200, path                # pages for a card-paid seat
     page = f"/console/bookings/{reg['public_id']}/refund"
     client.post(page, data={"csrf_token": csrf_from(client, page), "amount": "108", "reason": "customer_cancel"})
     refund = q("SELECT id, status FROM refunds WHERE registration_id = :r", r=reg["id"])[0]
