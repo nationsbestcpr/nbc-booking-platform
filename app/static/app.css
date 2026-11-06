@@ -405,3 +405,17 @@ button[disabled].pill { opacity: 0.5; cursor: not-allowed; }
 .view-as-form { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin: 10px 0 14px; }
 .panel form + h3 { margin-top: 18px; }
 .row-actions { display: flex; gap: 6px; flex-wrap: nowrap; justify-content: flex-end; align-items: center; } .row-actions form { margin: 0; }
+.decide { display: flex; gap: 6px; align-items: flex-start; flex-wrap: wrap; margin-top: 6px; }
+.decide form { margin: 0; }
+.turn-down summary { list-style: none; display: inline-block; }
+.turn-down summary::-webkit-details-marker { display: none; }
+.turn-down[open] form { margin-top: 8px; min-width: 220px; }
+.turn-down input { padding: 8px 10px; border-radius: 10px; border: 1.5px solid var(--line); font: inherit; }
+.filter.active { background: var(--navy); color: var(--white); }
+.roster-filters { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px 14px; align-items: end; }
+.roster-filters .wide { grid-column: 1 / -1; }
+.roster-filters input, .roster-filters select { width: 100%; }
+.roster-buttons { display: flex; gap: 12px; align-items: center; grid-column: 1 / -1; }
+.roster-class .panel-head { align-items: flex-start; }
+.roster-class h2 { font-size: 1.05rem; margin: 0 0 2px; }
+.roster-filters input[type="date"] { padding: 11px 14px; border-radius: 12px; border: 1.5px solid var(--line); font: inherit; min-height: 46px; }

@@ -1,19 +1,21 @@
 {% extends "dash/layout.html" %}
+{% import "console/_decide.html" as d with context %}
 {% block title %}Refund approvals{% endblock %}
 {% block heading %}Refund <span class="accent">Approvals</span>{% endblock %}
-{% block subhead %}<p>Refunds above {% if threshold %}<span class="num">{{ threshold|money }}</span>{% else %}the large-refund amount{% endif %} wait here for a manager before they go to Stripe.</p>{% endblock %}
+{% block subhead %}<p>Refunds customer service asked for that need a manager. Approving sends the money back to the card through Stripe.</p>{% endblock %}
 {% block panel %}
-{% if not threshold %}<p class="notice warn" role="status">The large-refund amount isn't decided yet (Business settings → large refund threshold). Until it is, no refund needs approval.</p>{% endif %}
+{% if threshold is none %}<p class="notice warn" role="status">The large-refund amount isn't decided yet, so <strong>every</strong> refund customer service asks for waits here. Once it's set in Business settings, only refunds above it will.</p>
+{% else %}<p class="muted small">Refunds above <span class="num">{{ threshold|money }}</span> wait here.</p>{% endif %}
 <section class="panel">
   {% if rows %}
   <div class="scroll-x"><table class="table">
     <thead><tr><th>Student</th><th>Class</th><th>Amount</th><th>Asked by</th><th></th></tr></thead>
     <tbody>{% for f in rows %}
-      <tr><td><a href="{{ url_for('console.find_booking', public_id=f.public_id) }}"><strong>{{ f.attendee_first_name }} {{ f.attendee_last_name }}</strong></a><br><span class="small muted">{{ f.reason|replace('_', ' ')|capitalize }}{% if f.note %} · {{ f.note }}{% endif %}</span></td>
+      <tr><td><a href="{{ url_for('console.find_booking', public_id=f.public_id) }}"><strong>{{ f.attendee_first_name }} {{ f.attendee_last_name }}</strong></a><br><span class="small muted">{{ reasons.get(f.reason, f.reason) }}{% if f.note %} · “{{ f.note }}”{% endif %}</span></td>
         <td>{{ f.course_name }}<br><span class="small muted num">{{ class_date(f.starts_at, f.time_zone) }} · {{ f.site_name }}</span></td>
-        <td class="num">{{ f.amount_cents|money }}</td>
+        <td class="num"><strong>{{ f.amount_cents|money }}</strong><br><span class="small muted">of {{ f.amount_paid_cents|money }} paid</span></td>
         <td class="small">{{ f.requested_by or '—' }}<br><span class="muted num">{{ f.created_at|office_time }}</span></td>
-        <td><span class="btn-small" aria-disabled="true">Approve (coming next)</span></td></tr>
+        <td>{{ d.decide(f, url_for('console.approvals')) }}</td></tr>
     {% endfor %}</tbody>
   </table></div>
   {% else %}

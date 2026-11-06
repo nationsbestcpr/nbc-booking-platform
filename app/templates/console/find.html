@@ -1,16 +1,73 @@
 {% extends "dash/layout.html" %}
-{% import "console/_seats.html" as seats with context %}
 {% block title %}Find a student{% endblock %}
 {% block heading %}Find a <span class="accent">Student</span>{% endblock %}
-{% block subhead %}<p>Search by the student's or buyer's name, email or phone, or the booking number from their confirmation.</p>{% endblock %}
+{% block subhead %}<p>Students of the next classes in your cities, soonest first. Narrow it down by name, email, phone or booking number, city, course, dates or status.</p>{% endblock %}
 {% block panel %}
 <section class="panel">
-  {% include "console/_search.html" %}
-  {% if q|length >= 2 %}
-  <p class="muted small num">{{ rows|length }}{{ '+' if more }} seat{{ 's' if rows|length != 1 }} found{% if more %} · showing 50: add more of the name or email{% endif %}</p>
-  {{ seats.seat_table(rows, 'No bookings match “' ~ q ~ '” in your cities. Try the email, or the last 7 digits of the phone.') }}
-  {% elif q %}
-  <p class="muted small">Type at least 2 letters.</p>
-  {% endif %}
+  <form class="roster-filters" method="get" action="{{ url_for('console.find') }}" role="search" aria-label="Filter students">
+    <div class="field wide"><label for="fq">Student, buyer or booking</label>
+      <input type="search" id="fq" name="q" value="{{ f.q }}" placeholder="Name, email, phone, or booking number" autocomplete="off"></div>
+    <div class="field"><label for="fwhen">When</label>
+      <select id="fwhen" name="when">{% for v, l in whens %}<option value="{{ v }}"{{ ' selected' if f.when == v }}>{{ l }}</option>{% endfor %}</select></div>
+    <div class="field"><label for="fcity">City</label>
+      <select id="fcity" name="city"><option value="">All my cities</option>{% for c in cities %}<option value="{{ c.slug }}"{{ ' selected' if f.city == c.slug }}>{{ c.name }}, {{ c.state_code }}</option>{% endfor %}</select></div>
+    <div class="field"><label for="fcourse">Course</label>
+      <select id="fcourse" name="course"><option value="">All courses</option>{% for c in courses %}<option value="{{ c.code }}"{{ ' selected' if f.course == c.code }}>{{ c.name }}</option>{% endfor %}</select></div>
+    <div class="field"><label for="fstatus">Status</label>
+      <select id="fstatus" name="status">{% for v, l in statuses %}<option value="{{ v }}"{{ ' selected' if f.status == v }}>{{ l }}</option>{% endfor %}</select></div>
+    <div class="field"><label for="fchannel">Booked</label>
+      <select id="fchannel" name="channel"><option value="">Any way</option>{% for k, v in channels.items() %}<option value="{{ k }}"{{ ' selected' if f.channel == k }}>{{ v }}</option>{% endfor %}</select></div>
+    <div class="field"><label for="ffrom">Class from</label><input type="date" id="ffrom" name="from" value="{{ f['from'] }}"></div>
+    <div class="field"><label for="fto">Class to</label><input type="date" id="fto" name="to" value="{{ f['to'] }}"></div>
+    <div class="roster-buttons">
+      <button class="pill" type="submit">Show students <span class="arrow" aria-hidden="true">→</span></button>
+      {% if r.query %}<a class="small" href="{{ url_for('console.find') }}">Clear filters</a>{% endif %}
+    </div>
+  </form>
 </section>
+
+<p class="muted small num results-line">{% if r.total %}{{ r.students }} student{{ 's' if r.students != 1 }} in {{ r.classes|length }} of {{ r.total }} class{{ 'es' if r.total != 1 }}{% if r.pages > 1 %} · page {{ r.page }} of {{ r.pages }}{% endif %}{% else %}No students match.{% endif %}</p>
+
+{% for c in r.classes %}
+<section class="panel roster-class" aria-labelledby="class-{{ c.id }}">
+  <div class="panel-head">
+    <div>
+      <h2 id="class-{{ c.id }}">{{ c.course_name }} <span class="muted small num">· {{ class_date(c.starts_at, c.time_zone) }} · {{ class_time(c.starts_at, c.ends_at, c.time_zone) }}</span></h2>
+      <span class="small muted">{{ c.site_name }}, {{ c.city_name }}, {{ c.state_code }}{% if c.class_status != 'scheduled' %} · <span class="status bad">{{ c.class_status|replace('_', ' ')|capitalize }}</span>{% endif %}</span>
+    </div>
+    <span class="small num" style="text-align:right">{{ c.sold_seats }} / {{ c.seat_limit }} booked{% if c.waitlist_count %}<br>{{ c.waitlist_count }} waiting{% endif %}
+      {% if current_user.has_permission('class.view') %}<br><a href="{{ url_for('admin.classes_detail', sid=c.id) }}">Class list →</a>{% endif %}</span>
+  </div>
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>Student</th><th>Contact</th><th>Course</th><th>Status</th>{% if show_money %}<th>Paid</th>{% endif %}<th>Booked</th></tr></thead>
+    <tbody>{% for s in c.students %}{% set st = reg_status.get(s.status, ('off', s.status)) %}
+      <tr><td><a href="{{ url_for('console.find_booking', public_id=s.public_id) }}"><strong>{{ s.attendee_first_name }} {{ s.attendee_last_name }}</strong></a>{% if s.checked_in_at %}<br><span class="small muted">Checked in</span>{% endif %}</td>
+        <td class="small">{{ s.attendee_email }}{% if s.attendee_phone_e164 %}<br><span class="num">{{ s.attendee_phone_e164 }}</span>{% endif %}</td>
+        <td class="small">{{ s.product_name }}</td>
+        <td><span class="status {{ st[0] }}">{{ st[1] }}</span>{% if s.refund_pending %}<br><span class="status wait">Refund pending</span>{% endif %}</td>
+        {% if show_money %}<td class="num small">{{ s.amount_paid_cents|money }}{% if s.amount_refunded_cents %}<br><span class="muted">{{ s.amount_refunded_cents|money }} back</span>{% endif %}</td>{% endif %}
+        <td class="small">{{ channels.get(s.channel, s.channel) }}{% if s.buyer_email|lower != s.attendee_email|lower %}<br><span class="muted">by {{ s.buyer_first_name }} {{ s.buyer_last_name }}</span>{% endif %}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+</section>
+{% else %}
+<div class="empty">{% if r.query %}No students match these filters in your cities. Try a wider date range or "Any status".{% else %}No one is booked on an upcoming class in your cities yet.{% endif %}</div>
+{% endfor %}
+
+{% if r.pages > 1 %}
+<nav class="pager" aria-label="Pages of classes">
+  {% if r.page > 1 %}<a class="pg" href="{{ url_for('console.find', page=r.page - 1, **r.query) }}" rel="prev">‹ Previous</a>{% endif %}
+  {% for n in r.page_list %}
+    {% if n is none %}<span class="pg gap" aria-hidden="true">…</span>
+    {% elif n == r.page %}<span class="pg current" aria-current="page">{{ n }}</span>
+    {% else %}<a class="pg" href="{{ url_for('console.find', page=n, **r.query) }}">{{ n }}</a>{% endif %}
+  {% endfor %}
+  {% if r.page < r.pages %}<a class="pg" href="{{ url_for('console.find', page=r.page + 1, **r.query) }}" rel="next">Next ›</a>{% endif %}
+</nav>
+{% endif %}
+<script>
+  document.querySelectorAll('.roster-filters select').forEach(function (el) {
+    el.addEventListener('change', function () { el.form.submit(); });
+  });
+</script>
 {% endblock %}

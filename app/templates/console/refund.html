@@ -1,0 +1,53 @@
+{% extends "dash/layout.html" %}
+{% block title %}Refund · {{ r.attendee_first_name }} {{ r.attendee_last_name }}{% endblock %}
+{% block heading %}Refund <span class="accent">{{ r.attendee_first_name }} {{ r.attendee_last_name }}</span>{% endblock %}
+{% block subhead %}<p>{{ r.course_name }} · <span class="num">{{ class_date(r.starts_at, r.time_zone) }} · {{ class_time(r.starts_at, r.ends_at, r.time_zone) }}</span> · {{ r.site_name }}</p>{% endblock %}
+{% block panel %}
+<p class="small"><a href="{{ url_for('console.find_booking', public_id=r.public_id) }}">← Back to the booking</a></p>
+<div class="cols">
+  <section class="panel" aria-labelledby="money-title">
+    <h2 id="money-title">This seat</h2>
+    <dl class="kv">
+      <dt>Paid</dt><dd class="num">{{ r.amount_paid_cents|money }}</dd>
+      <dt>Already refunded</dt><dd class="num">{{ r.amount_refunded_cents|money }}</dd>
+      {% if info.pending %}<dt>Refunds on their way</dt><dd class="num">{{ info.pending|money }} <span class="small muted">(waiting for a manager or for Stripe)</span></dd>{% endif %}
+      <dt>Can still go back</dt><dd class="num"><strong>{{ info.left|money }}</strong></dd>
+      <dt>Class starts</dt><dd class="num">{% if r.hours_to_class > 0 %}in {{ (r.hours_to_class // 24)|int }} days {{ (r.hours_to_class % 24)|int }} hours{% else %}has started or finished{% endif %}</dd>
+      <dt>Paid by</dt><dd>{% if info.payment %}Card (Stripe{{ '' if r.livemode else ', test mode' }}){% elif not r.livemode %}Test booking: no card was charged{% else %}<span class="status wait">No card payment found</span>{% endif %}</dd>
+    </dl>
+    <p class="muted small">Policy to follow: full refund up to 7 days before class; inside that, a transfer instead (one free transfer 24 hours or more before). Instructor Training has its own rules. Anything outside the policy is a goodwill refund and needs a note.</p>
+  </section>
+
+  <section class="panel" aria-labelledby="form-title">
+    <h2 id="form-title">Refund to the card</h2>
+    {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+    {% if info.left <= 0 %}
+      <div class="empty">Nothing left to refund on this seat.</div>
+    {% else %}
+    <form method="post" action="{{ url_for('console.find_booking_refund', public_id=r.public_id) }}" class="stack" novalidate>
+      {{ csrf_input() }}
+      <div class="field"><label for="amount">Amount (dollars)</label>
+        <input type="text" id="amount" name="amount" inputmode="decimal" value="{{ form.amount or '%.2f'|format(info.left / 100) }}" required>
+        <span class="hint">Up to {{ info.left|money }}. Lower it for a partial refund.</span></div>
+      <div class="field"><label for="reason">Why</label>
+        <select id="reason" name="reason" required>
+          <option value="">Choose…</option>
+          {% for k, v in reasons.items() %}<option value="{{ k }}"{{ ' selected' if form.reason == k }}>{{ v }}</option>{% endfor %}
+        </select></div>
+      <div class="field"><label for="note">Note</label>
+        <textarea id="note" name="note" rows="3" maxlength="1000" placeholder="What they asked for and what you agreed">{{ form.note }}</textarea>
+        <span class="hint">Required for goodwill or "something else". The manager sees it.</span></div>
+      {% if approver %}
+        <p class="small">As a manager, your refund goes straight to Stripe.</p>
+      {% elif info.threshold is none %}
+        <p class="notice warn small" role="status">This goes to a manager to approve first (no large-refund amount is set yet, so every refund from customer service is checked).</p>
+      {% else %}
+        <p class="small">Up to <span class="num">{{ info.threshold|money }}</span> goes straight to Stripe; above that, a manager approves it first.</p>
+      {% endif %}
+      <button class="pill red" type="submit" style="align-self:flex-start">{{ 'Refund' if approver else 'Ask for refund' if info.threshold is none else 'Refund' }} <span class="arrow" aria-hidden="true">→</span></button>
+      <p class="muted small">Refunding doesn't cancel the seat. To free the seat too, cancel the booking.</p>
+    </form>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

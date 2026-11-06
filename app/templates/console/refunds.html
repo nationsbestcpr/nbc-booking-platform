@@ -1,0 +1,37 @@
+{% extends "dash/layout.html" %}
+{% import "console/_decide.html" as d with context %}
+{% block title %}Refunds{% endblock %}
+{% block heading %}<span class="accent">Refunds</span>{% endblock %}
+{% block subhead %}<p>Every refund in your cities: who asked, who approved, and whether the money is back. To start one, open the student's booking and press Refund.</p>{% endblock %}
+{% block panel %}
+<section class="panel">
+  <nav class="filters" aria-label="Refunds by status">
+    {% for t in status_tabs %}<a class="filter{{ ' active' if t.key == tab }}" href="{{ url_for('console.refunds_list', tab=t.key, q=q or None) }}"{% if t.key == tab %} aria-current="page"{% endif %}>{{ t.label }} <span class="num">{{ t.count }}</span></a>{% endfor %}
+  </nav>
+  <form class="toolbar" method="get" action="{{ url_for('console.refunds_list') }}" role="search">
+    <input type="hidden" name="tab" value="{{ tab }}">
+    <div class="field"><label for="rq">Student</label><input type="search" id="rq" name="q" value="{{ q }}" placeholder="Name or email"></div>
+    <button class="pill plain" type="submit">Search</button>
+    <a class="pill" href="{{ url_for('console.find') }}">Start a refund: find the student <span class="arrow" aria-hidden="true">→</span></a>
+  </form>
+  {% if threshold is none %}<p class="muted small">Until the large-refund amount is set in Business settings, every refund asked for by customer service waits for a manager.</p>{% endif %}
+  {% if rows %}
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>Student</th><th>Amount</th><th>Why</th><th>Status</th><th>Asked / approved</th></tr></thead>
+    <tbody>{% for f in rows %}{% set fs = refund_status.get(f.status, ('off', f.status)) %}
+      <tr><td><a href="{{ url_for('console.find_booking', public_id=f.public_id) }}"><strong>{{ f.attendee_first_name }} {{ f.attendee_last_name }}</strong></a><br>
+            <span class="small muted num">{{ f.course_name }} · {{ class_date(f.starts_at, f.time_zone) }} · {{ f.site_name }}</span></td>
+        <td class="num"><strong>{{ f.amount_cents|money }}</strong>{% if not f.livemode %}<br><span class="status wait">Test</span>{% endif %}</td>
+        <td class="small">{{ reasons.get(f.reason, f.reason|replace('_', ' ')|capitalize) }}{% if f.note %}<br><span class="muted">“{{ f.note }}”</span>{% endif %}</td>
+        <td><span class="status {{ fs[0] }}">{{ fs[1] }}</span>{% if f.failure_reason %}<br><span class="small muted">{{ f.failure_reason }}</span>{% endif %}
+          {% if f.can_decide %}{{ d.decide(f, request.full_path) }}{% endif %}</td>
+        <td class="small">{{ f.requested_by or {'engine_auto': 'Automatic', 'stripe_dashboard': 'In Stripe'}.get(f.source, '—') }} · <span class="num">{{ f.created_at|office_time }}</span>
+          {% if f.approved_by %}<br><span class="muted">Approved by {{ f.approved_by }}</span>{% elif f.requires_manager_approval and f.status == 'requested' %}<br><span class="muted">Needs a manager</span>{% endif %}
+          {% if f.processed_at %}<br><span class="muted num">Finished {{ f.processed_at|office_time }}</span>{% endif %}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}
+  <div class="empty">No refunds here.</div>
+  {% endif %}
+</section>
+{% endblock %}

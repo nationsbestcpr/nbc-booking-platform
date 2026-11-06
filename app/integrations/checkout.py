@@ -530,21 +530,12 @@ def _refund_job(job: dict) -> None:
                                       WHERE id = :id"""), {"id": refund_id, "e": str(exc)[:500]})
                 runs.issue(conn, source="stripe", code="REFUND_FAILED", severity="error",
                            external_ref=f"refund:{refund_id}", entity_type="order", entity_id=r["order_id"],
-                           message=f"An automatic refund of {r['amount_cents'] / 100:.2f} USD was refused by Stripe "
+                           message=f"A refund of {r['amount_cents'] / 100:.2f} USD was refused by Stripe "
                                    f"({exc}). Check the payment in the Stripe Dashboard and refund it by hand.")
         raise
+    from .. import refunds
     with db.transaction() as conn:
-        done = conn.execute(text("""
-            UPDATE refunds SET status = 'succeeded', stripe_refund_id = :sr, processed_at = now()
-             WHERE id = :id AND status <> 'succeeded' RETURNING amount_cents
-        """), {"id": refund_id, "sr": res.get("id")}).scalar()
-        if done:
-            conn.execute(text("""
-                UPDATE orders SET amount_refunded_cents = amount_refunded_cents + :a,
-                       status = CASE WHEN amount_refunded_cents + :a >= amount_paid_cents THEN 'refunded'
-                                     ELSE 'partially_refunded' END
-                 WHERE id = :o
-            """), {"a": done, "o": r["order_id"]})
+        refunds.settle(conn, refund_id, stripe_refund_id=res.get("id"))
 
 
 def record_webhook(event: dict, valid: bool) -> tuple[int | None, str]:

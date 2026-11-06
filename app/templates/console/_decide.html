@@ -1,0 +1,19 @@
+{#- Approve / turn down a refund waiting for a manager. `f` has id; `back` is where to return. -#}
+{% macro decide(f, back) %}
+<div class="decide">
+  <form method="post" action="{{ url_for('console.refund_decide', refund_id=f.id, decision='approve') }}"
+        onsubmit="return confirm('Approve this refund of {{ f.amount_cents|money }}? It goes to the card through Stripe.');">
+    {{ csrf_input() }}<input type="hidden" name="back" value="{{ back }}">
+    <button class="btn-small primary" type="submit">Approve</button>
+  </form>
+  <details class="turn-down">
+    <summary class="btn-small">Turn down</summary>
+    <form method="post" action="{{ url_for('console.refund_decide', refund_id=f.id, decision='turn-down') }}" class="stack">
+      {{ csrf_input() }}<input type="hidden" name="back" value="{{ back }}">
+      <label class="small" for="why-{{ f.id }}">Why (the person who asked sees this)</label>
+      <input type="text" id="why-{{ f.id }}" name="why" maxlength="500" placeholder="e.g. outside the 7-day window">
+      <button class="btn-small danger" type="submit">Turn down</button>
+    </form>
+  </details>
+</div>
+{% endmacro %}
