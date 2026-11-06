@@ -207,10 +207,16 @@ Notes:
   to see the `[start]` lines and the error. In production a failed start
   stops, so Replit keeps the previous version running; read the deployment's
   **Logs** tab instead.
-- **When publishing, don't approve Replit's "database changes" prompt.**
-  Replit offers to copy the workspace tables to production with its own SQL,
-  which skips the extensions and fails (`type "citext" does not exist`).
-  Cancel or skip it; the app's own migrations do that job.
+- **When publishing, never approve Replit's "database changes" prompt.**
+  It makes the published database match the workspace's with its own SQL:
+  it can fail (`type "citext" does not exist`), or worse, *succeed* and drop
+  columns our migrations added while the migration record still says they're
+  there (it removed `orders.buyer_user_id` from the test site once; migration
+  0007 put it back). Cancel or skip it; the app's own migrations do that job.
+  Workspace Run now applies the migrations too, so there's no difference for
+  Replit to offer. Every start runs `flask --app wsgi db verify`, which lists
+  anything db/schema.sql has that the database lacks, in the `[start]` log and
+  as a problem on Integrations.
 - The schema needs the PostgreSQL extensions `citext`, `pg_trgm` and
   `btree_gist`; the first migration installs them. If the upgrade stops with
   "permission denied to create extension", the database user can't install

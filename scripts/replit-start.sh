@@ -69,6 +69,13 @@ step 60 $PY -c "import wsgi" || fail "the app could not load (see the error abov
 say "bringing the database up to date"
 step 120 $PY -m flask --app wsgi db upgrade || fail "the database update (see the error above)"
 
+# Is everything db/schema.sql describes really there? (Replit's "database
+# changes" prompt on publish can remove columns while the migration record
+# stays at the latest.) Missing parts are listed here and on Integrations;
+# the app still starts.
+say "checking the database has every table and column"
+step 60 $PY -m flask --app wsgi db verify --record || say "WARNING: the database is missing parts (listed above); tell the developer"
+
 # The preset admin account from the SUPERADMIN_EMAIL / SUPERADMIN_PASSWORD
 # secrets (does nothing when they aren't set).
 say "checking the preset admin account"

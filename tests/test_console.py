@@ -304,3 +304,12 @@ def test_a_crash_shows_staff_the_error_on_the_test_site_only(app, client, sign_i
     monkeypatch.setitem(app.config, "APP_ENV", "production")
     page = text_of(client.get(f"/console/bookings/{reg}/refund"))
     assert "refund preview exploded" not in page                         # live site: only the reference
+
+
+def test_db_verify_finds_nothing_missing(app):
+    from app import schema_check
+    with app.app_context():
+        assert schema_check.missing() == []
+    want = schema_check.expected()
+    assert ("orders", "buyer_user_id") in want["columns"] and "orders_buyer_user_idx" in want["indexes"]
+    assert ("orders", "check") not in want["columns"]

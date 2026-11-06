@@ -62,6 +62,23 @@ def downgrade(revision: str, yes: bool) -> None:
     click.echo("Done.")
 
 
+@db_cli.command("verify")
+@click.option("--record/--no-record", default=False, help="Also show the result on the Integrations page.")
+def verify(record: bool) -> None:
+    """Check the database has every table, column, index, function, trigger and view in db/schema.sql."""
+    from . import schema_check
+    lines = schema_check.missing()
+    if record:
+        schema_check.record(lines)
+    if not lines:
+        click.echo("The database has everything db/schema.sql describes.")
+        return
+    click.echo("The database is MISSING:")
+    for line in lines:
+        click.echo(f"  - {line}")
+    raise SystemExit(1)
+
+
 @db_cli.command("current")
 def current() -> None:
     """Show which migration the database is on."""
