@@ -72,17 +72,18 @@ second, wrong source of truth.
 | Source / first-touch fields | **Snapshot** on the engine side (`order_attribution`, `people.first_order_id` as the write-once anchor); written to GHL once | So write-once logic doesn't need to read GHL. |
 | OAuth tokens | **Ledger**, encrypted: `oauth_connections` | Each refresh returns a new refresh token, so it can't live in Replit Secrets. Used once the Marketplace app (webhooks) is built; until then contacts and opportunities are written with a Private Integration token kept in Secrets (`GHL_API_TOKEN`), which doesn't rotate. |
 
-### Microsoft 365 (Entra ID) — owns staff identity
+### Microsoft (Entra ID) and Google — own their sign-in identities
 
 | Data | Engine stores | Why |
 |---|---|---|
-| User object ID, tenant ID | **Reference**: `user_identities` (provider `microsoft`) | Bind sign-ins to an account. |
-| Email, display name | **Mirror**: `user_accounts` | Shown in menus and the action log. |
-| Who may sign in at all | **Not stored** | Entra's "assignment required" decides. |
+| Microsoft object ID and tenant ID; Google account ID (`sub`) | **Reference**: `user_identities` (providers `microsoft`, `google`) | Bind sign-ins to an account. Accounts are matched by this id, not by email. |
+| Email, display name | **Snapshot** at first sign-in: `user_accounts` (with `email_verified_at` when the provider vouches for the email) | Shown in menus and the action log; a confirmed email lets the account see seats booked for it by others. |
+| Tokens (ID, access, refresh) | **Never** | Only the ID token's claims are read, once, at sign-in. |
+| Who may sign in at all | **Not stored** | Anyone may sign in; signing in grants no role. Staff roles are granted by an admin. |
 | What a person may do (roles, permissions, dashboards) | **Owned**: `roles`, `permissions`, `role_permissions`, `user_roles` | The plan: "inside the console, mark who is a manager". Instructors (emailed sign-in links) use the same tables. |
 | Staff Microsoft passwords, MFA | **Never** | Entra handles them. |
 
-**Customer and instructor accounts** are the engine's own (`user_accounts`). Their email + password sign-in stores only a salted scrypt hash (`user_identities.password_hash`), never the password. An account links to its GHL-mirrored contact (`user_accounts.person_id`) once the person books.
+**Customer and instructor accounts** are the engine's own (`user_accounts`). Online orders point at the account that booked them (`orders.buyer_user_id`, owned). Their email + password sign-in stores only a salted scrypt hash (`user_identities.password_hash`), never the password. An account links to its GHL-mirrored contact (`user_accounts.person_id`) once the person books.
 
 ### GA4, Meta (pixel + Conversions API), Google Ads — own analytics and ad data
 

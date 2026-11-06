@@ -513,5 +513,26 @@ SELECT pg_temp.check(
   AND NOT user_has_permission((SELECT id FROM user_accounts WHERE email = 'never-booked@example.test'), 'self.bookings_view'),
   'someone who booked as a guest becomes a student when they create an account; others do not');
 
+-- 0004: Google sign-in, and the account that booked becomes a student even with another email.
+INSERT INTO user_accounts (email, display_name, status) VALUES ('google-booker@example.test', 'Google Booker', 'active');
+INSERT INTO user_identities (user_account_id, provider, subject)
+SELECT id, 'google', '109876543210987654321' FROM user_accounts WHERE email = 'google-booker@example.test';
+SELECT pg_temp.check(
+  EXISTS (SELECT 1 FROM user_identities WHERE provider = 'google' AND subject = '109876543210987654321'),
+  'an account can sign in with Google');
+INSERT INTO orders (channel, buyer_first_name, buyer_last_name, buyer_email, livemode, buyer_user_id)
+SELECT 'web', 'Google', 'Booker', 'typed-another-email@example.test', false, id
+  FROM user_accounts WHERE email = 'google-booker@example.test';
+INSERT INTO seat_holds (session_id, order_id, kind, quantity, expires_at)
+SELECT (SELECT id FROM sessions WHERE slug = 'hou-1'), (SELECT max(id) FROM orders), 'checkout', 1, now() + interval '15 minutes';
+INSERT INTO registrations (order_id, seat_hold_id, session_id, product_id, attendee_first_name, attendee_last_name,
+                           attendee_email, unit_price_cents, status, confirmed_at)
+SELECT (SELECT max(id) FROM orders), (SELECT max(id) FROM seat_holds),
+       (SELECT id FROM sessions WHERE slug = 'hou-1'), (SELECT ap FROM ids),
+       'Someone', 'Else', 'someone-else@example.test', 10800, 'confirmed', now();
+SELECT pg_temp.check(
+  user_has_permission((SELECT id FROM user_accounts WHERE email = 'google-booker@example.test'), 'self.bookings_view'),
+  'the account that booked a seat becomes a student, whatever emails were typed');
+
 \echo 'All schema checks passed.'
 ROLLBACK;

@@ -200,6 +200,10 @@ SELECT grant_student_role_if_booked(id) FROM user_accounts WHERE email = 'alder1
 INSERT INTO user_identities (user_account_id, provider, subject, password_hash, password_changed_at)
 SELECT id, 'password', lower(email), 'scrypt:32768:8:1$lDs2WhELxSIHv6oh$ec7f1878edbf45db277b5c2d83944773604e041c02af38289a0663e2e796be1f2f9158291bcc528dfd3791e54fa8bdf8f1ad0678580a908c5ec7bdab55f45920', now() FROM user_accounts;
 
+-- Demo emails count as confirmed (as if each had signed in with Google once), so
+-- dashboards show the bookings made for these emails in the demo data.
+UPDATE user_accounts SET email_verified_at = now();
+
 -- A schedule copy that ran, and one data problem for Bre to fix ----------------
 INSERT INTO integration_runs (kind, trigger, status, stats, started_at, finished_at)
 VALUES ('airtable_sync', 'schedule', 'succeeded', '{"seen": 7, "created": 0, "updated": 1, "skipped": 6}',

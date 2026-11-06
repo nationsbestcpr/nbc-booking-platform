@@ -10,7 +10,9 @@
     <div class="panel-head"><h2 id="int-{{ c.key }}">{{ c.name }}</h2><span class="status {{ c.state }}">{{ c.label }}</span></div>
     <p class="muted small">{{ c.what }}</p>
     <dl class="kv">
-      <dt>Secrets</dt><dd><span class="secret-list">{% for s in c.secrets %}<span class="secret {{ 'missing' if s in c.missing else 'set' }}" title="{{ 'Missing' if s in c.missing else 'Set' }}">{{ s }}</span>{% endfor %}</span></dd>
+      <dt>Secrets</dt><dd><span class="secret-list">{% for s in c.secrets %}<span class="secret {{ 'missing' if s in c.missing else 'set' }}" title="{{ 'Missing' if s in c.missing else 'Set' }}">{{ s }}</span>{% endfor %}{% for s in c.optional or [] %}<span class="secret {{ 'set' if s in set_secrets else 'optional' }}" title="Optional">{{ s }}</span>{% endfor %}</span></dd>
+      {% if c.redirect_url %}<dt>Redirect URI</dt><dd><code class="small">{{ c.redirect_url }}</code><br><span class="small muted">Add this exact address to the {{ 'Google OAuth client' if c.key == 'google' else 'Microsoft app registration' }}.</span></dd>{% endif %}
+      {% if c.sign_ins and not c.missing %}<dt>Accounts using it</dt><dd class="num">{{ c.sign_ins.accounts }}{% if c.sign_ins.last_used %} · last sign-in {{ c.sign_ins.last_used|office_time }}{% endif %}</dd>{% endif %}
       {% if c.key == 'airtable' and c.base %}<dt>Base</dt><dd><code class="small">{{ c.base }}</code></dd>{% endif %}
       {% if c.key == 'airtable' %}<dt>Sync</dt><dd>When the app starts, then every {{ c.every }} minutes</dd>{% endif %}
       {% if c.mode %}<dt>Mode</dt><dd><span class="status {{ 'wait' if c.mode == 'Test' else 'ok' }}">{{ c.mode }}</span></dd>{% endif %}

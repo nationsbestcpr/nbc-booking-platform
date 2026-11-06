@@ -37,6 +37,7 @@ class CurrentUser:
     email: str
     display_name: str
     signup_intent: str | None
+    email_verified: bool = False       # confirmed by Google / Microsoft (password sign-up doesn't confirm it)
     roles: list[dict] = field(default_factory=list)   # [{code, name, is_staff, grants_all, dashboard_key, scope_metro_id}], main role first
     permissions: set[str] = field(default_factory=set)
 
@@ -84,7 +85,8 @@ class CurrentUser:
 
 def load_user(user_id: int) -> CurrentUser | None:
     account = db.fetch_one("""
-        SELECT id, email, display_name, signup_intent FROM user_accounts WHERE id = :id AND status = 'active'
+        SELECT id, email, display_name, signup_intent, email_verified_at
+          FROM user_accounts WHERE id = :id AND status = 'active'
     """, id=user_id)
     if not account:
         return None
@@ -97,13 +99,20 @@ def load_user(user_id: int) -> CurrentUser | None:
     perms = {r["permission_code"] for r in db.fetch_all(
         "SELECT DISTINCT permission_code FROM user_effective_permissions WHERE user_account_id = :id", id=user_id)}
     return CurrentUser(id=account["id"], email=account["email"], display_name=account["display_name"],
-                       signup_intent=account["signup_intent"], roles=roles, permissions=perms)
+                       signup_intent=account["signup_intent"],
+                       email_verified=account["email_verified_at"] is not None, roles=roles, permissions=perms)
 
 
 def current_user() -> CurrentUser | None:
     if "current_user" not in g:
         uid = session.get("user_id")
-        g.current_user = load_user(uid) if uid else None
+        user = load_user(uid) if uid else None
+        if user and user.email_verified and not session.get("verified"):
+            # Signed in before the email was confirmed (by Google or Microsoft): that
+            # sign-in may have been by someone else who typed this email, so it ends.
+            session.clear()
+            user = None
+        g.current_user = user
     return g.current_user
 
 
@@ -111,6 +120,8 @@ def _start_session(user_id: int) -> None:
     csrf = session.get("_csrf")
     session.clear()                      # new session id on sign-in
     session["user_id"] = user_id
+    session["verified"] = bool(db.fetch_value(
+        "SELECT email_verified_at IS NOT NULL FROM user_accounts WHERE id = :id", id=user_id))
     if csrf:
         session["_csrf"] = csrf
     g.pop("current_user", None)
@@ -299,7 +310,8 @@ def has_password(user_id: int) -> bool:
 
 def safe_next(target: str | None) -> str:
     """Only follow redirects within this site."""
-    if target and target.startswith("/") and not target.startswith("//"):
+    if (target and target.startswith("/") and not target.startswith(("//", "/\\"))
+            and not any(c in target for c in "\r\n\t\\")):
         return target
     return url_for("public.home")
 

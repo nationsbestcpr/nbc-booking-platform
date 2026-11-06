@@ -101,7 +101,13 @@ def test_guest_who_booked_is_a_student_on_sign_up(client, post_form):
                                   "password": "long-enough-1", "intent": "student"})
     html = client.get("/").get_data(as_text=True)
     assert ">Student</span>" in html
-    assert "Your next class" in html
+    # A typed email isn't confirmed, so classes booked for it by someone else stay private...
+    assert "Your next class" not in html
+    with client.application.app_context(), db.transaction() as conn:   # ...until Google/Microsoft confirm it
+        conn.execute(text("UPDATE user_accounts SET email_verified_at = now() WHERE email = 'birch1@example.test'"))
+    assert "Your next class" not in client.get("/").get_data(as_text=True)   # that older sign-in ended
+    post_form("/sign-in", {"email": "birch1@example.test", "password": "long-enough-1"})
+    assert "Your next class" in client.get("/").get_data(as_text=True)
 
 
 def test_duplicate_email_is_explained(post_form):

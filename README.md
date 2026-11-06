@@ -42,12 +42,28 @@ wsgi.py              entry point for flask / gunicorn
 
 ## How sign-in works
 
-One sign-in page for everyone; nobody picks a role. Every new account is a
-regular **user**. Paying for a seat makes them a **student** automatically
-(also if they booked as a guest before creating the account). Choosing
-"Instructor" at sign-up is recorded for the team to verify; the
-**instructor** and staff roles are only ever granted by an admin. Booking
-doesn't need an account.
+One sign-in page for everyone; nobody picks a role. People sign in with
+**email and password**, **Google** or **Microsoft** (work, school or
+personal), whichever they like; the buttons show once their secrets are set
+(see Integrations below). Every new account is a regular **user**. Paying for
+a seat makes them a **student** automatically. Choosing "Instructor" at
+sign-up is recorded for the team to verify; the **instructor** and staff
+roles are only ever granted by an admin.
+
+**Booking needs an account.** Pressing Book while signed out opens the
+sign-in page with the class shown beside it; signing in, or creating an
+account, comes straight back to the same class and number of seats. The
+order is saved to the account (`orders.buyer_user_id`) and the confirmation
+goes to the account's email. **My classes** (`/my`) lists upcoming and past
+bookings, and has the same class search as the home page to book another
+(`app/classes.py` and the macros in `templates/_classes.html`).
+
+Seats booked for an email by someone else (a friend, an employer, or an older
+guest booking) show on that email's account once Google or Microsoft confirm
+the email belongs to them; a typed email at sign-up is never trusted for
+that. If someone signs in with Google or Microsoft to an account whose email
+was never confirmed, that account's password is switched off and its other
+sign-ins end, so whoever created it with their email can't keep a way in.
 
 ## Run it locally
 
@@ -215,7 +231,7 @@ grants by people who aren't allowed to make them, and never lets the last
 active admin be removed or suspended. `environment` and
 `airtable_writeback_enabled` can't be changed from the screen.
 
-## Integrations: Airtable, Stripe, GHL
+## Integrations: Airtable, Stripe, GHL, Google and Microsoft sign-in
 
 The code is in `app/integrations/` (one file per platform, plus the outbox
 queue and the worker). The published app runs a background worker next to
@@ -291,6 +307,39 @@ Opportunities are named `YYYY-MM-DD | COURSE-DELIVERY | MARKET-City` and
 start at Pending. GHL → engine webhooks (contact edits, messages, dragged
 stages) need the Marketplace app (launch plan 15.5); not built yet.
 
+**Google sign-in**
+1. console.cloud.google.com → a project for NBC → APIs & Services → OAuth
+   consent screen: External, app name "Nation's Best CPR", support email,
+   scopes `openid`, `email`, `profile` (no sensitive scopes, so no review).
+   Publish it ("In production"), or only listed test users can sign in.
+2. Credentials → Create credentials → OAuth client ID → Web application.
+   Authorized redirect URIs: the **Redirect URI** shown on the Google card of
+   the Integrations page, one per site (test site and live site each:
+   `https://<site>/sign-in/google/callback`).
+3. Client ID → `GOOGLE_CLIENT_ID`, client secret → `GOOGLE_CLIENT_SECRET`.
+
+**Microsoft sign-in** (staff and customers; any Microsoft account)
+1. entra.microsoft.com → App registrations → New registration. Supported
+   account types: **Accounts in any organizational directory and personal
+   Microsoft accounts**. Redirect URI: Web, the **Redirect URI** on the
+   Microsoft card (`https://<site>/sign-in/microsoft/callback`); add one per site.
+2. Certificates & secrets → New client secret → its *Value* →
+   `ENTRA_CLIENT_SECRET`. Overview → Application (client) ID → `ENTRA_CLIENT_ID`.
+3. Optional: NBC's own Directory (tenant) ID → `ENTRA_TENANT_ID`, so NBC
+   staff emails are trusted as they are. Emails from other work or school
+   tenants are trusted only with the `xms_edov` claim: Token configuration →
+   Add optional claim → ID → `xms_edov` (and `email`). Without it those people
+   are asked to use Google or email and password instead. Personal Microsoft
+   accounts work as they are.
+The app asks only for `openid email profile`; it never reads mail, files or
+calendars. Client secrets expire (set a reminder to renew).
+
+**Stripe test mode with sign-in**: with `STRIPE_SECRET_KEY` set to an
+`sk_test_…` key, "Book (test, no payment)" switches off by itself and Book
+goes to Stripe's test checkout, pre-filled with the account's email. Pay
+with 4242 4242 4242 4242; the webhook confirms the seat and it shows under
+My classes. Remove the key to go back to test bookings with no payment.
+
 From a shell: `flask --app wsgi sync airtable`, `sync check-airtable`,
 `sync ghl-stages`, `worker once`.
 
@@ -310,5 +359,6 @@ above before the first publish.
 | 1. Airtable sync (pull) | Done |
 | 3. Seat holds and Stripe Checkout | Done |
 | 4. GHL contacts and opportunities (engine → GHL) | Done |
+| Accounts for booking: sign in before booking, Google and Microsoft sign-in, My classes dashboard | Done |
 | 2. Search pages and SEO | Next |
-| 4. GHL webhooks (GHL → engine) · 4a tracking · 4b Microsoft sign-in · 4c instructor portal · Airtable write-back | To do |
+| 4. GHL webhooks (GHL → engine) · 4a tracking · 4c instructor portal · Airtable write-back | To do |

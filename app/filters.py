@@ -88,7 +88,13 @@ def cert_label(cert_type: str) -> str:
     return out[:1].upper() + out[1:]
 
 
+def dict_without(d: dict, *keys: str) -> dict:
+    """A copy of a dict without some keys (for links that drop a filter)."""
+    return {k: v for k, v in d.items() if k not in keys}
+
+
 def init_app(app: Flask) -> None:
+    app.add_template_filter(dict_without)
     app.add_template_filter(cert_label)
     app.add_template_filter(money)
     app.add_template_filter(office_time)

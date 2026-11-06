@@ -375,10 +375,16 @@ INTEGRATIONS = [
              "stage Pending.",
      "secrets": ["GHL_API_TOKEN", "GHL_LOCATION_ID"],
      "runs": [], "issue_source": "ghl", "outbox": ["ghl"], "webhook": None, "oauth": None},
-    {"key": "microsoft", "name": "Microsoft 365 sign-in",
-     "what": "Staff sign in with their NBC Microsoft accounts. Not built yet.",
-     "secrets": ["ENTRA_TENANT_ID", "ENTRA_CLIENT_ID", "ENTRA_CLIENT_SECRET"],
-     "runs": [], "issue_source": None, "outbox": [], "webhook": None, "oauth": None},
+    {"key": "google", "name": "Google sign-in",
+     "what": "“Continue with Google” on the sign-in and create-account pages. Anyone can use it; it gives no "
+             "role by itself.",
+     "secrets": ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"],
+     "runs": [], "issue_source": None, "outbox": [], "webhook": None, "oauth": None, "sign_in": True},
+    {"key": "microsoft", "name": "Microsoft sign-in",
+     "what": "“Continue with Microsoft” for work, school and personal Microsoft accounts (staff and customers). "
+             "ENTRA_TENANT_ID is optional: NBC's own tenant, whose emails are trusted as they are.",
+     "secrets": ["ENTRA_CLIENT_ID", "ENTRA_CLIENT_SECRET"], "optional": ["ENTRA_TENANT_ID"],
+     "runs": [], "issue_source": None, "outbox": [], "webhook": None, "oauth": None, "sign_in": True},
 ]
 
 
@@ -410,6 +416,8 @@ def _integration_status(spec: dict) -> dict:
         state, label = "bad", "Needs attention"
     elif problems["errors"] or unsynced or (last_run and last_run["status"] == "failed"):
         state, label = "bad", "Needs attention"
+    elif spec.get("sign_in"):
+        state, label = "ok", "On"
     elif spec["oauth"] and not connection:
         state, label = "wait", "Waiting for the app to be installed"
     elif not (last_run or last_webhook or connection or jobs_done) and (spec["runs"] or spec["webhook"] or spec["outbox"]):
@@ -445,6 +453,11 @@ def _integration_details(key: str) -> dict:
         problem = stripe_api.check_key_for_environment()
         return {"mode": "Live" if stripe_api.is_live_key() else "Test", "problem": problem,
                 "webhook_url": url_for("webhooks.stripe", _external=True)}
+    if key in ("google", "microsoft"):
+        used = db.fetch_one("""SELECT count(*) AS accounts, max(last_used_at) AS last_used
+                                 FROM user_identities WHERE provider = :p""", p=key)
+        return {"redirect_url": url_for("account.oauth_callback", provider=key, _external=True),
+                "sign_ins": used}
     if key == "ghl":
         return {"pipeline": ghl.pipeline_name(),
                 "stages": db.fetch_all("SELECT internal_state, stage_name FROM ghl_stage_map ORDER BY internal_state")}
@@ -486,5 +499,6 @@ def integrations():
                END AS who
           FROM unsynced_items u ORDER BY u.created_at DESC LIMIT 50
     """)
+    set_secrets = {n for c in INTEGRATIONS for n in c.get("optional", []) if os.environ.get(n)}
     return render_template("admin/integrations.html", cards=cards, issues=issues, runs=runs, unsynced=unsynced,
-                           tabs=areas.tabs_for(auth.current_user()))
+                           set_secrets=set_secrets, tabs=areas.tabs_for(auth.current_user()))

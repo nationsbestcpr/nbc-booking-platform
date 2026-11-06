@@ -19,7 +19,7 @@ that the two agree.
 
 | Group | Tables | Owner |
 |---|---|---|
-| Accounts, roles, permissions | `user_accounts`, `user_identities`, `roles`, `permissions`, `role_permissions`, `user_roles` | Engine (staff sign-in identity from Entra) |
+| Accounts, roles, permissions | `user_accounts`, `user_identities`, `roles`, `permissions`, `role_permissions`, `user_roles` | Engine (sign-in identities from Google and Microsoft) |
 | Settings and policies | `app_settings`, `policy_versions` | Engine |
 | Catalog | `airtable_records`, `metros`, `sites`, `site_private_details`, `rooms`, `room_course_families`, `course_families`, `products` | Mirror of Airtable |
 | Classes and seats | `sessions`, `session_airtable_records`, `session_private_details`, `session_products`, `external_seat_reservations`, `seat_overrides` | Airtable schedule, engine capacity |
@@ -63,11 +63,14 @@ the student area. Inside the admin area each tab needs its own permission.
   - **"I'm an instructor" at sign-up** is saved as
     `user_accounts.signup_intent` for the team to verify. It grants nothing
     on its own.
-- **Booking doesn't need an account.** Guests can still check out.
+- **Booking online needs an account.** The order keeps the account that
+  booked it (`orders.buyer_user_id`, 0004). Staff can still book for someone
+  without one (phone and invoice orders).
 - **Sign-in methods** are per account in `user_identities`:
   - **Email and password** for everyone. Only a salted scrypt hash is stored.
     The sign-in locks for 15 minutes after 5 wrong passwords.
-  - **Microsoft 365 for staff and emailed one-time links** come later.
+  - **Google and Microsoft** (provider `google` / `microsoft`), matched by the
+    provider's own id. Emailed one-time links come later.
   - One person can have several sign-in methods.
 - **City-area limits.** A role grant can be limited to one city area
   (`user_roles.scope_metro_id`), e.g. a manager for Houston only. A limited

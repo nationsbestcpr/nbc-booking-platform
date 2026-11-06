@@ -429,14 +429,31 @@ def on_sale(fake, run_sync, q, client, sign_in, app):
     return session_for(q, rid)
 
 
+def signed_in_as(client, email: str) -> None:
+    """Booking needs an account: sign up (or back in) with this email, as a customer would."""
+    with client.session_transaction() as sess:
+        sess.clear()
+    res = client.post("/create-account", data={"csrf_token": csrf_from(client, "/create-account"),
+                                               "first_name": "Dana", "last_name": "Buyer", "email": email,
+                                               "password": "long-enough-1", "intent": "student"})
+    if res.status_code != 302:          # already has an account from an earlier booking
+        client.post("/sign-in", data={"csrf_token": csrf_from(client, "/sign-in"), "email": email,
+                                      "password": "long-enough-1"})
+
+
+def on_sale_product(client, s) -> str:
+    page = client.get(f"/book/{s['public_id']}").get_data(as_text=True)
+    return re.search(r'name="product_id" value="(\d+)" checked', page).group(1)
+
+
 def book(client, s, seats=2, *, buyer_email=None, others=None, product=None):
+    signed_in_as(client, buyer_email or unique_email("buyer"))
     path = f"/book/{s['public_id']}?seats={seats}"
     if product is None:
         page = client.get(path)
         product = re.search(r'name="product_id" value="(\d+)" checked', page.get_data(as_text=True)).group(1)
-    data = {"csrf_token": csrf_from(client, "/sign-in"), "seats": seats, "product_id": product,
-            "buyer_first_name": "Dana", "buyer_last_name": "Buyer", "buyer_email": buyer_email or unique_email("buyer"),
-            "buyer_phone": "(757) 555-0100", "buyer_attends": "yes"}
+    data = {"csrf_token": csrf_from(client, path), "seats": seats, "product_id": product,
+            "buyer_first_name": "Dana", "buyer_last_name": "Buyer", "buyer_phone": "(757) 555-0100", "buyer_attends": "yes"}
     for i, email in enumerate(others or [unique_email("guest") for _ in range(seats - 1)], start=1):
         data.update({f"a{i}_first": f"Guest{i}", f"a{i}_last": "Person", f"a{i}_email": email})
     return client.post(f"/book/{s['public_id']}", data=data)
@@ -714,6 +731,9 @@ def test_worker_start_does_the_setup_by_itself(fake, app, q):
     fake.add_class()
     with app.app_context(), db.transaction() as conn:
         conn.execute(text("DELETE FROM ghl_stage_map"))
+        # Earlier tests' syncs are recent; a fresh publish has none (or old ones).
+        conn.execute(text("UPDATE integration_runs SET started_at = started_at - interval '1 day' "
+                          "WHERE kind = 'airtable_sync'"))
     with app.app_context():
         done = worker.on_start()
     try:
@@ -752,13 +772,16 @@ def test_ghl_refusing_a_second_opportunity_is_explained(fake, on_sale, client, q
 
 def test_without_stripe_the_test_app_books_without_payment(fake, on_sale, client, q, app, monkeypatch):
     monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
+    email = unique_email("tb")
+    signed_in_as(client, email)
     page = text_of(client.get(f"/book/{on_sale['public_id']}"))
     assert "Test booking." in page and "Book (test, no payment)" in page
-    res = book(client, on_sale, seats=2)
+    res = book(client, on_sale, seats=2, buyer_email=email)
     assert res.status_code == 303 and "/book/done?order=" in res.headers["Location"]
     order = q("SELECT * FROM orders WHERE public_id = CAST(:p AS uuid)",
               p=res.headers["Location"].split("order=")[1])[0]
-    assert order["status"] == "paid" and not order["livemode"]
+    assert order["status"] == "paid" and not order["livemode"] and order["buyer_email"] == email
+    assert order["buyer_user_id"] == q("SELECT id FROM user_accounts WHERE email = :e", e=email)[0]["id"]
     assert not q("SELECT 1 FROM payments WHERE order_id = :o", o=order["id"])
     regs = q("SELECT * FROM registrations WHERE order_id = :o", o=order["id"])
     assert [r["status"] for r in regs] == ["confirmed", "confirmed"]
@@ -769,6 +792,56 @@ def test_without_stripe_the_test_app_books_without_payment(fake, on_sale, client
         outbox.run_due(targets=["ghl"])
     regs = q("SELECT * FROM registrations WHERE order_id = :o", o=order["id"])
     assert all(r["ghl_opportunity_id"] for r in regs) and len(fake.ghl_opps) == 2
+
+
+def test_signed_out_customer_signs_in_first_and_comes_back(fake, on_sale, client, q, monkeypatch):
+    monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
+    path = f"/book/{on_sale['public_id']}?seats=2"
+    res = client.get(path)
+    assert res.status_code == 302 and res.headers["Location"].startswith("/sign-in?next=")
+    page = text_of(client.get(res.headers["Location"]))
+    assert "Sign In to Book Your Seat" in page and "You're booking" in page and "Create an account" in page
+    email = unique_email("back")
+    res = client.post("/create-account", data={"csrf_token": csrf_from(client, "/create-account"),
+                                               "first_name": "Ria", "last_name": "Turner", "email": email,
+                                               "password": "long-enough-1", "intent": "student", "next": path})
+    assert res.status_code == 302 and res.headers["Location"] == path         # straight back, same seats
+    page = text_of(client.get(path))
+    assert email in page and 'name="buyer_email"' not in page               # the account's email, not typed
+    assert 'value="Ria"' in page and 'value="Turner"' in page and "Seat 2" in page
+
+
+def test_a_typed_email_cant_replace_the_accounts(fake, on_sale, client, q, monkeypatch):
+    monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
+    email = unique_email("own")
+    signed_in_as(client, email)
+    data = {"csrf_token": csrf_from(client, f"/book/{on_sale['public_id']}"), "seats": 1,
+            "product_id": on_sale_product(client, on_sale), "buyer_first_name": "Ann", "buyer_last_name": "Own",
+            "buyer_email": "someone-else@example.test", "buyer_attends": "yes"}
+    res = client.post(f"/book/{on_sale['public_id']}", data=data)
+    order = q("SELECT * FROM orders WHERE public_id = CAST(:p AS uuid)", p=res.headers["Location"].split("order=")[1])[0]
+    assert order["buyer_email"] == email
+    assert q("SELECT attendee_email FROM registrations WHERE order_id = :o", o=order["id"])[0]["attendee_email"] == email
+
+
+def test_dashboard_lists_my_bookings_and_finds_more_classes(fake, on_sale, client, q, monkeypatch):
+    monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
+    email = unique_email("dash")
+    res = book(client, on_sale, seats=2, buyer_email=email, others=["friend-" + email])
+    done = res.headers["Location"]
+    site = q("SELECT name FROM sites WHERE id = :i", i=on_sale["site_id"])[0]["name"]
+    page = text_of(client.get("/my"))
+    assert "Upcoming classes" in page and site in page and "You're attending" in page
+    assert "For Guest1 Person" in page                                     # the seat booked for a friend
+    assert "Book another class" in page and 'id="book-more"' in page and "per page" in page
+    # The same search as the home page, kept on the dashboard.
+    found = text_of(client.get("/my?course=IT&per=5"))
+    assert 'action="/my#book-more"' in found and '<option value="IT" selected>' in found
+    nearby = text_of(client.get(f"/my?city={fake.metro_slug}"))
+    assert site in nearby.split('id="book-more"')[1]
+    # Someone else can't open this booking's confirmation page.
+    signed_in_as(client, unique_email("nosy"))
+    assert client.get(done).status_code == 404
 
 
 def test_production_never_books_without_payment(fake, on_sale, client, app, monkeypatch):

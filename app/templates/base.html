@@ -46,7 +46,13 @@
     </div>
   </div></header>
 
-  <main>{% block content %}{% endblock %}</main>
+  <main>
+    {%- block flashes %}{% with messages = get_flashed_messages(with_categories=true) %}{% if messages %}
+    <div class="wrap flashes">{% for category, message in messages %}
+      <p class="notice {{ category }}" role="{{ 'alert' if category == 'error' else 'status' }}">{{ message }}</p>{% endfor %}
+    </div>{% endif %}{% endwith %}{% endblock %}
+    {% block content %}{% endblock %}
+  </main>
 
   <footer class="site-footer"><div class="wrap">
     <div>

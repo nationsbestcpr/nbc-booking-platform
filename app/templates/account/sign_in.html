@@ -1,15 +1,19 @@
 {% extends "base.html" %}
+{% import "account/_ways_in.html" as ways with context %}
 {% block title %}Sign in{% endblock %}
 {% block content %}
 <div class="wrap">
   <div class="auth">
     <div class="auth-side">
-      <span class="eyebrow" style="color:#ffb3b8">Welcome back</span>
-      <h1>Sign In to Your Account</h1>
+      <span class="eyebrow" style="color:#ffb3b8">{{ 'One more step' if booking else 'Welcome back' }}</span>
+      <h1>{{ 'Sign In to Book Your Seat' if booking else 'Sign In to Your Account' }}</h1>
+      {{ ways.booking_box(booking) }}
+      {% if not booking %}
       <p style="color:#d9d9ee">One sign-in for students, instructors and staff. We recognise your account and show you what's yours.</p>
+      {% endif %}
       <ul>
-        <li>See the classes on sale near you</li>
-        <li>Your bookings and certificates, once you've taken a class</li>
+        <li>See and manage the classes you've booked</li>
+        <li>Book another class in a few clicks</li>
         <li>Instructors and staff see their own tools</li>
       </ul>
     </div>
@@ -18,6 +22,7 @@
       <input type="hidden" name="next" value="{{ next }}">
       <h2>Sign in</h2>
       {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+      {{ ways.provider_buttons(providers, next) }}
       <div class="field">
         <label for="email">Email</label>
         <input type="email" id="email" name="email" value="{{ email }}" autocomplete="email" required>
@@ -27,7 +32,7 @@
         <input type="password" id="password" name="password" autocomplete="current-password" required>
       </div>
       <button class="pill red" type="submit" style="align-self:flex-start">Sign in <span class="arrow" aria-hidden="true">→</span></button>
-      <p class="small">New here? <a href="{{ url_for('account.create_account') }}"><strong>Create an account</strong></a></p>
+      <p class="small">New here? <a href="{{ url_for('account.create_account', next=next or None) }}"><strong>Create an account</strong></a></p>
       {% if config.PREVIEW_MODE %}
       <div class="divider">Preview: what each account sees after signing in</div>
       <div class="filters">
@@ -38,8 +43,6 @@
         <a class="filter" href="/__as__/admin">Admin</a>
       </div>
       {% endif %}
-      <div class="divider">Office staff</div>
-      <button class="ms-btn" type="button" disabled aria-disabled="true"><span class="ms-logo" aria-hidden="true"><i></i><i></i><i></i><i></i></span> Sign in with Microsoft (coming soon)</button>
     </form>
   </div>
 </div>

@@ -108,7 +108,8 @@ def _is_uuid(v: str) -> bool:
 
 
 def start(*, session_public_id: str, product_id: int, buyer: Person, attendees: list[Person],
-          base_url: str, client_ip: str | None = None, user_agent: str | None = None) -> str:
+          base_url: str, buyer_user_id: int | None = None, client_ip: str | None = None,
+          user_agent: str | None = None) -> str:
     """Hold the seats and open Stripe Checkout. Returns the Stripe page URL."""
     testing = test_checkout()
     if not testing and stripe_api.check_key_for_environment():
@@ -138,10 +139,11 @@ def start(*, session_public_id: str, product_id: int, buyer: Person, attendees: 
             subtotal = offer["price_cents"] * quantity
             order = conn.execute(text("""
                 INSERT INTO orders (channel, buyer_first_name, buyer_last_name, buyer_email, buyer_phone_e164,
-                                    subtotal_cents, total_cents, livemode, client_ip, client_user_agent)
-                VALUES ('web', :fn, :ln, :em, :ph, :sub, :sub, :live, CAST(:ip AS inet), :ua)
+                                    subtotal_cents, total_cents, livemode, client_ip, client_user_agent, buyer_user_id)
+                VALUES ('web', :fn, :ln, :em, :ph, :sub, :sub, :live, CAST(:ip AS inet), :ua, :uid)
                 RETURNING id, public_id
-            """), {"fn": buyer.first_name, "ln": buyer.last_name, "em": buyer.email, "ph": buyer.phone_e164,
+            """), {"uid": buyer_user_id, "fn": buyer.first_name, "ln": buyer.last_name, "em": buyer.email,
+                   "ph": buyer.phone_e164,
                    "sub": subtotal, "live": livemode, "ip": client_ip, "ua": (user_agent or "")[:500] or None}
             ).mappings().one()
             hold = conn.execute(text("""
@@ -271,7 +273,8 @@ def order_summary(order_public_id: str) -> dict | None:
     if not _is_uuid(order_public_id):
         return None
     order = db.fetch_one("""
-        SELECT o.id, o.public_id, o.status, o.buyer_first_name, o.buyer_email, o.total_cents, o.discount_cents,
+        SELECT o.id, o.public_id, o.status, o.buyer_first_name, o.buyer_email, o.buyer_user_id,
+               o.total_cents, o.discount_cents,
                (SELECT count(*) FROM registrations r WHERE r.order_id = o.id
                    AND r.status IN ('confirmed', 'completed', 'no_show', 'awaiting_payment')) AS seats_confirmed,
                (NOT o.livemode AND o.status = 'paid' AND o.total_cents > 0

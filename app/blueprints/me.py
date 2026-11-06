@@ -1,4 +1,4 @@
-"""Every signed-in account: /dashboard, the student area, Profile and Settings.
+"""Every signed-in account: /dashboard, the customer area (/my), Profile and Settings.
 
 /dashboard sends each account to its own area (worked out from its roles).
 Profile and Settings are shared by all areas and show that area's tabs.
@@ -9,7 +9,7 @@ from __future__ import annotations
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 from sqlalchemy import text
 
-from .. import areas, auth, db
+from .. import areas, auth, classes, db
 
 bp = Blueprint("me", __name__)
 
@@ -23,26 +23,10 @@ def dashboard():
 @bp.get("/my")
 @auth.login_required
 def home():
+    """The customer dashboard: classes they booked (upcoming and past), waiting
+    lists, and the same class search as the home page to book another."""
     user = auth.current_user()
-    # Bookings are matched by email: as the attendee, or as the buyer of the order.
-    rows = db.fetch_all("""
-        SELECT r.status, r.attendee_first_name, r.attendee_last_name, r.attendee_email,
-               s.starts_at, s.ends_at, s.time_zone, s.status AS class_status,
-               cf.name AS course_name, si.name AS site_name, m.name AS city_name,
-               (s.starts_at > now() AND s.status = 'scheduled'
-                AND r.status IN ('awaiting_payment', 'confirmed', 'displaced')) AS is_upcoming
-          FROM registrations r
-          JOIN orders o ON o.id = r.order_id
-          JOIN sessions s ON s.id = r.session_id
-          JOIN sites si ON si.id = s.site_id
-          JOIN metros m ON m.id = s.metro_id
-          JOIN course_families cf ON cf.id = s.course_family_id
-         WHERE (r.attendee_email = :email OR o.buyer_email = :email)
-           AND r.status NOT IN ('pending', 'expired')
-         ORDER BY s.starts_at
-    """, email=user.email)
-    upcoming = [r for r in rows if r["is_upcoming"]]
-    past = [r for r in rows if not r["is_upcoming"]][-10:][::-1]   # latest first
+    mine = classes.booked(user.id, user.email, user.email_verified)
     waiting = db.fetch_all("""
         SELECT w.status, w.party_size, s.starts_at, s.time_zone, cf.name AS course_name, si.name AS site_name
           FROM waitlist_entries w
@@ -51,8 +35,10 @@ def home():
           JOIN course_families cf ON cf.id = s.course_family_id
          WHERE w.email = :email AND w.status IN ('waiting', 'offered') AND s.starts_at > now()
          ORDER BY s.starts_at
-    """, email=user.email)
-    return render_template("me/home.html", upcoming=upcoming, past=past, waiting=waiting,
+    """, email=user.email) if user.email_verified else []
+    found = classes.search(classes.filters_from(request.args))
+    return render_template("me/home.html", upcoming=mine["upcoming"], past=mine["past"][:10],
+                           more_past=len(mine["past"]) > 10, waiting=waiting, found=found,
                            tabs=areas.tabs_for(user))
 
 

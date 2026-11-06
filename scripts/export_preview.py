@@ -138,6 +138,7 @@ def main(out_dir: Path) -> None:
         if user_email:
             with client.session_transaction() as sess:
                 sess["user_id"] = ids[user_email]
+                sess["verified"] = True      # demo emails count as confirmed
         res = client.get(path)
         if res.status_code != 200:
             raise SystemExit(f"{path} returned {res.status_code}")

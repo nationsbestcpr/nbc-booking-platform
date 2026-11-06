@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "account/_ways_in.html" as ways with context %}
 {% block title %}Create an account{% endblock %}
 {% macro field_error(name) %}{% if errors[name] %}<span class="error" id="{{ name }}-error">{{ errors[name] }}</span>{% endif %}{% endmacro %}
 {% macro invalid(name) %}{% if errors[name] %}aria-invalid="true" aria-describedby="{{ name }}-error"{% endif %}{% endmacro %}
@@ -6,19 +7,22 @@
 <div class="wrap">
   <div class="auth">
     <div class="auth-side">
-      <span class="eyebrow" style="color:#ffb3b8">Join us</span>
-      <h1>Create Your Free Account</h1>
-      <p style="color:#d9d9ee">Book faster, keep your bookings in one place, and find your certificates later.</p>
+      <span class="eyebrow" style="color:#ffb3b8">{{ 'One more step' if booking else 'Join us' }}</span>
+      <h1>{{ 'Create an Account to Book' if booking else 'Create Your Free Account' }}</h1>
+      {{ ways.booking_box(booking) }}
+      {% if not booking %}<p style="color:#d9d9ee">Book faster, keep your bookings in one place, and find your certificates later.</p>{% endif %}
       <ul>
         <li>Booking a class makes you a student automatically</li>
+        <li>See, manage and add to your bookings from your dashboard</li>
         <li>Instructors: tell us below and our team confirms your certification</li>
-        <li>You can still book without an account</li>
       </ul>
     </div>
     <form class="auth-form" method="post" action="{{ url_for('account.create_account') }}" novalidate>
       {{ csrf_input() }}
+      <input type="hidden" name="next" value="{{ next }}">
       <h2>Create an account</h2>
       {% if errors %}<p class="alert" role="alert">Check the highlighted fields.</p>{% endif %}
+      {{ ways.provider_buttons(providers, next) }}
 
       <fieldset class="field">
         <legend>I'm signing up as</legend>
@@ -50,7 +54,7 @@
       <div class="field">
         <label for="email">Email</label>
         <input type="email" id="email" name="email" value="{{ form.email }}" autocomplete="email" required {{ invalid('email') }}>
-        <span class="hint">Use the email you book with, so your bookings show up here.</span>
+        <span class="hint">Classes someone else booked for this email show up once Google or Microsoft confirm it's yours.</span>
         {{ field_error('email') }}
       </div>
       <div class="field">
@@ -60,7 +64,7 @@
         {{ field_error('password') }}
       </div>
       <button class="pill red" type="submit" style="align-self:flex-start">Create account <span class="arrow" aria-hidden="true">→</span></button>
-      <p class="small">Already have an account? <a href="{{ url_for('account.sign_in') }}"><strong>Sign in</strong></a></p>
+      <p class="small">Already have an account? <a href="{{ url_for('account.sign_in', next=next or None) }}"><strong>Sign in</strong></a></p>
     </form>
   </div>
 </div>

@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}CPR, First Aid & BLS classes{% endblock %}
+{% import "_classes.html" as cl with context %}
 {% block content %}
 <div class="wrap">
   <section class="hero" aria-labelledby="hero-title">
@@ -54,124 +55,8 @@
       <h2 class="title" id="classes-title">Find the CPR Class <span class="accent">That Fits You Best</span></h2>
     </div>
 
-    {% if not cities %}
-    <div class="empty">No classes are on sale right now. New dates are added every week.</div>
-    {% else %}
-    <form class="finder" method="get" action="{{ url_for('public.home') }}#classes" aria-label="Filter classes">
-      {% if here and not f.city %}<input type="hidden" name="lat" value="{{ query.lat }}"><input type="hidden" name="lng" value="{{ query.lng }}">{% endif %}
-      <div class="field">
-        <label for="f-city">City</label>
-        <select id="f-city" name="city">
-          <option value="">{{ 'Near me' if here else 'All cities' }}</option>
-          {% for c in cities %}<option value="{{ c.slug }}"{{ ' selected' if f.city == c.slug }}>{{ c.name }}, {{ c.state_code }}</option>{% endfor %}
-        </select>
-      </div>
-      <div class="field">
-        <label for="f-course">Course</label>
-        <select id="f-course" name="course">{% for v, l in courses %}<option value="{{ v }}"{{ ' selected' if f.course == v }}>{{ l }}</option>{% endfor %}</select>
-      </div>
-      <div class="field">
-        <label for="f-when">When</label>
-        <select id="f-when" name="when">{% for v, l in whens %}<option value="{{ v }}"{{ ' selected' if f.when == v }}>{{ l }}</option>{% endfor %}</select>
-      </div>
-      <div class="field">
-        <label for="f-from">From date</label>
-        <input type="date" id="f-from" name="date" value="{{ f.date }}">
-      </div>
-      <button class="pill" type="submit">Show classes <span class="arrow" aria-hidden="true">→</span></button>
-    </form>
-
-    <div class="near-bar" id="near-bar">
-      {% if near %}
-        <span>📍 Classes within {{ near_miles }} miles of you.</span>
-        <a href="{{ all_cities_url }}">Show all cities</a>
-      {% elif near_none %}
-        <span>No classes within {{ near_miles }} miles of you yet, so here are all upcoming classes.</span>
-      {% elif not f.city %}
-        <span>Want the classes closest to you first?</span>
-        <button type="button" class="pill plain small-pill" id="use-location">Use my location</button>
-        <span class="small muted" id="location-note">Your browser asks first. Your location is only used to sort classes and is never saved.</span>
-      {% endif %}
-    </div>
-
-    {% if classes %}
-    <p class="muted small num results-line">
-      {{ (page - 1) * per + 1 }}–{{ (page - 1) * per + classes|length }} of {{ total }} upcoming class{{ 'es' if total != 1 }}{% if chosen %} in {{ chosen.name }}, {{ chosen.state_code }}{% endif %}
-    </p>
-    <div class="class-days">
-      {% for day, items in classes|groupby('local_date') %}
-      <section class="class-day" aria-label="{{ class_date(items[0].starts_at, items[0].time_zone) }}">
-        <h3 class="day-head"><span class="num">{{ local_dt(items[0].starts_at, items[0].time_zone).strftime('%A, %B %-d') }}</span></h3>
-        <ul class="class-rows">
-          {% for c in items %}
-          <li class="class-row">
-            <span class="cr-time num">{{ class_time(c.starts_at, c.ends_at, c.time_zone) }}</span>
-            <span class="cr-what"><strong>{{ c.course_name }}</strong><span class="muted small">{{ c.delivery_mode|capitalize }}</span></span>
-            <span class="cr-where">{{ c.site_name }}<span class="muted small">{{ c.site_city }}, {{ c.state_code }}{% if c.miles is not none %} · <span class="num">{{ c.miles|round|int }} mi</span>{% endif %}</span></span>
-            <span class="cr-price">{% for o in c.offers or [] %}<span>{{ o.name }} <strong class="num">{{ o.price|money }}</strong></span>{% endfor %}</span>
-            {% if c.seats_left <= 0 %}
-              <span class="seats full">Full</span>
-              <span class="pill plain small-pill" aria-disabled="true">Waitlist soon</span>
-            {% else %}
-              <span class="seats {{ 'low' if c.seats_left <= 3 }} num">{{ c.seats_left }} seat{{ 's' if c.seats_left != 1 }} left</span>
-              <a class="pill small-pill" href="{{ url_for('book.form', public_id=c.public_id) }}">Book <span class="arrow" aria-hidden="true">→</span></a>
-            {% endif %}
-          </li>
-          {% endfor %}
-        </ul>
-      </section>
-      {% endfor %}
-    </div>
-
-    <nav class="pager" aria-label="Pages of classes">
-      {% if page > 1 %}<a class="pg" href="{{ url_for('public.home', page=page - 1, **query) }}#classes" rel="prev">‹ Previous</a>{% endif %}
-      {% for n in page_list %}
-        {% if n is none %}<span class="pg gap" aria-hidden="true">…</span>
-        {% elif n == page %}<span class="pg current" aria-current="page">{{ n }}</span>
-        {% else %}<a class="pg" href="{{ url_for('public.home', page=n, **query) }}#classes">{{ n }}</a>{% endif %}
-      {% endfor %}
-      {% if page < pages %}<a class="pg" href="{{ url_for('public.home', page=page + 1, **query) }}#classes" rel="next">Next ›</a>{% endif %}
-      <form class="per-page" method="get" action="{{ url_for('public.home') }}#classes">
-        {% for k, v in query.items() if k != 'per' %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
-        <label for="per">Show</label>
-        <select id="per" name="per">{% for n in per_options %}<option value="{{ n }}"{{ ' selected' if n == per }}>{{ n }}</option>{% endfor %}</select>
-        <span class="small muted">per page</span>
-      </form>
-    </nav>
-    {% else %}
-    <div class="empty">No classes match. Try another course or a wider date range.</div>
-    {% endif %}
-    {% endif %}
+    {{ cl.search(found, 'public.home') }}
   </section>
 </div>
-<script>
-  // Changing a filter shows the classes at once (the button still works without scripts).
-  document.querySelectorAll('.finder select, .per-page select').forEach(function (el) {
-    el.addEventListener('change', function () { el.form.submit(); });
-  });
-  // Classes near me: the browser asks the visitor first. Only rounded coordinates go into
-  // the address; nothing is stored. Asked once per visit; the button asks again.
-  (function () {
-    var btn = document.getElementById('use-location');
-    if (!btn || !navigator.geolocation) { if (btn) btn.hidden = true; return; }
-    function go(pos) {
-      var u = new URL(window.location.href);
-      u.searchParams.set('lat', pos.coords.latitude.toFixed(2));
-      u.searchParams.set('lng', pos.coords.longitude.toFixed(2));
-      u.searchParams.delete('page'); u.hash = 'classes';
-      window.location.assign(u.toString());
-    }
-    function ask() {
-      navigator.geolocation.getCurrentPosition(go, function () {
-        var note = document.getElementById('location-note');
-        if (note) note.textContent = 'No location shared, so all upcoming classes are shown.';
-      }, {maximumAge: 600000, timeout: 10000});
-    }
-    btn.addEventListener('click', ask);
-    var asked = false;
-    try { asked = sessionStorage.getItem('nbc-asked-location') === '1'; sessionStorage.setItem('nbc-asked-location', '1'); } catch (e) {}
-    var plain = !window.location.search || window.location.search === '?welcome=1';
-    if (!asked && plain) ask();
-  })();
-</script>
+{{ cl.script(ask_on_load=true) }}
 {% endblock %}

@@ -63,7 +63,8 @@ $$;
 --     when a registration under their email is confirmed).
 --   * Instructor and staff roles are only ever granted by an admin. Someone who
 --     signs up "as an instructor" stays a regular user until ops verifies them.
--- Booking does not require an account: guests can still check out.
+-- Booking online needs an account (orders.buyer_user_id); staff can still book
+-- for someone without one (phone / invoice orders).
 -- Lead / helper (co-) instructor is NOT a role: it is the job an instructor
 -- holds in one class (assignments.role).
 
@@ -84,13 +85,13 @@ CREATE TABLE user_accounts (
 );
 COMMENT ON TABLE user_accounts IS '[OWNED] One row per person who can sign in: customer, instructor or staff. Roles say what they may do.';
 
--- How an account signs in: email + password (everyone), Microsoft 365 (staff,
--- later), or a one-time emailed link (later). One account may have several.
+-- How an account signs in: email + password, Google, Microsoft (personal or
+-- work account), or a one-time emailed link (later). One account may have several.
 CREATE TABLE user_identities (
   id                bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   user_account_id   bigint NOT NULL REFERENCES user_accounts (id) ON DELETE CASCADE,
-  provider          text NOT NULL CHECK (provider IN ('password', 'microsoft', 'email_link')),
-  subject           text NOT NULL,          -- lower-cased email, or the Entra object id
+  provider          text NOT NULL CHECK (provider IN ('password', 'microsoft', 'google', 'email_link')),
+  subject           text NOT NULL,          -- lower-cased email, the Entra object id, or Google's account id
   -- Salted scrypt hash (password provider only). The password itself is never stored.
   password_hash     text,
   password_changed_at timestamptz,
@@ -671,6 +672,8 @@ CREATE TABLE orders (
   expired_at                timestamptz,
   cancelled_at              timestamptz,
   updated_at                timestamptz NOT NULL DEFAULT now(),
+  -- The account that booked online (0004; last because it was added later).
+  buyer_user_id             bigint REFERENCES user_accounts (id),
   CHECK (total_cents = subtotal_cents - discount_cents + tax_cents),
   CHECK (amount_refunded_cents <= amount_paid_cents),
   CHECK (status <> 'awaiting_payment' OR invoice_due_on IS NOT NULL),
@@ -680,6 +683,7 @@ CREATE TABLE orders (
 CREATE INDEX orders_buyer_email_idx ON orders (buyer_email);
 CREATE INDEX orders_status_idx ON orders (status, created_at);
 CREATE INDEX orders_buyer_person_idx ON orders (buyer_person_id);
+CREATE INDEX orders_buyer_user_idx ON orders (buyer_user_id);
 COMMENT ON TABLE orders IS '[OWNED + REF Stripe ids] One checkout / invoice. Amounts are the engine''s record of what was charged; Stripe holds the card and payment objects.';
 
 ALTER TABLE people
@@ -1744,7 +1748,8 @@ BEGIN
   INSERT INTO user_roles (user_account_id, role_code)
   SELECT a.id, 'student'
     FROM user_accounts a
-   WHERE a.email IN (NEW.attendee_email, (SELECT buyer_email FROM orders WHERE id = NEW.order_id))
+   WHERE (a.email IN (NEW.attendee_email, (SELECT buyer_email FROM orders WHERE id = NEW.order_id))
+          OR a.id = (SELECT buyer_user_id FROM orders WHERE id = NEW.order_id))
      AND NOT EXISTS (SELECT 1 FROM user_roles ur WHERE ur.user_account_id = a.id
                         AND ur.role_code = 'student' AND ur.revoked_at IS NULL);
   RETURN NULL;

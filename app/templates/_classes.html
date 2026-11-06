@@ -1,0 +1,149 @@
+{#- Class search and list, shared by the home page and the customer dashboard.
+    Import with context:  {% import "_classes.html" as cl with context %}
+    `found` comes from classes.search(); `endpoint` is the page the filters reload;
+    `anchor` is the id of the section, so filtering scrolls back to the list. -#}
+
+{% macro finder(found, endpoint, anchor='classes') %}
+{% set f = found.f %}
+<form class="finder" method="get" action="{{ url_for(endpoint) }}#{{ anchor }}" aria-label="Filter classes">
+  {% if f.here and not f.city %}<input type="hidden" name="lat" value="{{ found.query.lat }}"><input type="hidden" name="lng" value="{{ found.query.lng }}">{% endif %}
+  <div class="field">
+    <label for="{{ anchor }}-city">City</label>
+    <select id="{{ anchor }}-city" name="city">
+      <option value="">{{ 'Near me' if f.here else 'All cities' }}</option>
+      {% for c in found.cities %}<option value="{{ c.slug }}"{{ ' selected' if f.city == c.slug }}>{{ c.name }}, {{ c.state_code }}</option>{% endfor %}
+    </select>
+  </div>
+  <div class="field">
+    <label for="{{ anchor }}-course">Course</label>
+    <select id="{{ anchor }}-course" name="course">{% for v, l in found.courses %}<option value="{{ v }}"{{ ' selected' if f.course == v }}>{{ l }}</option>{% endfor %}</select>
+  </div>
+  <div class="field">
+    <label for="{{ anchor }}-when">When</label>
+    <select id="{{ anchor }}-when" name="when">{% for v, l in found.whens %}<option value="{{ v }}"{{ ' selected' if f.when == v }}>{{ l }}</option>{% endfor %}</select>
+  </div>
+  <div class="field">
+    <label for="{{ anchor }}-from">From date</label>
+    <input type="date" id="{{ anchor }}-from" name="date" value="{{ f.date }}">
+  </div>
+  <button class="pill" type="submit">Show classes <span class="arrow" aria-hidden="true">→</span></button>
+</form>
+{% endmacro %}
+
+{% macro near_bar(found, endpoint, anchor='classes') %}
+<div class="near-bar">
+  {% if found.near %}
+    <span>📍 Classes within {{ found.near_miles }} miles of you.</span>
+    <a href="{{ url_for(endpoint, **found.query|dict_without('lat', 'lng')) }}#{{ anchor }}">Show all cities</a>
+  {% elif found.near_none %}
+    <span>No classes within {{ found.near_miles }} miles of you yet, so here are all upcoming classes.</span>
+  {% elif not found.f.city %}
+    <span>Want the classes closest to you first?</span>
+    <button type="button" class="pill plain small-pill" data-use-location="{{ anchor }}">Use my location</button>
+    <span class="small muted location-note">Your browser asks first. Your location is only used to sort classes and is never saved.</span>
+  {% endif %}
+</div>
+{% endmacro %}
+
+{% macro class_rows(found, empty='No classes match. Try another course or a wider date range.') %}
+{% if found.classes %}
+<p class="muted small num results-line">
+  {{ (found.page - 1) * found.f.per + 1 }}–{{ (found.page - 1) * found.f.per + found.classes|length }} of {{ found.total }} upcoming class{{ 'es' if found.total != 1 }}{% if found.chosen %} in {{ found.chosen.name }}, {{ found.chosen.state_code }}{% endif %}
+</p>
+<div class="class-days">
+  {% for day, items in found.classes|groupby('local_date') %}
+  <section class="class-day" aria-label="{{ class_date(items[0].starts_at, items[0].time_zone) }}">
+    <h3 class="day-head"><span class="num">{{ local_dt(items[0].starts_at, items[0].time_zone).strftime('%A, %B %-d') }}</span></h3>
+    <ul class="class-rows">
+      {% for c in items %}
+      <li class="class-row">
+        <span class="cr-time num">{{ class_time(c.starts_at, c.ends_at, c.time_zone) }}</span>
+        <span class="cr-what"><strong>{{ c.course_name }}</strong><span class="muted small">{{ c.delivery_mode|capitalize }}</span></span>
+        <span class="cr-where">{{ c.site_name }}<span class="muted small">{{ c.site_city }}, {{ c.state_code }}{% if c.miles is not none %} · <span class="num">{{ c.miles|round|int }} mi</span>{% endif %}</span></span>
+        <span class="cr-price">{% for o in c.offers or [] %}<span>{{ o.name }} <strong class="num">{{ o.price|money }}</strong></span>{% endfor %}</span>
+        {% if c.seats_left <= 0 %}
+          <span class="seats full">Full</span>
+          <span class="pill plain small-pill" aria-disabled="true">Waitlist soon</span>
+        {% else %}
+          <span class="seats {{ 'low' if c.seats_left <= 3 }} num">{{ c.seats_left }} seat{{ 's' if c.seats_left != 1 }} left</span>
+          <a class="pill small-pill" href="{{ url_for('book.form', public_id=c.public_id) }}">Book <span class="arrow" aria-hidden="true">→</span></a>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty">{{ empty }}</div>
+{% endif %}
+{% endmacro %}
+
+{% macro pager(found, endpoint, anchor='classes') %}
+{% if found.classes %}
+{% set q = found.query %}
+<nav class="pager" aria-label="Pages of classes">
+  {% if found.page > 1 %}<a class="pg" href="{{ url_for(endpoint, page=found.page - 1, **q) }}#{{ anchor }}" rel="prev">‹ Previous</a>{% endif %}
+  {% for n in found.page_list %}
+    {% if n is none %}<span class="pg gap" aria-hidden="true">…</span>
+    {% elif n == found.page %}<span class="pg current" aria-current="page">{{ n }}</span>
+    {% else %}<a class="pg" href="{{ url_for(endpoint, page=n, **q) }}#{{ anchor }}">{{ n }}</a>{% endif %}
+  {% endfor %}
+  {% if found.page < found.pages %}<a class="pg" href="{{ url_for(endpoint, page=found.page + 1, **q) }}#{{ anchor }}" rel="next">Next ›</a>{% endif %}
+  <form class="per-page" method="get" action="{{ url_for(endpoint) }}#{{ anchor }}">
+    {% for k, v in q.items() if k != 'per' %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+    <label for="{{ anchor }}-per">Show</label>
+    <select id="{{ anchor }}-per" name="per">{% for n in found.per_options %}<option value="{{ n }}"{{ ' selected' if n == found.f.per }}>{{ n }}</option>{% endfor %}</select>
+    <span class="small muted">per page</span>
+  </form>
+</nav>
+{% endif %}
+{% endmacro %}
+
+{#- The whole search: filters, "near me", the list and the pages. -#}
+{% macro search(found, endpoint, anchor='classes', empty_none='No classes are on sale right now. New dates are added every week.') %}
+{% if not found.cities %}
+<div class="empty">{{ empty_none }}</div>
+{% else %}
+{{ finder(found, endpoint, anchor) }}
+{{ near_bar(found, endpoint, anchor) }}
+{{ class_rows(found) }}
+{{ pager(found, endpoint, anchor) }}
+{% endif %}
+{% endmacro %}
+
+{#- Filters apply on change; "Use my location" asks the browser first and puts only
+    rounded coordinates in the address (nothing is stored). With ask_on_load, the
+    browser asks once per visit on a page with no filters. -#}
+{% macro script(ask_on_load=false) %}
+<script>
+  document.querySelectorAll('.finder select, .per-page select').forEach(function (el) {
+    el.addEventListener('change', function () { el.form.submit(); });
+  });
+  (function () {
+    var buttons = document.querySelectorAll('[data-use-location]');
+    if (!buttons.length) return;
+    if (!navigator.geolocation) { buttons.forEach(function (b) { b.hidden = true; }); return; }
+    function ask(anchor) {
+      navigator.geolocation.getCurrentPosition(function (pos) {
+        var u = new URL(window.location.href);
+        u.searchParams.set('lat', pos.coords.latitude.toFixed(2));
+        u.searchParams.set('lng', pos.coords.longitude.toFixed(2));
+        u.searchParams.delete('page'); u.hash = anchor;
+        window.location.assign(u.toString());
+      }, function () {
+        document.querySelectorAll('.location-note').forEach(function (n) {
+          n.textContent = 'No location shared, so all upcoming classes are shown.';
+        });
+      }, {maximumAge: 600000, timeout: 10000});
+    }
+    buttons.forEach(function (b) { b.addEventListener('click', function () { ask(b.dataset.useLocation); }); });
+    {% if ask_on_load %}
+    var asked = false;
+    try { asked = sessionStorage.getItem('nbc-asked-location') === '1'; sessionStorage.setItem('nbc-asked-location', '1'); } catch (e) {}
+    var plain = !window.location.search || window.location.search === '?welcome=1';
+    if (!asked && plain) ask(buttons[0].dataset.useLocation);
+    {% endif %}
+  })();
+</script>
+{% endmacro %}

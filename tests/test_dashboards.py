@@ -116,7 +116,8 @@ def test_student_dashboard_shows_their_booking(client, sign_in):
 def test_new_user_dashboard_has_no_bookings_yet(client, new_account, sign_in):
     _uid, email = new_account()
     sign_in(email, "long-enough-1")
-    assert "No classes booked yet" in text_of(client.get("/my"))
+    page = text_of(client.get("/my"))
+    assert "No upcoming classes yet" in page and "Book another class" in page
 
 
 def test_instructor_dashboard_shows_lead_and_helper_classes(client, sign_in):
@@ -281,7 +282,7 @@ def test_integrations_show_status_without_secret_values(client, sign_in, monkeyp
     for name in ("AIRTABLE_TOKEN", "AIRTABLE_BASE_ID", "STRIPE_SECRET_KEY", "GHL_CLIENT_ID"):
         monkeypatch.delenv(name, raising=False)
     page = text_of(client.get("/admin/integrations"))
-    for name in ("Airtable", "Stripe", "GHL", "Microsoft 365 sign-in", "Not set up", "AIRTABLE_TOKEN"):
+    for name in ("Airtable", "Stripe", "GHL", "Google sign-in", "Microsoft sign-in", "Not set up", "AIRTABLE_TOKEN"):
         assert name in page
     monkeypatch.setenv("AIRTABLE_TOKEN", "patSECRET-value-123")
     monkeypatch.setenv("AIRTABLE_BASE_ID", "appSECRET456")
