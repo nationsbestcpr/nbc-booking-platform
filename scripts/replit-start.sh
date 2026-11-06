@@ -69,12 +69,14 @@ step 60 $PY -c "import wsgi" || fail "the app could not load (see the error abov
 say "bringing the database up to date"
 step 120 $PY -m flask --app wsgi db upgrade || fail "the database update (see the error above)"
 
-# Is everything db/schema.sql describes really there? (Replit's "database
-# changes" prompt on publish can remove columns while the migration record
-# stays at the latest.) Missing parts are listed here and on Integrations;
-# the app still starts.
-say "checking the database has every table and column"
-step 60 $PY -m flask --app wsgi db verify --record || say "WARNING: the database is missing parts (listed above); tell the developer"
+# Is everything db/schema.sql describes really there? Replit's "database
+# changes" sync on publish can remove columns our migrations added (the
+# migration record stays at the latest, so the migrations won't add them
+# again). Anything missing is put back from db/repair.sql on every start, and
+# whatever is still missing shows here and on Integrations; the app starts anyway.
+say "checking the database has every table and column (putting back anything missing)"
+step 60 $PY -m flask --app wsgi db repair || say "WARNING: some parts couldn't be put back (listed above); tell the developer"
+step 60 $PY -m flask --app wsgi db verify --record >/dev/null 2>&1 || true   # result on the Integrations page
 
 # The preset admin account from the SUPERADMIN_EMAIL / SUPERADMIN_PASSWORD
 # secrets (does nothing when they aren't set).

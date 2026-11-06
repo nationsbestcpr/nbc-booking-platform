@@ -313,3 +313,18 @@ def test_db_verify_finds_nothing_missing(app):
     want = schema_check.expected()
     assert ("orders", "buyer_user_id") in want["columns"] and "orders_buyer_user_idx" in want["indexes"]
     assert ("orders", "check") not in want["columns"]
+
+
+def test_db_repair_puts_a_dropped_column_back_and_is_harmless_otherwise(app):
+    from pathlib import Path
+    sql = (Path(__file__).resolve().parent.parent / "db" / "repair.sql").read_text()
+    with app.app_context():
+        with db.engine().connect() as conn:          # all in one transaction, rolled back at the end
+            cur = conn.connection.dbapi_connection.cursor()
+            cur.execute(sql)                          # on a complete database: changes nothing
+            cur.execute("ALTER TABLE orders DROP COLUMN buyer_user_id")
+            cur.execute(sql)
+            cur.execute("""SELECT count(*) FROM information_schema.columns
+                            WHERE table_name = 'orders' AND column_name = 'buyer_user_id'""")
+            assert cur.fetchone()[0] == 1
+            conn.rollback()

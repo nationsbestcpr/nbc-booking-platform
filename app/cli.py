@@ -79,6 +79,24 @@ def verify(record: bool) -> None:
     raise SystemExit(1)
 
 
+@db_cli.command("repair")
+def repair() -> None:
+    """Put back parts the database is missing (db/repair.sql; safe on a complete database)."""
+    from pathlib import Path
+    from . import db as _db, schema_check
+    sql = (Path(__file__).resolve().parent.parent / "db" / "repair.sql").read_text()
+    before = schema_check.missing()
+    with _db.engine().begin() as conn:
+        with conn.connection.dbapi_connection.cursor() as cur:
+            cur.execute(sql)                       # no parameters: several statements allowed
+    after = schema_check.missing()
+    fixed = sorted(set(before) - set(after))
+    click.echo(("Put back: " + ", ".join(fixed)) if fixed else "Nothing needed putting back.")
+    if after:
+        click.echo("Still missing (needs the developer): " + ", ".join(after))
+        raise SystemExit(1)
+
+
 @db_cli.command("current")
 def current() -> None:
     """Show which migration the database is on."""

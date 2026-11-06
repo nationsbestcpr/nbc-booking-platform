@@ -27,6 +27,9 @@ and `docs/database-architecture.md` before changing data or integrations.
   change to `db/schema.sql` (and `db/seed.sql` for reference data) so they
   still describe the whole database, add a check to
   `db/tests/schema_checks.sql`, and run `db/tests/migrations_match.sh`.
+  When a migration adds a column, index or constraint to an existing table,
+  also add an idempotent line for it to `db/repair.sql` (run on every start:
+  Replit's publish-time schema sync can drop such additions).
 
 ## Security and privacy
 - Public pages never select from `*_private_details` (access codes, on-site
