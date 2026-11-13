@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from flask import current_app
@@ -27,7 +27,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
 
-from .. import db
+from .. import booking_setup, db
 from . import runs, stripe_api
 from .http import IntegrationError
 from .outbox import enqueue, handler
@@ -46,6 +46,9 @@ class Person:
     last_name: str
     email: str
     phone_e164: str | None = None
+    is_friend: bool = False                                  # a "Bring a friend" seat
+    answers: dict[int, str] = field(default_factory=dict)   # booking question id -> answer
+    addon_ids: list[int] = field(default_factory=list)      # per-seat add-ons for this person
 
 
 def _setting(conn: Connection, key: str, default: int) -> int:
@@ -80,7 +83,8 @@ def online_booking() -> bool:
 def bookable_session(public_id: str) -> dict | None:
     """The class with what a customer may see, and whether it's on sale."""
     s = db.fetch_one("""
-        SELECT s.id, s.public_id, s.starts_at, s.ends_at, s.time_zone, s.delivery_mode, s.status, s.is_published,
+        SELECT s.id, s.public_id, s.slug, s.starts_at, s.ends_at, s.time_zone, s.delivery_mode, s.status,
+               s.is_published, s.course_family_id, cf.slug AS course_slug, m.slug AS metro_slug,
                cf.name AS course_name, si.name AS site_name, si.address_line1, si.address_line2, si.city AS site_city,
                si.state_code AS site_state, si.postal_code, si.parking_notes_public, si.directions_public,
                m.name AS city_name, m.state_code, m.booking_system, a.seats_left, a.seat_limit,
@@ -107,18 +111,35 @@ def _is_uuid(v: str) -> bool:
     return bool(re.fullmatch(r"[0-9a-fA-F-]{36}", v or ""))
 
 
+def _clash_message(clashes: list[dict]) -> str:
+    from ..filters import class_date
+    c = clashes[0]
+    return (f"{c['email']} already has a {c['course_name']} class on {class_date(c['starts_at'], c['time_zone'])}. "
+            f"One email can book the same course only once every {c['months']} months, because the Red Cross "
+            "certifies each person by their own email. Use that person's own email, or pick a different course.")
+
+
 def start(*, session_public_id: str, product_id: int, buyer: Person, attendees: list[Person],
           base_url: str, buyer_user_id: int | None = None, client_ip: str | None = None,
-          user_agent: str | None = None) -> str:
-    """Hold the seats and open Stripe Checkout. Returns the Stripe page URL."""
+          user_agent: str | None = None, booking_answers: dict[int, str] | None = None,
+          booking_addon_ids: list[int] | None = None, parent_order_id: int | None = None) -> str:
+    """Hold the seats and open Stripe Checkout. Returns the Stripe page URL.
+
+    attendees may include one friend's seat (is_friend: priced with the bring-a-friend
+    discount), each with their question answers and per-seat add-ons;
+    booking_answers / booking_addon_ids are the once-per-booking ones."""
     testing = test_checkout()
     if not testing and stripe_api.check_key_for_environment():
         raise BookingError("Online booking isn't open yet. Call us to book this class.")
-    if not attendees or len(attendees) > MAX_SEATS_PER_ORDER:
+    if not attendees or len(attendees) > MAX_SEATS_PER_ORDER + 1:
         raise BookingError(f"Book between 1 and {MAX_SEATS_PER_ORDER} seats at a time.")
     emails = [a.email.lower() for a in attendees]
     if len(set(emails)) != len(emails):
-        raise BookingError("Each person attending needs their own email address.")
+        raise BookingError("Each person attending needs their own email address. The Red Cross sends each "
+                           "certificate to its own email, so two people can't share one.")
+    friends = [a for a in attendees if a.is_friend]
+    if friends and (len(friends) > 1 or not booking_setup.bring_a_friend()["enabled"]):
+        raise BookingError("Bring a friend isn't available for this booking.")
 
     s = bookable_session(session_public_id)
     if not s or not s["on_sale"]:
@@ -130,20 +151,35 @@ def start(*, session_public_id: str, product_id: int, buyer: Person, attendees: 
     if quantity > s["seats_left"]:
         raise BookingError(f"Only {s['seats_left']} seat{'s' if s['seats_left'] != 1 else ''} left in this class."
                            if s["seats_left"] > 0 else "This class just filled up.")
+    clashes = booking_setup.same_course_clashes(s["id"], emails)
+    if clashes:
+        raise BookingError(_clash_message(clashes))
+    on_page = booking_setup.addons_for(s)
+    seat_addons = {a["id"]: a for a in on_page["seat"]}
+    order_addons_ = {a["id"]: a for a in on_page["booking"]}
+    if any(aid not in seat_addons for a in attendees for aid in a.addon_ids) or \
+            any(aid not in order_addons_ for aid in booking_addon_ids or []):
+        raise BookingError("An add-on you picked isn't offered any more. Check your choices and try again.")
+    questions = {q["id"]: q for kind in booking_setup.questions_for(s).values() for q in kind}
     livemode = False if testing else stripe_api.is_live_key()
 
+    price = offer["price_cents"]
+    friend_price = booking_setup.friend_price(price)
+    subtotal = sum(friend_price if a.is_friend else price for a in attendees) \
+        + sum(seat_addons[aid]["price_cents"] for a in attendees for aid in a.addon_ids) \
+        + sum(order_addons_[aid]["price_cents"] for aid in booking_addon_ids or [])
     try:
         with db.transaction() as conn:
             hold_minutes = _setting(conn, "checkout_hold_minutes", 15)
             stripe_minutes = max(_setting(conn, "stripe_checkout_expiry_minutes", 30), 30) + 1
-            subtotal = offer["price_cents"] * quantity
             order = conn.execute(text("""
                 INSERT INTO orders (channel, buyer_first_name, buyer_last_name, buyer_email, buyer_phone_e164,
-                                    subtotal_cents, total_cents, livemode, client_ip, client_user_agent, buyer_user_id)
-                VALUES ('web', :fn, :ln, :em, :ph, :sub, :sub, :live, CAST(:ip AS inet), :ua, :uid)
+                                    subtotal_cents, total_cents, livemode, client_ip, client_user_agent, buyer_user_id,
+                                    parent_order_id)
+                VALUES ('web', :fn, :ln, :em, :ph, :sub, :sub, :live, CAST(:ip AS inet), :ua, :uid, :parent)
                 RETURNING id, public_id
             """), {"uid": buyer_user_id, "fn": buyer.first_name, "ln": buyer.last_name, "em": buyer.email,
-                   "ph": buyer.phone_e164,
+                   "ph": buyer.phone_e164, "parent": parent_order_id,
                    "sub": subtotal, "live": livemode, "ip": client_ip, "ua": (user_agent or "")[:500] or None}
             ).mappings().one()
             hold = conn.execute(text("""
@@ -152,13 +188,29 @@ def start(*, session_public_id: str, product_id: int, buyer: Person, attendees: 
                 RETURNING id, public_id
             """), {"s": s["id"], "o": order["id"], "q": quantity, "m": hold_minutes}).mappings().one()
             for a in attendees:
-                conn.execute(text("""
+                reg_id = conn.execute(text("""
                     INSERT INTO registrations (order_id, seat_hold_id, session_id, product_id, attendee_first_name,
-                                               attendee_last_name, attendee_email, attendee_phone_e164, unit_price_cents)
-                    VALUES (:o, :h, :s, :p, :fn, :ln, :em, :ph, :price)
+                                               attendee_last_name, attendee_email, attendee_phone_e164, unit_price_cents,
+                                               discount_cents, amount_paid_cents, is_bring_a_friend)
+                    VALUES (:o, :h, :s, :p, :fn, :ln, :em, :ph, :price, :disc, 0, :friend)
+                    RETURNING id
                 """), {"o": order["id"], "h": hold["id"], "s": s["id"], "p": product_id, "fn": a.first_name,
-                       "ln": a.last_name, "em": a.email, "ph": a.phone_e164, "price": offer["price_cents"]})
+                       "ln": a.last_name, "em": a.email, "ph": a.phone_e164, "price": price,
+                       "disc": price - friend_price if a.is_friend else 0, "friend": a.is_friend}).scalar_one()
+                for aid in a.addon_ids:
+                    _add_addon(conn, order["id"], seat_addons[aid], reg_id)
+                for qid, answer in a.answers.items():
+                    _answer(conn, order["id"], reg_id, questions.get(qid), answer)
+            for aid in booking_addon_ids or []:
+                _add_addon(conn, order["id"], order_addons_[aid], None)
+            for qid, answer in (booking_answers or {}).items():
+                _answer(conn, order["id"], None, questions.get(qid), answer)
     except DBAPIError as exc:
+        if "same course within" in str(exc.orig):
+            raise BookingError(_clash_message(booking_setup.same_course_clashes(s["id"], emails)
+                                              or [{"email": "Someone in this booking", "course_name": s["course_name"],
+                                                   "starts_at": s["starts_at"], "time_zone": s["time_zone"],
+                                                   "months": 18}])) from exc
         if "is full" in str(exc.orig) or "not on sale" in str(exc.orig) or "not open" in str(exc.orig):
             raise BookingError("Someone just took the last seats in this class. Pick another date.") from exc
         raise
@@ -173,13 +225,21 @@ def start(*, session_public_id: str, product_id: int, buyer: Person, attendees: 
 
     from ..filters import class_date
     expires_at = int((datetime.now(timezone.utc) + timedelta(minutes=stripe_minutes)).timestamp())
+    where = f"{class_date(s['starts_at'], s['time_zone'])} · {s['site_name']}, {s['city_name']}, {s['state_code']}"
+    full = sum(1 for a in attendees if not a.is_friend)
+    items = [{"name": offer["name"], "description": where, "unit_amount_cents": price, "quantity": full}] if full else []
+    if friends:
+        items.append({"name": f"{offer['name']} (bring a friend)", "description": where,
+                      "unit_amount_cents": friend_price, "quantity": 1})
+    for addon in list(seat_addons.values()) + list(order_addons_.values()):
+        n = sum(a.addon_ids.count(addon["id"]) for a in attendees) + (booking_addon_ids or []).count(addon["id"])
+        if n:
+            items.append({"name": addon["name"], "description": addon["description"] or "",
+                          "unit_amount_cents": addon["price_cents"], "quantity": n})
     try:
         cs = stripe_api.create_checkout_session(
-            order_public_id=str(order["public_id"]), hold_public_id=str(hold["public_id"]),
-            product_name=f"{offer['name']}", description=f"{class_date(s['starts_at'], s['time_zone'])} · "
-                                                         f"{s['site_name']}, {s['city_name']}, {s['state_code']}",
-            unit_amount_cents=offer["price_cents"], quantity=quantity, customer_email=buyer.email,
-            expires_at=expires_at,
+            order_public_id=str(order["public_id"]), hold_public_id=str(hold["public_id"]), line_items=items,
+            customer_email=buyer.email, expires_at=expires_at,
             success_url=f"{base_url}/book/done?order={order['public_id']}",
             cancel_url=f"{base_url}/book/cancelled?order={order['public_id']}")
     except IntegrationError as exc:
@@ -198,6 +258,22 @@ def start(*, session_public_id: str, product_id: int, buyer: Person, attendees: 
     return cs["url"]
 
 
+def _add_addon(conn: Connection, order_id: int, addon: dict, registration_id: int | None) -> None:
+    conn.execute(text("""
+        INSERT INTO order_addons (order_id, addon_id, registration_id, name, unit_price_cents, quantity)
+        VALUES (:o, :a, :r, :n, :p, 1)
+    """), {"o": order_id, "a": addon["id"], "r": registration_id, "n": addon["name"], "p": addon["price_cents"]})
+
+
+def _answer(conn: Connection, order_id: int, registration_id: int | None, question: dict | None, answer: str) -> None:
+    if question is None or not answer:
+        return
+    conn.execute(text("""
+        INSERT INTO booking_answers (order_id, registration_id, question_id, question_label, answer)
+        VALUES (:o, :r, :q, :l, :a)
+    """), {"o": order_id, "r": registration_id, "q": question["id"], "l": question["label"], "a": answer})
+
+
 def _release(conn: Connection, order_id: int, hold_id: int, reason: str, order_status: str = "expired") -> None:
     conn.execute(text("""
         UPDATE seat_holds SET status = CASE WHEN :reason IN ('hold_lapsed', 'checkout_expired') THEN 'expired'
@@ -206,6 +282,8 @@ def _release(conn: Connection, order_id: int, hold_id: int, reason: str, order_s
          WHERE id = :h AND status = 'active'
     """), {"h": hold_id, "reason": reason})
     conn.execute(text("UPDATE registrations SET status = 'expired' WHERE order_id = :o AND status = 'pending'"),
+                 {"o": order_id})
+    conn.execute(text("UPDATE order_addons SET status = 'expired' WHERE order_id = :o AND status = 'pending'"),
                  {"o": order_id})
     conn.execute(text("""
         UPDATE orders SET status = :st,
@@ -293,10 +371,18 @@ def order_summary(order_public_id: str) -> dict | None:
     """, p=order_public_id)
     if order:
         order["attendees"] = db.fetch_all("""
-            SELECT r.attendee_first_name, r.attendee_last_name, r.status, p.short_name
+            SELECT r.attendee_first_name, r.attendee_last_name, r.attendee_email, r.status, r.is_bring_a_friend,
+                   r.product_id, p.short_name
               FROM registrations r JOIN products p ON p.id = r.product_id
              WHERE r.order_id = :o ORDER BY r.id
         """, o=order["id"])
+        order["addons"] = db.fetch_all("""
+            SELECT oa.name, oa.unit_price_cents, oa.status, r.attendee_first_name
+              FROM order_addons oa LEFT JOIN registrations r ON r.id = oa.registration_id
+             WHERE oa.order_id = :o ORDER BY oa.id
+        """, o=order["id"])
+        order["others"] = [a for a in order["attendees"]
+                           if (a["attendee_email"] or "").lower() != (order["buyer_email"] or "").lower()]
     return order
 
 
@@ -352,6 +438,8 @@ def _no_seat_reason(exc: Exception) -> str | None:
         return "the class filled up after the seat hold ran out"
     if state == "23505" and "registrations_one_seat_per_person" in msg:
         return "this person already has a seat in this class"
+    if state == "23514" and "same course within" in msg:
+        return "this email already has a seat in this course within the same-course limit"
     return None
 
 
@@ -432,15 +520,36 @@ def _confirm(conn: Connection, found: dict, cs: dict, amounts: dict) -> None:
     if session["started"] or session["status"] != "scheduled":
         raise NoSeat("the class had already started or was cancelled when the payment arrived")
     regs = conn.execute(text("""
-        SELECT id, attendee_first_name, attendee_last_name, attendee_email, attendee_phone_e164, unit_price_cents
+        SELECT id, attendee_first_name, attendee_last_name, attendee_email, attendee_phone_e164, unit_price_cents,
+               is_bring_a_friend, CASE WHEN is_bring_a_friend THEN discount_cents ELSE 0 END AS preset_discount
           FROM registrations WHERE order_id = :o AND status IN ('pending', 'expired') ORDER BY id
     """), {"o": found["order_id"]}).mappings().all()
-    n = max(len(regs), 1)
-    share, extra = divmod(amounts["discount"], n)
+    addons = conn.execute(text("""
+        SELECT id, unit_price_cents * quantity AS price FROM order_addons
+         WHERE order_id = :o AND status IN ('pending', 'expired') ORDER BY id
+    """), {"o": found["order_id"]}).mappings().all()
+    # A discount code's amount goes to the seats first (evenly, never below zero), then to add-ons.
+    left = amounts["discount"]
+    room = [r["unit_price_cents"] - r["preset_discount"] for r in regs]
+    code_share = [0] * len(regs)
+    while left > 0 and any(code_share[i] < room[i] for i in range(len(regs))):
+        open_ = [i for i in range(len(regs)) if code_share[i] < room[i]]
+        each, extra = divmod(left, len(open_))
+        for k, i in enumerate(open_):
+            give = min(each + (1 if k < extra else 0), room[i] - code_share[i])
+            code_share[i] += give
+            left -= give
+        if each == 0 and extra == 0:
+            break
     buyer_id = _person(conn, found["buyer_first_name"], found["buyer_last_name"], found["buyer_email"],
                        found["buyer_phone_e164"])
+    for a in addons:
+        disc = min(left, a["price"])
+        left -= disc
+        conn.execute(text("""UPDATE order_addons SET status = 'paid', discount_cents = :d, amount_paid_cents = :paid
+                              WHERE id = :id"""), {"id": a["id"], "d": disc, "paid": a["price"] - disc})
     for i, r in enumerate(regs):
-        disc = min(share + (1 if i < extra else 0), r["unit_price_cents"])
+        disc = r["preset_discount"] + code_share[i]
         pid = _person(conn, r["attendee_first_name"], r["attendee_last_name"], r["attendee_email"],
                       r["attendee_phone_e164"])
         conn.execute(text("""
@@ -452,6 +561,13 @@ def _confirm(conn: Connection, found: dict, cs: dict, amounts: dict) -> None:
                      {"o": found["order_id"], "p": pid})
         enqueue(conn, "ghl", "sync_registration", key=f"ghl-registration-{r['id']}-booked",
                 entity_type="registration", entity_id=r["id"], payload={"registration_id": r["id"]})
+        if r["attendee_email"].lower() != found["buyer_email"].lower():
+            enqueue(conn, "ghl", "send_invite", key=f"ghl-invite-{r['id']}-first", entity_type="registration",
+                    entity_id=r["id"], payload={"registration_id": r["id"]})
+    if any(r["attendee_email"].lower() != found["buyer_email"].lower() for r in regs):
+        # Booked for someone else: the booker becomes a GHL contact too, tagged as a booker.
+        enqueue(conn, "ghl", "sync_booker", key=f"ghl-booker-order-{found['order_id']}",
+                entity_type="order", entity_id=found["order_id"], payload={"order_id": found["order_id"]})
     conn.execute(text("""
         UPDATE seat_holds SET status = 'converted', released_at = now(), release_reason = 'paid'
          WHERE id = :h AND status <> 'converted'
@@ -482,6 +598,8 @@ def _paid_without_seat(conn: Connection, found: dict, cs: dict, amounts: dict, r
     payment_id = _payment(conn, found, cs, amounts)
     conn.execute(text("""UPDATE checkout_sessions SET status = 'complete', completed_at = now()
                           WHERE id = :c"""), {"c": found["checkout_id"]})
+    conn.execute(text("UPDATE order_addons SET status = 'cancelled' WHERE order_id = :o AND status <> 'paid'"),
+                 {"o": found["order_id"]})
     if payment_id:
         refund_id = conn.execute(text("""
             INSERT INTO refunds (order_id, payment_id, amount_cents, reason, source, status, note)

@@ -1,0 +1,30 @@
+{% extends "dash/layout.html" %}
+{% block title %}Add-ons{% endblock %}
+{% block heading %}Booking <span class="accent">Add-ons</span>{% endblock %}
+{% block subhead %}<p>Extras customers can buy while booking. Create one, set its price, and choose whether booking pages show it.</p>{% endblock %}
+{% block panel %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>{{ rows|length }} add-on{{ 's' if rows|length != 1 }}</h2>
+    <a class="pill small-pill" href="{{ url_for('admin.addons_new') }}">Create an add-on <span class="arrow" aria-hidden="true">+</span></a>
+  </div>
+  {% if rows %}
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>Add-on</th><th>Price</th><th>Sold</th><th>With</th><th>On booking pages</th></tr></thead>
+    <tbody>{% for a in rows %}
+      <tr><td><a href="{{ url_for('admin.addons_edit', aid=a.id) }}">{{ a.name }}</a>
+            <br><span class="muted small">{{ a.code }}{% if a.description %} · {{ a.description }}{% endif %}</span></td>
+        <td class="num">{{ a.price_cents|money }}<br><span class="muted small">{{ 'per seat' if a.per == 'seat' else 'per booking' }}</span></td>
+        <td class="num">{{ a.sold }}</td>
+        <td class="small">{{ a.course_names or 'Every course' }}</td>
+        <td><form method="post" action="{{ url_for('admin.addons_switch', aid=a.id) }}" class="switch-form">{{ csrf_input() }}
+          <span class="status {{ 'ok' if a.show_on_booking_page else 'off' }}">{{ 'Shown' if a.show_on_booking_page else 'Hidden' }}</span>
+          <button class="btn-small" type="submit">{{ 'Hide' if a.show_on_booking_page else 'Show' }}</button></form></td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}
+  <div class="empty">No add-ons yet. Create one (a wallet card, a training kit, …), set its price, then show it on booking pages.</div>
+  {% endif %}
+  <p class="muted small">Add-ons aren't deleted, so past orders keep what was sold. Hide one to stop offering it. Customers who buy one get the GHL tag nbc-addon-&lt;code&gt;.</p>
+</section>
+{% endblock %}

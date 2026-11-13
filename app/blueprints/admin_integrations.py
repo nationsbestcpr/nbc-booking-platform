@@ -105,6 +105,24 @@ def ghl_stages():
     return redirect(url_for("admin.integrations"))
 
 
+@bp.post("/integrations/ghl/fields")
+@auth.permission_required("settings.manage")
+def ghl_fields():
+    """Look up the GHL custom fields the engine fills (opportunity and contact) by their keys."""
+    try:
+        result = ghl.load_custom_fields()
+        with db.transaction() as conn:
+            audit.record(conn, "integration.ghl_fields", "app_setting", None, after=result)
+        msg = f"Found {len(result['found'])} GHL field{'s' if len(result['found']) != 1 else ''}"
+        if result["missing"]:
+            msg += ". Not in GHL yet (create them with these keys, then load again): " + ", ".join(
+                ghl.FIELD_KEYS.get(m) or ghl.CONTACT_FIELD_KEYS.get(m) or m for m in result["missing"])
+        flash(msg + ".", "warn" if result["missing"] else "ok")
+    except IntegrationError as exc:
+        flash(str(exc), "error")
+    return redirect(url_for("admin.integrations"))
+
+
 @bp.post("/integrations/queue/run")
 @auth.permission_required("system.issue_resolve")
 def queue_run():

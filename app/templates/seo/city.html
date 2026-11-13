@@ -1,0 +1,35 @@
+{% extends "seo/_layout.html" %}
+{% import "seo/_macros.html" as sm with context %}
+{% block seo %}
+<section class="seo-hero">
+  <span class="eyebrow">{{ m.name }}, {{ m.state_code }}</span>
+  <h1 class="title">CPR, First Aid &amp; BLS <span class="accent">Classes in {{ m.name }}</span></h1>
+  {% if copy.intro %}<div class="copy">{{ copy.intro }}</div>{% else %}<p class="lead">American Red Cross classes in and around {{ m.name }}, {{ state_name }}. Choose a course, pick a date and book your seat online.</p>{% endif %}
+</section>
+{% if courses %}
+<section class="panel" aria-labelledby="courses-title">
+  <h2 id="courses-title">Courses in {{ m.name }}</h2>
+  <ul class="link-cards">
+    {% for c in courses %}
+    <li><a href="/{{ m.metro_slug }}/{{ c.course_slug }}/"><strong>{{ c.name }}</strong><span class="muted small">From <span class="num">{{ c.from_price|money }}</span> · <span class="num">{{ c.upcoming }}</span> upcoming date{{ 's' if c.upcoming != 1 }}</span></a></li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+<section class="panel" aria-labelledby="next-title">
+  <div class="panel-head"><h2 id="next-title">Next classes</h2>
+    <a class="small" href="{{ url_for('public.home', city=m.metro_slug) }}#classes">Search every date</a></div>
+  {{ sm.class_list(upcoming) }}
+</section>
+{% if sites %}
+<section class="panel" aria-labelledby="sites-title">
+  <h2 id="sites-title">Training sites</h2>
+  <ul class="link-cards">
+    {% for s in sites %}
+    <li><a href="/{{ m.metro_slug }}/locations/{{ s.slug }}/"><strong>{{ s.name }}</strong><span class="muted small">{{ s.address_line1 }}, {{ s.city }}, {{ s.state_code }} {{ s.postal_code }}</span></a></li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+{% if copy.faq %}<section class="panel copy" aria-label="Questions">{{ copy.faq }}</section>{% endif %}
+{% endblock %}

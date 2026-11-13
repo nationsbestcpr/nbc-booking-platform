@@ -41,3 +41,61 @@ BEGIN
                         AND ur.role_code = 'student' AND ur.revoked_at IS NULL);
   RETURN NULL;
 END $$;
+
+-- 0008: who booked whom, bring a friend, invite links, the same-course rule.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS parent_order_id bigint REFERENCES orders (id);
+CREATE INDEX IF NOT EXISTS orders_parent_idx ON orders (parent_order_id) WHERE parent_order_id IS NOT NULL;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'orders'::regclass AND conname = 'orders_parent_not_self') THEN
+    ALTER TABLE orders ADD CONSTRAINT orders_parent_not_self CHECK (parent_order_id IS NULL OR parent_order_id <> id);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'action_tokens'::regclass
+                    AND conname = 'action_tokens_purpose_check'
+                    AND pg_get_constraintdef(oid) LIKE '%account_invite%') THEN
+    ALTER TABLE action_tokens DROP CONSTRAINT IF EXISTS action_tokens_purpose_check;
+    ALTER TABLE action_tokens ADD CONSTRAINT action_tokens_purpose_check
+      CHECK (purpose IN ('sign_in_link', 'waitlist_offer', 'rebook_choice', 'phone_checkout', 'account_invite'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'action_tokens'::regclass
+                    AND conname = 'action_tokens_invite_has_registration') THEN
+    ALTER TABLE action_tokens ADD CONSTRAINT action_tokens_invite_has_registration
+      CHECK (purpose <> 'account_invite' OR registration_id IS NOT NULL);
+  END IF;
+END $$;
+ALTER TABLE registrations ADD COLUMN IF NOT EXISTS is_bring_a_friend boolean NOT NULL DEFAULT false;
+CREATE INDEX IF NOT EXISTS action_tokens_registration_idx ON action_tokens (registration_id) WHERE registration_id IS NOT NULL;
+CREATE OR REPLACE FUNCTION trg_same_course_block() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE v_months integer; v_family smallint; v_starts timestamptz; v_clash timestamptz; v_course text;
+BEGIN
+  SELECT (value #>> '{}')::integer INTO v_months FROM app_settings WHERE key = 'same_course_block_months';
+  IF COALESCE(v_months, 0) <= 0 THEN
+    RETURN NEW;
+  END IF;
+  SELECT s.course_family_id, s.starts_at, cf.name INTO v_family, v_starts, v_course
+    FROM sessions s JOIN course_families cf ON cf.id = s.course_family_id WHERE s.id = NEW.session_id;
+  SELECT s.starts_at INTO v_clash
+    FROM registrations r JOIN sessions s ON s.id = r.session_id
+   WHERE r.attendee_email = NEW.attendee_email AND r.id <> NEW.id AND r.order_id <> NEW.order_id
+     AND s.course_family_id = v_family
+     AND s.starts_at > v_starts - make_interval(months => v_months)
+     AND s.starts_at < v_starts + make_interval(months => v_months)
+     AND (r.status IN ('awaiting_payment', 'confirmed', 'completed', 'displaced')
+          OR (r.status = 'pending' AND EXISTS (SELECT 1 FROM seat_holds h WHERE h.id = r.seat_hold_id
+                                                 AND h.status = 'active' AND h.expires_at > now())))
+   ORDER BY s.starts_at LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION 'same course within % months: % already has % on %', v_months, NEW.attendee_email, v_course,
+      to_char(v_clash, 'YYYY-MM-DD') USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NEW;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'registrations_same_course'
+                    AND tgrelid = 'registrations'::regclass) THEN
+    CREATE TRIGGER registrations_same_course BEFORE INSERT OR UPDATE OF status, session_id, attendee_email
+      ON registrations FOR EACH ROW WHEN (NEW.status IN ('pending', 'awaiting_payment', 'confirmed'))
+      EXECUTE FUNCTION trg_same_course_block();
+  END IF;
+END $$;

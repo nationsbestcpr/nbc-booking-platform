@@ -1,0 +1,27 @@
+{% extends "seo/_layout.html" %}
+{% import "seo/_macros.html" as sm with context %}
+{% block seo %}
+<section class="seo-hero">
+  <span class="eyebrow">{{ m.name }}, {{ m.state_code }}</span>
+  <h1 class="title">{{ cf.name }} <span class="accent">Classes in {{ m.name }}</span></h1>
+  {% if copy.intro %}<div class="copy">{{ copy.intro }}</div>{% else %}<p class="lead">American Red Cross {{ cf.name }} classes in {{ m.name }}, {{ m.state_code }}. Every date below shows its location, price and seats left.</p>{% endif %}
+  {% if prices %}
+  <ul class="price-chips">
+    {% for p in prices %}<li><strong>{{ p.short_name }}</strong> <span class="num">{{ p.low|money }}{% if p.high != p.low %}–{{ p.high|money }}{% endif %}</span><span class="muted small">{{ p.name }}</span></li>{% endfor %}
+  </ul>
+  {% endif %}
+</section>
+{% if copy.who_its_for or copy.what_to_bring or copy.blended %}
+<section class="panel copy-grid">
+  {% if copy.who_its_for %}<div><h2>Who it's for</h2>{{ copy.who_its_for }}</div>{% endif %}
+  {% if copy.what_to_bring %}<div><h2>What to bring</h2>{{ copy.what_to_bring }}</div>{% endif %}
+  {% if copy.blended %}<div><h2>Blended classes</h2>{{ copy.blended }}</div>{% endif %}
+</section>
+{% endif %}
+<section class="panel" aria-labelledby="dates-title">
+  <h2 id="dates-title">Upcoming {{ cf.name }} dates</h2>
+  {{ sm.class_list(upcoming, show_course=false) }}
+</section>
+{% if copy.faq %}<section class="panel copy" aria-label="Questions">{{ copy.faq }}</section>{% endif %}
+<p class="small"><a href="/{{ m.metro_slug }}/">All courses in {{ m.name }}</a></p>
+{% endblock %}

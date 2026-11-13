@@ -6,10 +6,11 @@ Profile and Settings are shared by all areas and show that area's tabs.
 
 from __future__ import annotations
 
-from flask import Blueprint, flash, redirect, render_template, request, url_for
+from flask import Blueprint, abort, flash, redirect, render_template, request, url_for
 from sqlalchemy import text
 
-from .. import areas, auth, classes, db
+from .. import areas, auth, booking_setup, classes, db, invites
+from ..integrations.outbox import enqueue
 
 bp = Blueprint("me", __name__)
 
@@ -37,9 +38,50 @@ def home():
          ORDER BY s.starts_at
     """, email=user.email) if user.email_verified else []
     found = classes.search(classes.filters_from(request.args))
+    me_email = user.email.lower()
+    for r in mine["upcoming"] + mine["past"]:
+        r["mine"] = (r["attendee_email"] or "").lower() == me_email
+        r["booked_by_other"] = r["mine"] and not r["bought_here"] and (r["buyer_email"] or "").lower() != me_email
+    booked_for_others = [r for r in mine["upcoming"] if r["bought_here"] and not r["mine"]]
+    invite_status = invites.status_for([r["id"] for r in booked_for_others])
     return render_template("me/home.html", upcoming=mine["upcoming"], past=mine["past"][:10],
                            more_past=len(mine["past"]) > 10, waiting=waiting, found=found,
-                           tabs=areas.tabs_for(user))
+                           others=booked_for_others, invite_status=invite_status,
+                           friend=booking_setup.bring_a_friend(), tabs=areas.tabs_for(user))
+
+
+@bp.post("/my/invites/<reg_public_id>/resend")
+@auth.login_required
+def resend_invite(reg_public_id: str):
+    """The booker sends an attendee's invite again (at most once every 10 minutes per seat)."""
+    user = auth.current_user()
+    reg = db.fetch_one("""
+        SELECT r.id, r.attendee_first_name, r.attendee_email,
+               (SELECT max(n.sent_at) FROM notifications n WHERE n.kind = 'attendee_invite'
+                   AND n.subject_type = 'registration' AND n.subject_id = r.id) AS last_sent
+          FROM registrations r JOIN orders o ON o.id = r.order_id JOIN sessions s ON s.id = r.session_id
+         WHERE r.public_id = CAST(:p AS uuid) AND o.buyer_user_id = :u
+           AND r.status IN ('confirmed', 'awaiting_payment') AND s.starts_at > now()
+           AND lower(r.attendee_email) <> lower(o.buyer_email)
+    """, p=reg_public_id, u=user.id) if classes_is_uuid(reg_public_id) else None
+    if reg is None:
+        abort(404)
+    recent = db.fetch_value("SELECT :t > now() - interval '10 minutes'", t=reg["last_sent"]) if reg["last_sent"] else False
+    if recent:
+        flash(f"An invite went to {reg['attendee_email']} in the last few minutes. Ask them to check their spam "
+              "folder before sending another.", "error")
+    else:
+        from datetime import datetime, timezone
+        with db.transaction() as conn:
+            enqueue(conn, "ghl", "send_invite", key=f"ghl-invite-{reg['id']}-{int(datetime.now(timezone.utc).timestamp())}",
+                    entity_type="registration", entity_id=reg["id"], payload={"registration_id": reg["id"]})
+        flash(f"We're sending {reg['attendee_first_name']}'s invite again to {reg['attendee_email']}.", "ok")
+    return redirect(url_for("me.home") + "#people")
+
+
+def classes_is_uuid(value: str) -> bool:
+    import re
+    return bool(re.fullmatch(r"[0-9a-fA-F-]{36}", value or ""))
 
 
 @bp.route("/account/profile", methods=["GET", "POST"])

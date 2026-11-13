@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% import "public/_booking_fields.html" as bf with context %}
+{% block title %}Bring a friend · {{ s.course_name }}{% endblock %}
+{% block content %}
+<div class="wrap">
+  <div class="auth book">
+    <aside class="auth-side" aria-labelledby="class-title">
+      <span class="eyebrow" style="color:#ffb3b8">Bring a friend</span>
+      <h1 id="class-title">{{ s.course_name }}</h1>
+      <ul>
+        <li><span><strong class="num">{{ class_date(s.starts_at, s.time_zone) }}</strong><br><span class="num">{{ class_time(s.starts_at, s.ends_at, s.time_zone) }}</span></span></li>
+        <li><span><strong>{{ s.site_name }}</strong><br>{{ s.address_line1 }}{% if s.address_line2 %}, {{ s.address_line2 }}{% endif %}<br>{{ s.site_city }}, {{ s.site_state }} {{ s.postal_code }}</span></li>
+      </ul>
+      <p class="num" style="color:#d9d9ee">{% if s.on_sale and s.seats_left > 0 %}{{ s.seats_left }} seat{{ 's' if s.seats_left != 1 }} left{% else %}This class is full.{% endif %}</p>
+    </aside>
+    <div class="auth-form">
+      {% if not open %}
+      <h2>No seat to add</h2>
+      <p class="muted">{% if not friend.enabled %}Bring a friend isn't available right now.{% else %}This class is full or no longer taking bookings.{% endif %} Your own booking is unchanged.</p>
+      <a class="pill" href="{{ url_for('me.home') }}" style="align-self:flex-start">My classes <span class="arrow" aria-hidden="true">→</span></a>
+      {% else %}
+      <form method="post" action="{{ url_for('book.friend', public_id=s.public_id) }}" novalidate id="book-form">
+        {{ csrf_input() }}
+        <input type="hidden" name="order" value="{{ parent.public_id }}">
+        <div class="book-form">
+          <h2>Add a seat for your friend</h2>
+          <p class="muted">Your friend joins you in this class. {% if friend.discount_cents %}Their seat is <strong class="num">{{ friend.discount_cents|money }}</strong> off. {% endif %}You pay for it now, as its own booking.</p>
+          {% if testing %}<p class="notice warn" role="note"><strong>Test booking.</strong> No payment is taken on the test site.</p>{% endif %}
+          {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+          {% if s.offers|length > 1 %}
+          <fieldset class="field">
+            <legend>Course for your friend</legend>
+            <div class="choice-tiles">
+              {% for o in s.offers %}
+              <label class="tile"><input type="radio" name="product_id" value="{{ o.id }}" {{ 'checked' if (product_id == o.id) or (not product_id and loop.first) }}>
+                <strong>{{ o.short_name }} · <span class="num">{{ friend_prices[o.id]|money }}</span></strong><span>{{ o.name }}</span></label>
+              {% endfor %}
+            </div>
+          </fieldset>
+          {% else %}
+          <input type="hidden" name="product_id" value="{{ s.offers[0].id }}">
+          <p><strong>{{ s.offers[0].name }}</strong> · <span class="num">{{ friend_prices[s.offers[0].id]|money }}</span></p>
+          {% endif %}
+          <p class="notice email-rule" role="note"><strong>Your friend needs their own email address.</strong> The Red Cross emails each certificate to the person's own address.</p>
+          <div class="row-3">
+            <div class="field"><label for="a0f">Friend's first name</label><input type="text" id="a0f" name="a0_first" value="{{ form.get('a0_first', '') }}"></div>
+            <div class="field"><label for="a0l">Last name</label><input type="text" id="a0l" name="a0_last" value="{{ form.get('a0_last', '') }}"></div>
+            <div class="field"><label for="a0e">Their own email</label><input type="email" id="a0e" name="a0_email" value="{{ form.get('a0_email', '') }}"></div>
+          </div>
+          {{ bf.person_extras(questions, addons, 'a0', form) }}
+          <p class="small muted">We'll email your friend an invite to make their own account. Nothing is held yet: their seat is held for 15 minutes once you continue.</p>
+          <button class="pill red" type="submit" style="align-self:flex-start">{{ 'Book (test, no payment)' if testing else 'Continue to payment' }} <span class="arrow" aria-hidden="true">→</span></button>
+        </div>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

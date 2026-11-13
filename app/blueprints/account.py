@@ -85,6 +85,45 @@ def oauth_callback(provider: str):
     return redirect(go)
 
 
+@bp.route("/invite/<token>", methods=["GET", "POST"])
+def invite(token: str):
+    """Someone booked this person a seat: make (or sign in to) their own account.
+
+    Opening the emailed link proves they read that inbox, so the account's email
+    counts as confirmed and the booked class shows on their dashboard."""
+    from .. import invites
+    found = invites.lookup(token)
+    if found is None:
+        return render_template("account/invite.html", invite=None, errors={}, form={}, next="",
+                               providers=oauth.available()), 404
+    here = url_for("account.invite", token=token)
+    user = auth.current_user()
+
+    def claimed():
+        session["verified"] = True                 # confirmed just now, in this session
+        flash(f"Welcome, {found['attendee_first_name']}. Your {found['course_name']} class is below.", "ok")
+        return redirect(url_for("me.home"))
+
+    if user is not None:
+        if user.email.lower() == found["attendee_email"].lower() and invites.claim(found, user.id):
+            return claimed()
+        return render_template("account/invite.html", invite=found, other_account=user, errors={}, form={},
+                               next=here, providers=oauth.available())
+    errors: dict[str, str] = {}
+    form = {"first_name": found["attendee_first_name"], "last_name": found["attendee_last_name"]}
+    if request.method == "POST" and not found["account_id"]:
+        form = {k: request.form.get(k, "") for k in ("first_name", "last_name")}
+        try:
+            uid = auth.create_account(email=found["attendee_email"], intent="student",
+                                      password=request.form.get("password", ""), **form)
+            if invites.claim(found, uid):
+                return claimed()
+        except auth.SignUpError as exc:
+            errors[exc.field] = exc.message
+    return render_template("account/invite.html", invite=found, errors=errors, form=form, next=here,
+                           providers=oauth.available()), (400 if errors else 200)
+
+
 @bp.post("/sign-out")
 def sign_out():
     auth.sign_out()

@@ -1,0 +1,40 @@
+{% extends "seo/_layout.html" %}
+{% import "seo/_macros.html" as sm with context %}
+{% block seo %}
+{% set d = local_dt(c.starts_at, c.time_zone) %}
+<div class="auth book class-page">
+  <aside class="auth-side" aria-labelledby="class-title">
+    <span class="eyebrow" style="color:#ffb3b8">{{ c.city_name }}, {{ c.state_code }}</span>
+    <h1 id="class-title">{{ c.course_name }}</h1>
+    <ul>
+      <li><span><strong class="num">{{ class_date(c.starts_at, c.time_zone) }}</strong><br><span class="num">{{ class_time(c.starts_at, c.ends_at, c.time_zone) }}</span></span></li>
+      <li><span><strong><a href="/{{ c.metro_slug }}/locations/{{ c.site_slug }}/" style="color:inherit">{{ c.site_name }}</a></strong><br>{{ c.address_line1 }}{% if c.address_line2 %}, {{ c.address_line2 }}{% endif %}<br>{{ c.city }}, {{ c.site_state }} {{ c.postal_code }}</span></li>
+      <li><span>{{ c.delivery_mode|capitalize }} class{% if c.delivery_mode == 'blended' %}: an online part before class day, then the skills session here{% endif %}</span></li>
+      {% if c.parking_notes_public %}<li><span>Parking: {{ c.parking_notes_public }}</span></li>{% endif %}
+    </ul>
+  </aside>
+  <div class="auth-form">
+    {% if c.status == 'cancelled' %}
+      <p class="notice error" role="status"><strong>This class is cancelled.</strong> Pick another date below.</p>
+    {% elif c.previous_starts_at %}
+      <p class="notice warn" role="status"><strong>This class moved.</strong> It was on {{ class_date(c.previous_starts_at, c.time_zone) }}.</p>
+    {% endif %}
+    <h2>Prices</h2>
+    <ul class="price-chips">
+      {% for o in offers %}<li><strong>{{ o.short_name }}</strong> <span class="num">{{ o.price_cents|money }}</span><span class="muted small">{{ o.name }}</span></li>{% endfor %}
+    </ul>
+    {% if on_sale %}
+      <p class="num"><strong>{{ c.seats_left }}</strong> of {{ c.seat_limit }} seats left</p>
+      <a class="pill red" href="{{ url_for('book.form', public_id=c.public_id) }}" style="align-self:flex-start">Book this class <span class="arrow" aria-hidden="true">→</span></a>
+      <p class="small muted">Your seat is held for 15 minutes while you pay. Each person needs their own email address for their Red Cross certificate.</p>
+    {% elif c.status != 'cancelled' %}
+      <p class="notice warn"><strong>This class is full.</strong> Pick another date below.</p>
+    {% endif %}
+  </div>
+</div>
+<section class="panel" aria-labelledby="next-title">
+  <h2 id="next-title">{{ 'Other' if on_sale else 'Next' }} {{ c.course_name }} dates in {{ c.city_name }}</h2>
+  {{ sm.class_list(next_dates, show_course=false) }}
+  <p class="small"><a href="/{{ c.metro_slug }}/{{ c.course_slug }}/">Every {{ c.course_name }} date in {{ c.city_name }}</a></p>
+</section>
+{% endblock %}

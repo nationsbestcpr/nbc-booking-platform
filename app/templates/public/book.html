@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "public/_booking_fields.html" as bf with context %}
 {% block title %}Book {{ s.course_name }}{% endblock %}
 {% block content %}
 {% set d = local_dt(s.starts_at, s.time_zone) %}
@@ -44,7 +45,7 @@
         </div>
       </form>
 
-      <form method="post" action="{{ url_for('book.submit', public_id=s.public_id) }}" novalidate>
+      <form method="post" action="{{ url_for('book.submit', public_id=s.public_id) }}" novalidate id="book-form">
         {{ csrf_input() }}
         <input type="hidden" name="seats" value="{{ seats }}">
         <div class="book-form">
@@ -55,7 +56,7 @@
             <legend>Course</legend>
             <div class="choice-tiles">
               {% for o in s.offers %}
-              <label class="tile"><input type="radio" name="product_id" value="{{ o.id }}" {{ 'checked' if (product_id == o.id) or (not product_id and loop.first) }} required>
+              <label class="tile"><input type="radio" name="product_id" value="{{ o.id }}" {{ 'checked' if (product_id == o.id) or (not product_id and loop.first) }} data-price="{{ o.price_cents }}" data-friend-price="{{ friend_prices[o.id] }}" required>
                 <strong>{{ o.short_name }} · <span class="num">{{ o.price_cents|money }}</span></strong><span>{{ o.name }}</span></label>
               {% endfor %}
             </div>
@@ -67,37 +68,101 @@
             <div class="field"><label for="bl">Last name</label><input type="text" id="bl" name="buyer_last_name" value="{{ form.buyer_last_name or buyer.last_name }}" autocomplete="family-name" required></div>
           </div>
           <div class="row-2">
-            <div class="field"><span class="label" id="be-label">Email</span><p class="readonly" aria-labelledby="be-label">{{ buyer.email }}</p><span class="hint">Your account's email: your confirmation goes here. Booking with another email? Sign out and use that account.</span></div>
+            <div class="field"><span class="label" id="be-label">Email</span><p class="readonly" aria-labelledby="be-label">{{ buyer.email }}</p><span class="hint">Your account's email: your receipt goes here.</span></div>
             <div class="field"><label for="bp">Mobile phone <span class="muted">(optional)</span></label><input type="text" inputmode="tel" id="bp" name="buyer_phone" value="{{ form.buyer_phone or buyer.phone }}" autocomplete="tel"><span class="hint">For class-day texts.</span></div>
           </div>
 
           <h2>Who's attending</h2>
+          <p class="notice email-rule" role="note"><strong>Every person needs their own email address.</strong> The Red Cross emails each certificate to the person's own address, so two people can't share one, even when one person pays.</p>
           {% for i in range(seats) %}
-          <fieldset class="field attendee">
+          <fieldset class="field attendee{{ ' first-seat' if i == 0 }}">
             <legend>Seat {{ i + 1 }}</legend>
             {% if i == 0 %}
             <div class="choice-tiles">
               <label class="tile"><input type="radio" name="buyer_attends" value="yes" {{ 'checked' if form.get('buyer_attends', 'yes') == 'yes' }}><strong>I'm attending</strong><span>Use my details above</span></label>
               <label class="tile"><input type="radio" name="buyer_attends" value="no" {{ 'checked' if form.get('buyer_attends') == 'no' }}><strong>Someone else</strong><span>I'm booking for them</span></label>
             </div>
-            <p class="hint small">If someone else, fill in their name and email:</p>
             {% endif %}
-            <div class="row-3">
-              <div class="field"><label for="a{{ i }}f">First name</label><input type="text" id="a{{ i }}f" name="a{{ i }}_first" value="{{ form.get('a%d_first' % i, '') }}"></div>
-              <div class="field"><label for="a{{ i }}l">Last name</label><input type="text" id="a{{ i }}l" name="a{{ i }}_last" value="{{ form.get('a%d_last' % i, '') }}"></div>
-              <div class="field"><label for="a{{ i }}e">Email</label><input type="email" id="a{{ i }}e" name="a{{ i }}_email" value="{{ form.get('a%d_email' % i, '') }}"></div>
+            <div class="someone-fields">
+              <div class="row-3">
+                <div class="field"><label for="a{{ i }}f">First name</label><input type="text" id="a{{ i }}f" name="a{{ i }}_first" value="{{ form.get('a%d_first' % i, '') }}"></div>
+                <div class="field"><label for="a{{ i }}l">Last name</label><input type="text" id="a{{ i }}l" name="a{{ i }}_last" value="{{ form.get('a%d_last' % i, '') }}"></div>
+                <div class="field"><label for="a{{ i }}e">Their own email</label><input type="email" id="a{{ i }}e" name="a{{ i }}_email" value="{{ form.get('a%d_email' % i, '') }}"></div>
+              </div>
+              <p class="hint small invite-note">We'll email them an invite to make their own account, where they'll find the class, the online part and their certificate. You'll see everyone you booked on your dashboard.</p>
             </div>
+            {{ bf.person_extras(questions, addons, 'a%d' % i, form) }}
           </fieldset>
           {% endfor %}
+
+          {% if friend.enabled and s.seats_left > seats %}
+          <fieldset class="field friend-card">
+            <legend class="sr-only">Bring a friend</legend>
+            <label class="friend-toggle"><input type="checkbox" name="bring_friend" value="yes" {{ 'checked' if form.get('bring_friend') == 'yes' }}>
+              <span><strong>Bring a friend</strong>
+                <span class="small">{% if friend.discount_cents %}Add a seat for a friend in this class. Their seat is <strong class="num">{{ friend.discount_cents|money }}</strong> off.{% else %}Add a seat for a friend in this class. It's quicker together, and they get their own certificate.{% endif %}</span></span>
+            </label>
+            <div class="friend-fields">
+              <div class="row-3">
+                <div class="field"><label for="a{{ seats }}f">Friend's first name</label><input type="text" id="a{{ seats }}f" name="a{{ seats }}_first" value="{{ form.get('a%d_first' % seats, '') }}"></div>
+                <div class="field"><label for="a{{ seats }}l">Last name</label><input type="text" id="a{{ seats }}l" name="a{{ seats }}_last" value="{{ form.get('a%d_last' % seats, '') }}"></div>
+                <div class="field"><label for="a{{ seats }}e">Their own email</label><input type="email" id="a{{ seats }}e" name="a{{ seats }}_email" value="{{ form.get('a%d_email' % seats, '') }}"></div>
+              </div>
+              <p class="hint small">We'll email your friend an invite to make their own account.</p>
+              {{ bf.person_extras(questions, addons, 'a%d' % seats, form) }}
+            </div>
+          </fieldset>
+          {% endif %}
+
+          {% if questions.booking %}
+          <h2>About this booking</h2>
+          {% for q in questions.booking %}{{ bf.question(q, 'b', form) }}{% endfor %}
+          {% endif %}
+
+          {% if addons.booking %}
+          <h2>Extras</h2>
+          <div class="addons" role="group" aria-label="Extras for this booking">
+            {% for a in addons.booking %}{{ bf.addon(a, 'b', form) }}{% endfor %}
+          </div>
+          {% endif %}
+
+          <div class="total-bar" aria-live="polite">
+            <span>Total</span>
+            <strong class="num" id="book-total" data-seats="{{ seats }}">{{ (s.offers[0].price_cents * seats)|money if s.offers else '' }}</strong>
+            <span class="small muted">Discount codes go in on the payment page.</span>
+          </div>
 
           {% if testing %}
           <button class="pill red" type="submit" style="align-self:flex-start">Book (test, no payment) <span class="arrow" aria-hidden="true">→</span></button>
           {% else %}
-          <p class="small muted">Your seat{{ 's are' if seats > 1 else ' is' }} held for 15 minutes while you pay on Stripe's secure page. Have a discount code? Enter it there.</p>
+          <p class="small muted">Nothing is held yet. When you press Continue, your seat{{ 's are' if seats > 1 }} held for 15 minutes while you pay on Stripe's secure page.</p>
           <button class="pill red" type="submit" style="align-self:flex-start">Continue to payment <span class="arrow" aria-hidden="true">→</span></button>
           {% endif %}
         </div>
       </form>
+      <script>
+        (function () {
+          var form = document.getElementById('book-form');
+          var total = document.getElementById('book-total');
+          if (!form || !total) return;
+          function money(c) { return '$' + (c / 100).toFixed(2).replace(/\.00$/, ''); }
+          function update() {
+            var p = form.querySelector('input[name="product_id"]:checked');
+            if (!p) return;
+            var seats = parseInt(total.dataset.seats, 10), sum = seats * parseInt(p.dataset.price, 10);
+            var friend = form.querySelector('input[name="bring_friend"]');
+            var friendOn = friend && friend.checked;
+            if (friendOn) sum += parseInt(p.dataset.friendPrice, 10);
+            form.querySelectorAll('.addon-pick input:checked').forEach(function (a) {
+              if (!friendOn && a.closest('.friend-fields')) return;
+              sum += parseInt(a.dataset.price, 10);
+            });
+            total.textContent = money(sum);
+          }
+          form.addEventListener('change', update);
+          update();
+        })();
+      </script>
     </div>
     {% endif %}
   </div>

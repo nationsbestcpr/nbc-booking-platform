@@ -9,6 +9,7 @@
       <span class="eyebrow">Booking confirmed</span>
       <h1 id="done-title" class="title">You're Booked, <span class="accent">{{ order.buyer_first_name }}</span></h1>
       <p>Your confirmation is on its way to <strong>{{ order.buyer_email }}</strong>. Bring a photo ID to class.</p>
+      {% if order.others %}<p class="notice ok">We're emailing {{ order.others|map(attribute='attendee_first_name')|join(', ') }} an invite to make their own account, where they'll find the class and their certificate. You'll see everyone you booked on <a href="{{ url_for('me.home') }}">your dashboard</a>.</p>{% endif %}
     {% elif order.status == 'open' %}
       <span class="eyebrow">Almost there</span>
       <h1 id="done-title" class="title">Confirming <span class="accent">Your Payment</span></h1>
@@ -26,11 +27,21 @@
       <dt>Class</dt><dd>{{ order.course_name }}</dd>
       <dt>When</dt><dd class="num">{{ class_date(order.starts_at, order.time_zone) }} · {{ class_time(order.starts_at, order.ends_at, order.time_zone) }}</dd>
       <dt>Where</dt><dd>{{ order.site_name }}, {{ order.address_line1 }}, {{ order.site_city }}, {{ order.site_state }} {{ order.postal_code }}</dd>
-      <dt>Attending</dt><dd>{% for a in order.attendees %}{{ a.attendee_first_name }} {{ a.attendee_last_name }} ({{ a.short_name }}){{ ', ' if not loop.last }}{% endfor %}</dd>
+      <dt>Attending</dt><dd>{% for a in order.attendees %}{{ a.attendee_first_name }} {{ a.attendee_last_name }} ({{ a.short_name }}{{ ', your friend' if a.is_bring_a_friend }}){{ ', ' if not loop.last }}{% endfor %}</dd>
+      {% if order.addons %}<dt>Add-ons</dt><dd>{% for a in order.addons %}{{ a.name }}{% if a.attendee_first_name %} for {{ a.attendee_first_name }}{% endif %} <span class="num">{{ a.unit_price_cents|money }}</span>{{ ', ' if not loop.last }}{% endfor %}</dd>{% endif %}
       {% if booked and order.test_booking %}<dt>Paid</dt><dd>Test booking: no payment taken ({{ order.total_cents|money }} at full price)</dd>
       {% elif booked %}<dt>Paid</dt><dd class="num">{{ order.total_cents|money }}{% if order.discount_cents %} (saved {{ order.discount_cents|money }}){% endif %}</dd>{% endif %}
     </dl>
-    <a class="pill" href="{{ url_for('public.home') }}" style="align-self:flex-start">Back to classes <span class="arrow" aria-hidden="true">→</span></a>
+    {% if can_bring_friend %}
+    <div class="friend-offer">
+      <span><strong>Bring a friend?</strong><br><span class="small">{% if friend.discount_cents %}Add a seat for a friend in this class, <span class="num">{{ friend.discount_cents|money }}</span> off.{% else %}Add a seat for a friend in this same class.{% endif %} {{ s.seats_left }} seat{{ 's' if s.seats_left != 1 }} left.</span></span>
+      <a class="pill red small-pill" href="{{ url_for('book.friend', public_id=order.session_public_id, order=order.public_id, product=order.attendees[0].product_id if order.attendees else None) }}">Add a friend <span class="arrow" aria-hidden="true">→</span></a>
+    </div>
+    {% endif %}
+    <div class="seat-row">
+      <a class="pill" href="{{ url_for('me.home') }}">My classes <span class="arrow" aria-hidden="true">→</span></a>
+      <a class="pill plain light-border" href="{{ url_for('public.home') }}">Back to classes</a>
+    </div>
   </section>
 </div>
 {% endblock %}

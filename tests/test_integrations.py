@@ -94,6 +94,11 @@ class FakePlatforms:
         self.ghl_contacts: dict[str, str] = {}
         self.ghl_opps: dict[str, dict] = {}
         self.ghl_fail_next = 0
+        self.ghl_tags: dict[str, list[str]] = {}            # contact id -> tags it has now
+        self.ghl_tag_events: list[tuple[str, str]] = []     # every tag added, in order
+        self.ghl_contact_values: dict[str, dict] = {}       # contact id -> custom field id -> value
+        self.ghl_contact_fields = ["nbc_invite_link", "nbc_booked_by"]
+        self.ghl_extra_opportunity_fields: list[str] = []
         self.stripe_refuse_refunds = False
         self.ghl_refuse_second_opportunity = False
 
@@ -182,9 +187,29 @@ class FakePlatforms:
             return Res(200, {"opportunities": [{"id": k, **v} for k, v in self.ghl_opps.items()
                                                if v["contactId"] == params.get("contact_id")]})
         if re.fullmatch(r"/locations/[^/]+/customFields", path):
+            if params.get("model") == "contact":
+                return Res(200, {"customFields": [{"id": f"cf-contact-{k}", "fieldKey": f"contact.{k}", "name": k}
+                                                  for k in self.ghl_contact_fields]})
             return Res(200, {"customFields": [{"id": f"cf-{k}", "fieldKey": f"opportunity.{k}", "name": k}
                                               for k in ("class_id", "course", "course_date", "course_location",
-                                                        "reg_type", "order_total", "shipping")]})
+                                                        "reg_type", "order_total", "shipping", "booked_by",
+                                                        "booked_by_email", "booking_type", "addons",
+                                                        *self.ghl_extra_opportunity_fields)]})
+        m = re.fullmatch(r"/contacts/(ct-\w+)/tags", path)
+        if m:
+            tags = self.ghl_tags.setdefault(m.group(1), [])
+            for t in body["tags"]:
+                if method == "POST":
+                    tags.append(t)
+                    self.ghl_tag_events.append((m.group(1), t))
+                elif t in tags:
+                    tags.remove(t)
+            return Res(200, {"tags": tags})
+        m = re.fullmatch(r"/contacts/(ct-\w+)", path)
+        if m and method == "PUT":
+            fields = self.ghl_contact_values.setdefault(m.group(1), {})
+            fields.update({f["id"]: f["field_value"] for f in body.get("customFields") or []})
+            return Res(200, {"contact": {"id": m.group(1)}})
         if path == "/opportunities/" and method == "POST":
             if self.ghl_refuse_second_opportunity and any(o["contactId"] == body["contactId"]
                                                           for o in self.ghl_opps.values()):

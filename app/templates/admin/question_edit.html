@@ -1,0 +1,53 @@
+{% extends "dash/layout.html" %}
+{% block title %}{{ 'Edit question' if editing else 'Add a question' }}{% endblock %}
+{% block heading %}{{ 'Edit' if editing else 'Add a' }} <span class="accent">Question</span>{% endblock %}
+{% block subhead %}<p><a href="{{ url_for('admin.questions') }}">← All booking questions</a></p>{% endblock %}
+{% macro err(name) %}{% if errors[name] %}<span class="error" id="{{ name }}-error">{{ errors[name] }}</span>{% endif %}{% endmacro %}
+{% block panel %}
+<section class="panel">
+  <form method="post" class="setup-form" novalidate>
+    {{ csrf_input() }}
+    {% if errors %}<p class="alert" role="alert">Check the highlighted fields.</p>{% endif %}
+    <div class="field"><label for="label">Question</label>
+      <input type="text" id="label" name="label" value="{{ q.label or '' }}" maxlength="300" placeholder="Any medical needs we should know about?" {% if errors.label %}aria-invalid="true"{% endif %}>{{ err('label') }}</div>
+    <div class="field"><label for="help_text">Help text <span class="muted">(optional)</span></label>
+      <input type="text" id="help_text" name="help_text" value="{{ q.help_text or '' }}" maxlength="500" placeholder="Shown under the question">
+    </div>
+    <div class="row-2">
+      <div class="field"><label for="kind">Kind of answer</label>
+        <select id="kind" name="kind">{% for k, l in kinds.items() %}<option value="{{ k }}"{{ ' selected' if q.kind == k }}>{{ l }}</option>{% endfor %}</select>{{ err('kind') }}</div>
+      <fieldset class="field"><legend>Who answers</legend>
+        <div class="yes-no">{% for k, l in asked.items() %}<label><input type="radio" name="asked_for" value="{{ k }}"{{ ' checked' if q.asked_for == k }}> {{ l }}</label>{% endfor %}</div>
+        <span class="hint">Each attendee: asked for every seat (for example, medical needs). Once per booking: asked of the person paying.</span></fieldset>
+    </div>
+    <div class="field choices-field"><label for="choices">Choices, one per line <span class="muted">(for “Pick one”)</span></label>
+      <textarea id="choices" name="choices" rows="4" placeholder="Google&#10;Facebook&#10;A friend">{{ (q.choices or [])|join('\n') }}</textarea>{{ err('choices') }}</div>
+    <div class="row-2">
+      <fieldset class="field"><legend>Required?</legend>
+        <div class="yes-no"><label><input type="radio" name="is_required" value="yes"{{ ' checked' if q.is_required }}> Required</label>
+          <label><input type="radio" name="is_required" value="no"{{ ' checked' if not q.is_required }}> Optional</label></div></fieldset>
+      <fieldset class="field"><legend>On the booking page</legend>
+        <div class="yes-no"><label><input type="radio" name="is_active" value="yes"{{ ' checked' if q.is_active }}> On</label>
+          <label><input type="radio" name="is_active" value="no"{{ ' checked' if not q.is_active }}> Off</label></div></fieldset>
+    </div>
+    <fieldset class="field"><legend>Courses</legend>
+      <div class="check-row">{% for c in courses %}<label><input type="checkbox" name="courses" value="{{ c.id }}"{{ ' checked' if c.id in chosen }}> {{ c.name }}</label>{% endfor %}</div>
+      <span class="hint">Leave all unticked to ask it for every course.</span></fieldset>
+    <div class="row-2">
+      <div class="field"><label for="delivery_mode">Class type</label>
+        <select id="delivery_mode" name="delivery_mode">
+          <option value="">Every class</option>
+          <option value="blended"{{ ' selected' if q.delivery_mode == 'blended' }}>Blended only</option>
+          <option value="classroom"{{ ' selected' if q.delivery_mode == 'classroom' }}>Classroom only</option>
+        </select></div>
+      <div class="field"><label for="sort_order">Order</label>
+        <input type="text" inputmode="numeric" id="sort_order" name="sort_order" value="{{ q.sort_order or 0 }}"><span class="hint">Lower numbers are asked first.</span></div>
+    </div>
+    <div class="field"><label for="ghl_field_key">GHL field <span class="muted">(optional)</span></label>
+      <input type="text" id="ghl_field_key" name="ghl_field_key" value="{{ q.ghl_field_key or '' }}" placeholder="opportunity.medical_needs" {% if errors.ghl_field_key %}aria-invalid="true"{% endif %}>
+      <span class="hint">The key of an opportunity custom field in GHL. Each answer is copied there, so workflows and reports can use it. Leave empty to keep the answer here only.</span>{{ err('ghl_field_key') }}</div>
+    <div class="seat-row"><button class="pill red" type="submit">Save question <span class="arrow" aria-hidden="true">→</span></button>
+      <a href="{{ url_for('admin.questions') }}">Cancel</a></div>
+  </form>
+</section>
+{% endblock %}

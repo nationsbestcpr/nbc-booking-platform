@@ -1,0 +1,43 @@
+{% extends "dash/layout.html" %}
+{% block title %}{{ 'Edit add-on' if editing else 'Create an add-on' }}{% endblock %}
+{% block heading %}{{ 'Edit' if editing else 'Create an' }} <span class="accent">Add-on</span>{% endblock %}
+{% block subhead %}<p><a href="{{ url_for('admin.addons') }}">← All add-ons</a></p>{% endblock %}
+{% macro err(name) %}{% if errors[name] %}<span class="error" id="{{ name }}-error">{{ errors[name] }}</span>{% endif %}{% endmacro %}
+{% block panel %}
+<section class="panel">
+  <form method="post" class="setup-form" novalidate>
+    {{ csrf_input() }}
+    {% if errors %}<p class="alert" role="alert">Check the highlighted fields.</p>{% endif %}
+    <div class="row-2">
+      <div class="field"><label for="name">Name customers see</label>
+        <input type="text" id="name" name="name" value="{{ a.name or '' }}" maxlength="120" placeholder="Laminated wallet card" {% if errors.name %}aria-invalid="true"{% endif %}>{{ err('name') }}</div>
+      <div class="field"><label for="price">Price</label>
+        <input type="text" inputmode="decimal" id="price" name="price" value="{{ '%.2f'|format(a.price_cents / 100) if a.price_cents is not none else '' }}" placeholder="15.00" {% if errors.price %}aria-invalid="true"{% endif %}>
+        <span class="hint">Dollars. 0 for a free extra.</span>{{ err('price') }}</div>
+    </div>
+    <div class="field"><label for="description">Short description <span class="muted">(optional)</span></label>
+      <input type="text" id="description" name="description" value="{{ a.description or '' }}" maxlength="300" placeholder="Mailed after class"></div>
+    <div class="row-2">
+      <fieldset class="field"><legend>Sold</legend>
+        <div class="yes-no"><label><input type="radio" name="per" value="seat"{{ ' checked' if a.per == 'seat' }}> Per seat</label>
+          <label><input type="radio" name="per" value="booking"{{ ' checked' if a.per == 'booking' }}> Once per booking</label></div>
+        <span class="hint">Per seat: each attendee can add it. Once per booking: one for the whole order.</span>{{ err('per') }}</fieldset>
+      <fieldset class="field"><legend>On booking pages</legend>
+        <div class="yes-no"><label><input type="radio" name="show_on_booking_page" value="yes"{{ ' checked' if a.show_on_booking_page }}> Shown</label>
+          <label><input type="radio" name="show_on_booking_page" value="no"{{ ' checked' if not a.show_on_booking_page }}> Hidden</label></div></fieldset>
+    </div>
+    <fieldset class="field"><legend>Courses</legend>
+      <div class="check-row">{% for c in courses %}<label><input type="checkbox" name="courses" value="{{ c.id }}"{{ ' checked' if c.id in chosen }}> {{ c.name }}</label>{% endfor %}</div>
+      <span class="hint">Leave all unticked to offer it with every course.</span></fieldset>
+    <div class="row-2">
+      <div class="field"><label for="code">Code</label>
+        <input type="text" id="code" name="code" value="{{ a.code or '' }}" placeholder="made from the name" {% if errors.code %}aria-invalid="true"{% endif %}>
+        <span class="hint">Used in the GHL tag nbc-addon-&lt;code&gt;. Lower-case words and dashes.</span>{{ err('code') }}</div>
+      <div class="field"><label for="sort_order">Order</label>
+        <input type="text" inputmode="numeric" id="sort_order" name="sort_order" value="{{ a.sort_order or 0 }}"><span class="hint">Lower numbers show first.</span></div>
+    </div>
+    <div class="seat-row"><button class="pill red" type="submit">Save add-on <span class="arrow" aria-hidden="true">→</span></button>
+      <a href="{{ url_for('admin.addons') }}">Cancel</a></div>
+  </form>
+</section>
+{% endblock %}

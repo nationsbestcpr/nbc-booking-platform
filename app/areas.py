@@ -61,6 +61,10 @@ AREAS: dict[str, tuple[str, str, list[tuple[str, list[Item]]]]] = {
             ("admin.waitlists", "Waiting lists", ("waitlist.view",)),
             ("admin.locations", "Locations", ("class.view",)),
         ]),
+        ("Booking setup", [
+            ("admin.questions", "Booking questions", ("booking_setup.manage",)),
+            ("admin.addons", "Add-ons", ("booking_setup.manage",)),
+        ]),
         ("People", [
             ("admin.users", "Users", ("user.manage",)),
             ("admin.instructors", "Instructors", ("instructor.view",)),

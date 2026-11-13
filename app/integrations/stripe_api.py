@@ -60,17 +60,24 @@ def _call(method: str, path: str, data: Any = None, *, idempotency_key: str | No
     return request(method, f"{API}/{path}", service="Stripe", headers=headers, data=data)
 
 
-def create_checkout_session(*, order_public_id: str, hold_public_id: str, product_name: str, description: str,
-                            unit_amount_cents: int, quantity: int, customer_email: str, expires_at: int,
-                            success_url: str, cancel_url: str) -> dict:
-    data = [
+def create_checkout_session(*, order_public_id: str, hold_public_id: str, line_items: list[dict],
+                            customer_email: str, expires_at: int, success_url: str, cancel_url: str) -> dict:
+    """line_items: [{name, description, unit_amount_cents, quantity}] (seats, a friend's seat, add-ons)."""
+    data: list[tuple[str, str]] = [
         ("mode", "payment"),
         ("payment_method_types[0]", "card"),     # paid at once: no bank debits that clear after class day
-        ("line_items[0][quantity]", str(quantity)),
-        ("line_items[0][price_data][currency]", "usd"),
-        ("line_items[0][price_data][unit_amount]", str(unit_amount_cents)),
-        ("line_items[0][price_data][product_data][name]", product_name[:250]),
-        ("line_items[0][price_data][product_data][description]", description[:500]),
+    ]
+    for i, item in enumerate(line_items):
+        data += [
+            (f"line_items[{i}][quantity]", str(item["quantity"])),
+            (f"line_items[{i}][price_data][currency]", "usd"),
+            (f"line_items[{i}][price_data][unit_amount]", str(item["unit_amount_cents"])),
+            (f"line_items[{i}][price_data][product_data][name]", item["name"][:250]),
+        ]
+        if item.get("description"):
+            data.append((f"line_items[{i}][price_data][product_data][description]", item["description"][:500]))
+    summary = ", ".join(f"{it['name']} × {it['quantity']}" for it in line_items)
+    data += [
         ("allow_promotion_codes", "true"),
         ("customer_email", customer_email),
         ("customer_creation", "if_required"),
@@ -81,7 +88,7 @@ def create_checkout_session(*, order_public_id: str, hold_public_id: str, produc
         ("metadata[order]", order_public_id),
         ("metadata[hold]", hold_public_id),
         ("payment_intent_data[metadata][order]", order_public_id),
-        ("payment_intent_data[description]", f"{product_name} × {quantity}"[:1000]),
+        ("payment_intent_data[description]", summary[:1000]),
     ]
     return _call("POST", "checkout/sessions", data, idempotency_key=f"checkout-{hold_public_id}")
 

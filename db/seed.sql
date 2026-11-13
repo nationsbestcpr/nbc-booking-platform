@@ -35,7 +35,18 @@ INSERT INTO app_settings (key, value, description) VALUES
   ('ghl_custom_field_ids',           '{}',    'GHL custom field ids (session id, site, date, product, Reg Type, UTMs). Differ between sandbox and live.'),
   ('environment',                    '"local"', 'local | staging | production. Set per database; staging uses Stripe test mode and GHL Sandbox 2.'),
   ('airtable_writeback_enabled',     'false', 'Only production writes back to the NBC Master Base (there is one base; staging must not write to it).'),
-  ('customer_service_contact',       '{"email":"info@nationsbestcpr.com"}', 'Shown in the "Offer expired" message (waitlist rules §10, recommended).');
+  ('customer_service_contact',       '{"email":"info@nationsbestcpr.com"}', 'Shown in the "Offer expired" message (waitlist rules §10, recommended).'),
+  ('same_course_block_months',       '18',
+   'One email can''t book the same course again within this many months of another class of it (Nov 6 decision). 0 turns the rule off.'),
+  ('bring_a_friend_enabled',         'true',
+   'Offer "Bring a friend" on the booking page and again on the confirmation page.'),
+  ('bring_a_friend_discount_cents',  'null',
+   'OPEN: discount on a friend''s seat (to confirm). Empty means the friend pays the class price.'),
+  ('invite_link_days',               '60',
+   'How long the link in an attendee''s invite works (someone booked them a seat).'),
+  ('ghl_tags',
+   '{"student":"nbc-student","booked_self":"nbc-booked-self","booked_by_other":"nbc-booked-by-someone-else","booker":"nbc-booker","bring_a_friend":"nbc-bring-a-friend","send_invite":"nbc-send-invite","course_prefix":"nbc-course-","city_prefix":"nbc-city-","addon_prefix":"nbc-addon-"}',
+   'Tags the engine puts on GHL contacts. GHL workflows (emails from templates) start on them; change a name here if a workflow uses another.');
 
 -- -----------------------------------------------------------------------------
 -- Roles (one dashboard each) and permissions
@@ -108,6 +119,7 @@ INSERT INTO permissions (code, area, description, own_records_only) VALUES
   ('role.manage',              'Admin',       'Change which permissions each role grants', false),
   ('user.impersonate',         'Admin',       'View the app as another account (read-only), to see what they see', false),
   ('settings.manage',          'Admin',       'Change business settings (hold minutes, alert days, ...)', false),
+  ('booking_setup.manage',     'Admin',       'Add and change booking questions and add-ons', false),
   ('content.edit',             'Admin',       'Edit public page wording', false),
   ('content.approve',          'Admin',       'Approve public page wording', false),
   ('system.health_view',       'Admin',       'See sync status, the unsynced list and data problems', false),

@@ -1,0 +1,30 @@
+{% extends "dash/layout.html" %}
+{% block title %}Booking questions{% endblock %}
+{% block heading %}Booking <span class="accent">Questions</span>{% endblock %}
+{% block subhead %}<p>What the booking page asks. Add, reword or turn off a question here: it changes on the booking page at once, with no new release.</p>{% endblock %}
+{% block panel %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>{{ rows|length }} question{{ 's' if rows|length != 1 }}</h2>
+    <a class="pill small-pill" href="{{ url_for('admin.questions_new') }}">Add a question <span class="arrow" aria-hidden="true">+</span></a>
+  </div>
+  {% if rows %}
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>Question</th><th>Asked</th><th>For</th><th>Answers</th><th>On booking page</th></tr></thead>
+    <tbody>{% for q in rows %}
+      <tr><td><a href="{{ url_for('admin.questions_edit', qid=q.id) }}">{{ q.label }}</a>
+            <br><span class="muted small">{{ kinds[q.kind] }}{{ ' · required' if q.is_required else ' · optional' }}{% if q.ghl_field_key %} · GHL {{ q.ghl_field_key }}{% endif %}</span></td>
+        <td class="small">{{ asked[q.asked_for] }}</td>
+        <td class="small">{{ q.course_names or 'Every course' }}{% if q.delivery_mode %}<br>{{ q.delivery_mode|capitalize }} classes only{% endif %}</td>
+        <td class="num">{{ q.answers }}</td>
+        <td><form method="post" action="{{ url_for('admin.questions_switch', qid=q.id) }}" class="switch-form">{{ csrf_input() }}
+          <span class="status {{ 'ok' if q.is_active else 'off' }}">{{ 'On' if q.is_active else 'Off' }}</span>
+          <button class="btn-small" type="submit">{{ 'Turn off' if q.is_active else 'Turn on' }}</button></form></td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}
+  <div class="empty">No questions yet. The booking page asks only for names and emails until you add one.</div>
+  {% endif %}
+  <p class="muted small">Questions aren't deleted, so past answers keep their wording. Turn one off to stop asking it.</p>
+</section>
+{% endblock %}

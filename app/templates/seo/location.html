@@ -1,0 +1,24 @@
+{% extends "seo/_layout.html" %}
+{% import "seo/_macros.html" as sm with context %}
+{% block seo %}
+<section class="seo-hero">
+  <span class="eyebrow">Training site · {{ m.name }}</span>
+  <h1 class="title">{{ si.name }}</h1>
+  <p class="lead">{{ si.address_line1 }}{% if si.address_line2 %}, {{ si.address_line2 }}{% endif %}, {{ si.city }}, {{ si.state_code }} {{ si.postal_code }}</p>
+  <a class="pill plain light-border" href="https://www.google.com/maps/search/?api=1&query={{ (si.address_line1 ~ ', ' ~ si.city ~ ', ' ~ si.state_code ~ ' ' ~ si.postal_code)|urlencode }}" target="_blank" rel="noopener" style="align-self:flex-start">Directions</a>
+</section>
+{% if si.parking_notes_public or si.directions_public or copy.notes %}
+<section class="panel">
+  <dl class="kv">
+    {% if si.parking_notes_public %}<dt>Parking</dt><dd>{{ si.parking_notes_public }}</dd>{% endif %}
+    {% if si.directions_public %}<dt>Finding the room</dt><dd>{{ si.directions_public }}</dd>{% endif %}
+  </dl>
+  {% if copy.notes %}<div class="copy">{{ copy.notes }}</div>{% endif %}
+</section>
+{% endif %}
+<section class="panel" aria-labelledby="dates-title">
+  <h2 id="dates-title">Upcoming classes here</h2>
+  {{ sm.class_list(upcoming) }}
+</section>
+<p class="small"><a href="/{{ m.metro_slug }}/">All classes in {{ m.name }}</a></p>
+{% endblock %}

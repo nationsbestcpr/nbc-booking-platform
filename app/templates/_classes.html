@@ -58,7 +58,7 @@
       {% for c in items %}
       <li class="class-row">
         <span class="cr-time num">{{ class_time(c.starts_at, c.ends_at, c.time_zone) }}</span>
-        <span class="cr-what"><strong>{{ c.course_name }}</strong><span class="muted small">{{ c.delivery_mode|capitalize }}</span></span>
+        <span class="cr-what"><a href="/{{ c.city_slug }}/{{ c.course_slug }}/{{ c.slug }}/"><strong>{{ c.course_name }}</strong></a><span class="muted small">{{ c.delivery_mode|capitalize }}</span></span>
         <span class="cr-where">{{ c.site_name }}<span class="muted small">{{ c.site_city }}, {{ c.state_code }}{% if c.miles is not none %} · <span class="num">{{ c.miles|round|int }} mi</span>{% endif %}</span></span>
         <span class="cr-price">{% for o in c.offers or [] %}<span>{{ o.name }} <strong class="num">{{ o.price|money }}</strong></span>{% endfor %}</span>
         {% if c.seats_left <= 0 %}
@@ -109,6 +109,8 @@
 {{ near_bar(found, endpoint, anchor) }}
 {{ class_rows(found, book_endpoint=book_endpoint, book_label=book_label) }}
 {{ pager(found, endpoint, anchor) }}
+<nav class="city-links" aria-label="Classes by city"><span class="small muted">Classes by city:</span>
+  {% for c in found.cities %}<a class="small" href="/{{ c.slug }}/">{{ c.name }}, {{ c.state_code }}</a>{% endfor %}</nav>
 {% endif %}
 {% endmacro %}
 

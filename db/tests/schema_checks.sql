@@ -546,5 +546,60 @@ SELECT pg_temp.check(
   AND (SELECT grants_all FROM roles WHERE code = 'admin'),
   'sync status and data problems are for admins only');
 
+-- 0008: one email, one seat in a course per 18 months; questions, add-ons, invites.
+INSERT INTO sessions (metro_id, site_id, room_id, course_family_id, delivery_mode, starts_at, ends_at, time_zone, slug,
+                      is_published, one_instructor_max, room_max_student_count, capacity)
+SELECT m.id, si.id, r.id, cf.id, 'blended', d::timestamptz, d::timestamptz + interval '4 hours', 'America/New_York',
+       'renew-' || cf.slug || '-' || to_char(d::timestamptz, 'YYYYMMDD'), true, 9, r.max_student_count, 9
+  FROM metros m, sites si, rooms r, course_families cf,
+       (VALUES ('2027-02-20 14:00+00', 'FA_CPR_AED'), ('2027-06-01 14:00+00', 'FA_CPR_AED'),
+               ('2027-06-02 14:00+00', 'BLS'), ('2028-09-01 14:00+00', 'FA_CPR_AED')) v(d, code)
+ WHERE m.slug = 'richmond-va' AND si.slug = 'henrico' AND r.site_id = si.id AND r.name = 'Small' AND cf.code = v.code;
+INSERT INTO session_products (session_id, product_id, course_family_id, delivery_mode, price_cents)
+SELECT s.id, p.id, p.course_family_id, p.delivery_mode, p.base_price_cents
+  FROM sessions s JOIN products p ON p.course_family_id = s.course_family_id AND p.delivery_mode = s.delivery_mode
+ WHERE s.slug LIKE 'renew-%';
+CREATE FUNCTION pg_temp.book_one(p_slug text, p_email text) RETURNS void LANGUAGE plpgsql AS $$
+DECLARE o bigint; h bigint; s bigint; p bigint;
+BEGIN
+  SELECT se.id, sp.product_id INTO s, p FROM sessions se JOIN session_products sp ON sp.session_id = se.id
+   WHERE se.slug = p_slug ORDER BY sp.product_id LIMIT 1;
+  INSERT INTO orders (channel, buyer_first_name, buyer_last_name, buyer_email, livemode)
+  VALUES ('web', 'Re', 'New', p_email, false) RETURNING id INTO o;
+  INSERT INTO seat_holds (session_id, order_id, kind, quantity, expires_at)
+  VALUES (s, o, 'checkout', 1, now() + interval '15 minutes') RETURNING id INTO h;
+  INSERT INTO registrations (order_id, seat_hold_id, session_id, product_id, attendee_first_name, attendee_last_name,
+                             attendee_email, unit_price_cents)
+  VALUES (o, h, s, p, 'Re', 'New', p_email, 10800);
+END $$;
+SELECT pg_temp.book_one('renew-first-aid-cpr-aed-20270220', 'renew@example.test');
+SELECT pg_temp.expect_error($q$SELECT pg_temp.book_one('renew-first-aid-cpr-aed-20270601', 'renew@example.test')$q$,
+  '23514', 'the same email can''t book the same course again within 18 months (even while the first seat is held)');
+SELECT pg_temp.book_one('renew-bls-20270602', 'renew@example.test');
+SELECT pg_temp.check(true, 'the same email may book a different course');
+SELECT pg_temp.book_one('renew-first-aid-cpr-aed-20280901', 'renew@example.test');
+SELECT pg_temp.check(true, 'after 18 months the same email may book the course again to renew');
+UPDATE app_settings SET value = '0' WHERE key = 'same_course_block_months';
+SELECT pg_temp.book_one('renew-first-aid-cpr-aed-20270601', 'renew@example.test');
+SELECT pg_temp.check(true, 'setting the months to 0 turns the rule off');
+UPDATE app_settings SET value = '18' WHERE key = 'same_course_block_months';
+
+SELECT pg_temp.expect_error($q$INSERT INTO booking_questions (label, kind, choices) VALUES ('Pick one', 'choice', '{only}')$q$,
+  '23514', 'a choice question needs at least two choices');
+SELECT pg_temp.expect_error($q$INSERT INTO booking_questions (label, kind, ghl_field_key) VALUES ('Q', 'short_text', 'contact.x')$q$,
+  '23514', 'a question''s GHL field is an opportunity field');
+SELECT pg_temp.expect_error($q$INSERT INTO addons (code, name, price_cents) VALUES ('Wallet Card', 'Card', 500)$q$,
+  '23514', 'add-on codes are lower-case words joined by dashes');
+SELECT pg_temp.check((SELECT column_default = 'false' FROM information_schema.columns
+                       WHERE table_name = 'addons' AND column_name = 'show_on_booking_page'),
+  'a new add-on is hidden from booking pages until staff choose to show it');
+SELECT pg_temp.expect_error($q$INSERT INTO action_tokens (purpose, token_hash, expires_at)
+                               VALUES ('account_invite', '\x01', now() + interval '1 day')$q$,
+  '23514', 'an invite link belongs to a booked seat');
+SELECT pg_temp.check(
+  EXISTS (SELECT 1 FROM permissions WHERE code = 'booking_setup.manage')
+  AND NOT EXISTS (SELECT 1 FROM role_permissions WHERE permission_code = 'booking_setup.manage'),
+  'booking questions and add-ons are set up by admins (no other role has it yet)');
+
 \echo 'All schema checks passed.'
 ROLLBACK;

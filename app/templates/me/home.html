@@ -21,13 +21,16 @@
         <span><strong>{{ r.course_name }}</strong>{% if r.product_name %} <span class="muted small">· {{ r.product_name }}</span>{% endif %}</span>
         <span class="meta num">{{ class_date(r.starts_at, r.time_zone) }} · {{ class_time(r.starts_at, r.ends_at, r.time_zone) }}</span>
         <span class="meta">{{ r.site_name }} · {{ r.address_line1 }}, {{ r.site_city }}, {{ r.site_state }} {{ r.postal_code }}</span>
-        <span class="meta">{% if r.attendee_email|lower == current_user.email|lower %}You're attending{% else %}For {{ r.attendee_first_name }} {{ r.attendee_last_name }}{% endif %}{% if r.delivery_mode == 'blended' %} · Online part to finish before class day{% endif %}</span>
+        <span class="meta">{% if r.mine %}You're attending{% if r.is_bring_a_friend %} as a friend{% endif %}{% else %}For {{ r.attendee_first_name }} {{ r.attendee_last_name }}{% if r.is_bring_a_friend %} (your friend){% endif %}{% endif %}{% if r.delivery_mode == 'blended' %} · Online part to finish before class day{% endif %}</span>
+        {% if r.booked_by_other %}<span class="booked-by">Booked for you by {{ r.buyer_first_name }} {{ r.buyer_last_name }}</span>{% endif %}
+        {% if not r.mine %}{% set st = invite_status.get(r.id) %}<span class="meta small">{% if st and st.joined %}✓ Has their own account{% elif st and st.sent_at %}Invite sent {{ st.sent_at|office_time }}{% else %}Invite on its way{% endif %}</span>{% endif %}
       </div>
       <div class="bc-side">
         {% if r.status == 'awaiting_payment' %}<span class="status wait">Payment due</span>
         {% elif r.status == 'displaced' %}<span class="status bad">Class cancelled: we'll contact you</span>
         {% else %}<span class="status ok">Booked</span>{% endif %}
         <a class="small" href="https://www.google.com/maps/search/?api=1&query={{ (r.address_line1 ~ ', ' ~ r.site_city ~ ', ' ~ r.site_state ~ ' ' ~ r.postal_code)|urlencode }}" target="_blank" rel="noopener">Directions</a>
+        {% if r.mine and r.bought_here and friend.enabled and r.can_add_seat %}<a class="small" href="{{ url_for('book.friend', public_id=r.session_public_id, order=r.order_public_id, product=r.product_id) }}">Bring a friend</a>{% endif %}
       </div>
     </li>
     {% endfor %}
@@ -46,6 +49,25 @@
   <p class="muted small">Booked by someone else, or before you had an account? Sign in with Google or Microsoft using {{ current_user.email }} and those classes show here too.</p>
   {% endif %}
 </section>
+
+{% if others %}
+<section class="panel" id="people" aria-labelledby="people-title">
+  <div class="panel-head">
+    <h2 id="people-title">People you've booked</h2>
+    <span class="muted small">{{ others|length }} upcoming seat{{ 's' if others|length != 1 }}</span>
+  </div>
+  <p class="muted small">Each person gets an email invite to make their own account, where they see their class, the online part and their certificate.</p>
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>Person</th><th>Class</th><th>Invite</th><th></th></tr></thead>
+    <tbody>{% for r in others %}{% set st = invite_status.get(r.id) %}
+      <tr><td><strong>{{ r.attendee_first_name }} {{ r.attendee_last_name }}</strong><br><span class="muted small">{{ r.attendee_email }}</span></td>
+        <td>{{ r.course_name }}<br><span class="muted small num">{{ class_date(r.starts_at, r.time_zone) }} · {{ r.site_name }}</span></td>
+        <td>{% if st and st.joined %}<span class="status ok">Has an account</span>{% elif st and st.sent_at %}<span class="status wait">Sent {{ st.sent_at|office_time }}</span>{% elif st and st.sending %}<span class="status off">Sending</span>{% else %}<span class="status off">On its way</span>{% endif %}</td>
+        <td>{% if not (st and (st.joined or st.sending)) %}<form method="post" action="{{ url_for('me.resend_invite', reg_public_id=r.public_id) }}">{{ csrf_input() }}<button class="btn-small" type="submit">Send again</button></form>{% endif %}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+</section>
+{% endif %}
 
 {% if waiting %}
 <section class="panel" aria-labelledby="wait-title">

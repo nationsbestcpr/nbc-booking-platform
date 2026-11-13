@@ -39,6 +39,7 @@
         <a class="btn-small" href="{{ url_for('admin.airtable_fields') }}">Check Airtable fields</a>
       {% elif c.key == 'ghl' and 'settings.manage' in can %}
         <form method="post" action="{{ url_for('admin.ghl_stages') }}">{{ csrf_input() }}<button class="btn-small" type="submit">{{ 'Reload' if c.stages else 'Load' }} pipeline stages</button></form>
+        <form method="post" action="{{ url_for('admin.ghl_fields') }}">{{ csrf_input() }}<button class="btn-small" type="submit">Load custom fields</button></form>
       {% endif %}
     </div>
     {% endif %}

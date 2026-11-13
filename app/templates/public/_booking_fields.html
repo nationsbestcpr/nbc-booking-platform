@@ -1,0 +1,54 @@
+{#- Pieces of the booking forms: one booking question, one add-on checkbox.
+    Import with context:  {% import "public/_booking_fields.html" as bf with context %}
+    `suffix` names the person: a0, a1 … for attendees, b for the whole booking. -#}
+
+{% macro question(q, suffix, form) %}
+{% set name = 'q%d_%s'|format(q.id, suffix) %}
+{% set value = form.get(name, '') %}
+{% set fid = 'f-' ~ name %}
+<div class="field question">
+  {% if q.kind == 'yes_no' %}
+  <fieldset class="field">
+    <legend>{{ q.label }}{% if not q.is_required %} <span class="muted">(optional)</span>{% endif %}</legend>
+    <div class="yes-no">
+      <label><input type="radio" name="{{ name }}" value="Yes" {{ 'checked' if value == 'Yes' }}{{ ' required' if q.is_required }}> Yes</label>
+      <label><input type="radio" name="{{ name }}" value="No" {{ 'checked' if value == 'No' }}> No</label>
+    </div>
+    {% if q.help_text %}<span class="hint">{{ q.help_text }}</span>{% endif %}
+  </fieldset>
+  {% else %}
+  <label for="{{ fid }}">{{ q.label }}{% if not q.is_required %} <span class="muted">(optional)</span>{% endif %}</label>
+  {% if q.kind == 'long_text' %}
+  <textarea id="{{ fid }}" name="{{ name }}" rows="3" maxlength="1000"{{ ' required' if q.is_required }}>{{ value }}</textarea>
+  {% elif q.kind == 'choice' %}
+  <select id="{{ fid }}" name="{{ name }}"{{ ' required' if q.is_required }}>
+    <option value="">Choose…</option>
+    {% for c in q.choices %}<option value="{{ c }}"{{ ' selected' if value == c }}>{{ c }}</option>{% endfor %}
+  </select>
+  {% else %}
+  <input type="text" id="{{ fid }}" name="{{ name }}" value="{{ value }}" maxlength="1000"{{ ' required' if q.is_required }}>
+  {% endif %}
+  {% if q.help_text %}<span class="hint">{{ q.help_text }}</span>{% endif %}
+  {% endif %}
+</div>
+{% endmacro %}
+
+{% macro addon(a, suffix, form) %}
+{% set name = 'addon%d_%s'|format(a.id, suffix) %}
+<label class="addon-pick">
+  <input type="checkbox" name="{{ name }}" value="yes" data-price="{{ a.price_cents }}" {{ 'checked' if form.get(name) == 'yes' }}>
+  <span><span><strong>{{ a.name }}</strong> <span class="num">+{{ a.price_cents|money }}</span></span>
+    {% if a.description %}<span class="muted small">{{ a.description }}</span>{% endif %}</span>
+</label>
+{% endmacro %}
+
+{#- One person's questions and per-seat add-ons. -#}
+{% macro person_extras(questions, addons, suffix, form) %}
+{% for q in questions.attendee %}{{ question(q, suffix, form) }}{% endfor %}
+{% if addons.seat %}
+<div class="addons" role="group" aria-label="Add-ons">
+  <span class="label">Add-ons</span>
+  {% for a in addons.seat %}{{ addon(a, suffix, form) }}{% endfor %}
+</div>
+{% endif %}
+{% endmacro %}

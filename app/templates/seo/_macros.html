@@ -1,0 +1,31 @@
+{#- Class lists on the city, course and site pages. Each date links to its class page (indexed), with Book. -#}
+{% macro class_list(classes, empty='No upcoming dates right now. New classes are added every week.', show_course=true) %}
+{% if classes %}
+<div class="class-days">
+  {% for day, items in classes|groupby('local_date') %}
+  <section class="class-day" aria-label="{{ class_date(items[0].starts_at, items[0].time_zone) }}">
+    <h3 class="day-head"><span class="num">{{ local_dt(items[0].starts_at, items[0].time_zone).strftime('%A, %B %-d') }}</span></h3>
+    <ul class="class-rows">
+      {% for c in items %}
+      <li class="class-row">
+        <span class="cr-time num">{{ class_time(c.starts_at, c.ends_at, c.time_zone) }}</span>
+        <span class="cr-what"><a href="/{{ c.metro_slug }}/{{ c.course_slug }}/{{ c.slug }}/"><strong>{{ c.course_name if show_course else c.delivery_mode|capitalize ~ ' class' }}</strong></a>{% if show_course %}<span class="muted small">{{ c.delivery_mode|capitalize }}</span>{% endif %}</span>
+        <span class="cr-where"><a href="/{{ c.metro_slug }}/locations/{{ c.site_slug }}/">{{ c.site_name }}</a><span class="muted small">{{ c.site_city }}, {{ c.state_code }}</span></span>
+        <span class="cr-price">{% for o in c.offers or [] %}<span>{{ o.name }} <strong class="num">{{ o.price|money }}</strong></span>{% endfor %}</span>
+        {% if c.seats_left <= 0 %}
+          <span class="seats full">Full</span>
+          <a class="pill plain small-pill light-border" href="/{{ c.metro_slug }}/{{ c.course_slug }}/{{ c.slug }}/">Details</a>
+        {% else %}
+          <span class="seats {{ 'low' if c.seats_left <= 3 }} num">{{ c.seats_left }} seat{{ 's' if c.seats_left != 1 }} left</span>
+          <a class="pill small-pill" href="{{ url_for('book.form', public_id=c.public_id) }}">Book <span class="arrow" aria-hidden="true">→</span></a>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty">{{ empty }}</div>
+{% endif %}
+{% endmacro %}

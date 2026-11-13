@@ -1,0 +1,16 @@
+{% extends "seo/_layout.html" %}
+{% block seo %}
+<section class="seo-hero">
+  <span class="eyebrow">{{ state_name }}</span>
+  <h1 class="title">CPR, First Aid &amp; BLS <span class="accent">Classes in {{ state_name }}</span></h1>
+  {% if copy.intro %}<div class="copy">{{ copy.intro }}</div>{% else %}<p class="lead">American Red Cross certification classes, taught in person by Nation's Best CPR instructors. Pick your city to see dates and book.</p>{% endif %}
+</section>
+<section class="panel" aria-labelledby="cities-title">
+  <h2 id="cities-title">Cities</h2>
+  <ul class="link-cards">
+    {% for c in cities %}
+    <li><a href="/{{ c.metro_slug }}/"><strong>{{ c.name }}, {{ c.state_code }}</strong><span class="muted small num">{{ c.upcoming }} upcoming class{{ 'es' if c.upcoming != 1 }}</span></a></li>
+    {% endfor %}
+  </ul>
+</section>
+{% endblock %}

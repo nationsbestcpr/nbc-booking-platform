@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% import "account/_ways_in.html" as ways with context %}
+{% block title %}{{ 'Your class invite' if invite else 'Invite link' }}{% endblock %}
+{% macro field_error(name) %}{% if errors[name] %}<span class="error" id="{{ name }}-error">{{ errors[name] }}</span>{% endif %}{% endmacro %}
+{% macro invalid(name) %}{% if errors[name] %}aria-invalid="true" aria-describedby="{{ name }}-error"{% endif %}{% endmacro %}
+{% block content %}
+<div class="wrap">
+  {% if not invite %}
+  <section class="panel book-result">
+    <span class="eyebrow">Invite link</span>
+    <h1 class="title">This Link Has <span class="accent">Expired</span></h1>
+    <p>Invite links work for a while after a booking. If someone booked you a seat, sign in or create an account with the email the invite was sent to, then sign in with Google or Microsoft using that email so we can confirm it's yours. Your class then shows on your dashboard.</p>
+    <p class="muted small">Or ask the person who booked for you to send the invite again from their dashboard.</p>
+    <a class="pill" href="{{ url_for('account.sign_in') }}" style="align-self:flex-start">Sign in <span class="arrow" aria-hidden="true">→</span></a>
+  </section>
+  {% else %}
+  <div class="auth">
+    <div class="auth-side">
+      <span class="eyebrow" style="color:#ffb3b8">You're booked</span>
+      <h1>{{ invite.buyer_first_name }} {{ invite.buyer_last_name }} Booked You a Seat</h1>
+      <div class="booking-box">
+        <span class="small" style="color:#ffb3b8">Your class</span>
+        <strong>{{ invite.course_name }}</strong>
+        <span class="num">{{ class_date(invite.starts_at, invite.time_zone) }} · {{ class_time(invite.starts_at, invite.ends_at, invite.time_zone) }}</span>
+        <span>{{ invite.site_name }}, {{ invite.address_line1 }}, {{ invite.site_city }}, {{ invite.site_state }} {{ invite.postal_code }}</span>
+      </div>
+      <ul>
+        <li>Your account shows your class, directions and what to bring</li>
+        {% if invite.delivery_mode == 'blended' %}<li>Finish the online part before class day; your account links to it</li>{% endif %}
+        <li>Your Red Cross certificate goes to {{ invite.attendee_email }}</li>
+      </ul>
+    </div>
+    <div class="auth-form">
+      {% if other_account %}
+      <h2>This invite is for someone else</h2>
+      <p>The invite is for <strong>{{ invite.attendee_email }}</strong>, but you're signed in as <strong>{{ other_account.email }}</strong>.</p>
+      <form method="post" action="{{ url_for('account.sign_out') }}">{{ csrf_input() }}
+        <button class="pill" type="submit">Sign out and continue <span class="arrow" aria-hidden="true">→</span></button></form>
+      <p class="muted small">Then open the invite link again.</p>
+      {% elif invite.account_id %}
+      <h2>Sign in to see your class</h2>
+      <p>There's already an account for <strong>{{ invite.attendee_email }}</strong>. Sign in and your class appears on your dashboard.</p>
+      {{ ways.provider_buttons(providers, next) }}
+      <a class="pill" href="{{ url_for('account.sign_in', next=next) }}" style="align-self:flex-start">Sign in with email <span class="arrow" aria-hidden="true">→</span></a>
+      {% else %}
+      <h2>Make your account</h2>
+      <p class="muted">One step: choose a password. Your email is the one the invite came to.</p>
+      {% if errors %}<p class="alert" role="alert">Check the highlighted fields.</p>{% endif %}
+      {{ ways.provider_buttons(providers, next) }}
+      <form method="post" action="{{ next }}" novalidate class="book-form">
+        {{ csrf_input() }}
+        <div class="row-2">
+          <div class="field"><label for="first_name">First name</label>
+            <input type="text" id="first_name" name="first_name" value="{{ form.first_name }}" autocomplete="given-name" required {{ invalid('first_name') }}>{{ field_error('first_name') }}</div>
+          <div class="field"><label for="last_name">Last name</label>
+            <input type="text" id="last_name" name="last_name" value="{{ form.last_name }}" autocomplete="family-name" required {{ invalid('last_name') }}>{{ field_error('last_name') }}</div>
+        </div>
+        <div class="field"><span class="label" id="inv-email">Email</span><p class="readonly" aria-labelledby="inv-email">{{ invite.attendee_email }}</p></div>
+        <div class="field"><label for="password">Password</label>
+          <input type="password" id="password" name="password" autocomplete="new-password" required {{ invalid('password') }}>{{ field_error('password') }}</div>
+        <button class="pill red" type="submit" style="align-self:flex-start">Make my account <span class="arrow" aria-hidden="true">→</span></button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

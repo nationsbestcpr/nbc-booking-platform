@@ -12,6 +12,7 @@ role limited to one city only sees that city. Private class details need
 from __future__ import annotations
 
 import json
+import re
 
 from flask import abort, flash, redirect, render_template, request, url_for
 from sqlalchemy import text
@@ -286,12 +287,17 @@ def log():
 # would point a test app at live behaviour (or the reverse).
 LOCKED_SETTINGS = {"environment", "airtable_writeback_enabled"}
 # Settings that may be left empty (a decision not made yet).
-NULLABLE_SETTINGS = {"large_refund_threshold_cents"}
+NULLABLE_SETTINGS = {"large_refund_threshold_cents", "bring_a_friend_discount_cents"}
 # Settings edited as a list of names -> ids (JSON object of text), with the names allowed.
 ID_MAP_SETTINGS = {"ghl_custom_field_ids": {"session_id", "registration_id", "site", "class_date", "class_time",
                                             "product", "reg_type", "city", "class_id", "course", "course_date",
                                             "course_location", "hours", "instructor", "class_price", "order_total",
-                                            "delivery", "reg_date"}}
+                                            "delivery", "reg_date", "booked_by", "booked_by_email",
+                                            "booking_type", "addons", "contact_invite_link", "contact_booked_by"},
+                   "ghl_tags": {"student", "booked_self", "booked_by_other", "booker", "bring_a_friend",
+                                "send_invite", "course_prefix", "city_prefix", "addon_prefix"}}
+# Booking questions copied to a GHL field are saved in ghl_custom_field_ids under the field's key.
+ID_MAP_KEY_PATTERN = r"opportunity\.[a-z0-9_]+"
 
 
 def _setting_kind(key: str, value) -> str:
@@ -323,7 +329,9 @@ def settings():
             try:
                 new = json.loads(request.form.get("value", "").strip() or "{}")
                 allowed = ID_MAP_SETTINGS[key]
-                if not isinstance(new, dict) or any(k not in allowed or not isinstance(v, str) for k, v in new.items()):
+                if not isinstance(new, dict) or any(
+                        (k not in allowed and not (key == "ghl_custom_field_ids" and re.fullmatch(ID_MAP_KEY_PATTERN, k)))
+                        or not isinstance(v, str) for k, v in new.items()):
                     raise ValueError
                 new = {k: v.strip() for k, v in new.items() if v.strip()}
             except ValueError:

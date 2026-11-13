@@ -21,7 +21,7 @@
   <strong>{{ booking.course_name }}</strong>
   <span class="num">{{ class_date(booking.starts_at, booking.time_zone) }} · {{ class_time(booking.starts_at, booking.ends_at, booking.time_zone) }}</span>
   <span>{{ booking.site_name }}, {{ booking.city_name }}, {{ booking.state_code }}</span>
-  <span class="small" style="color:#d9d9ee">Sign in or create a free account first. Your seat is saved to your account, so you can see and manage it any time. You'll come straight back to this class.</span>
+  <span class="small" style="color:#d9d9ee">Sign in or create a free account first, then you'll come straight back to this class. Nothing is held yet: your seat is held for 15 minutes once you continue to payment. Your bookings are kept in your account, so you can see them any time.</span>
 </div>
 {% endif %}
 {% endmacro %}

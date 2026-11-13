@@ -156,6 +156,7 @@ def search(f: Filters) -> dict[str, Any]:
         SELECT s.id, s.public_id, s.slug, s.starts_at, s.ends_at, s.time_zone, s.delivery_mode, s.local_date,
                m.name AS city_name, m.state_code, m.slug AS city_slug,
                si.name AS site_name, si.city AS site_city, cf.name AS course_name, cf.code AS course_code,
+               cf.slug AS course_slug,
                a.seats_left, a.seat_limit,
                {_MILES if f.here else "NULL"} AS miles,
                (SELECT json_agg(json_build_object('name', p.short_name, 'price', sp.price_cents)
@@ -188,8 +189,13 @@ def booked(user_id: int, email: str, email_verified: bool) -> dict[str, list[dic
     """{upcoming, past}: every seat this account booked or holds, one row per seat."""
     mine, params = _mine(user_id, email, email_verified)
     rows = db.fetch_all(f"""
-        SELECT r.id, r.status, r.attendee_first_name, r.attendee_last_name, r.attendee_email,
+        SELECT r.id, r.public_id, r.status, r.attendee_first_name, r.attendee_last_name, r.attendee_email,
+               r.is_bring_a_friend, r.product_id,
                o.public_id AS order_public_id, o.buyer_user_id = :uid AS bought_here,
+               o.buyer_first_name, o.buyer_last_name, o.buyer_email,
+               (s.status = 'scheduled' AND s.is_published AND s.starts_at > now()
+                AND (s.sales_close_at IS NULL OR s.sales_close_at > now())
+                AND (SELECT a.seats_left FROM session_availability a WHERE a.session_id = s.id) > 0) AS can_add_seat,
                s.public_id AS session_public_id, s.starts_at, s.ends_at, s.time_zone, s.status AS class_status,
                s.delivery_mode, cf.name AS course_name, p.short_name AS product_name,
                si.name AS site_name, si.address_line1, si.city AS site_city, si.state_code AS site_state,

@@ -20,6 +20,17 @@ rule). Stage ids differ between Sandbox 2 and live, so they're data
 (ghl_stage_map), loaded from GHL by name with "Load pipeline stages" on the
 Integrations page or automatically on the first sync.
 
+Tags (Business settings → "GHL tags"; GHL workflows start on them, e.g. the
+emails sent from the NBC sub-account's templates):
+  every attendee      nbc-student, nbc-course-<course>, nbc-city-<city>
+  how they were booked nbc-booked-self, or nbc-booked-by-someone-else (+ nbc-bring-a-friend)
+  add-ons on the seat nbc-addon-<code>
+  the booker          nbc-booker (when they booked seats for other people)
+  invitation          nbc-send-invite: added (after removing it) each time an invite
+                      goes out; the workflow emails {{contact.nbc_invite_link}}.
+Opportunity fields say who booked the seat (booked_by, booked_by_email,
+booking_type), its add-ons, and answers to booking questions mapped to a field.
+
 Incoming GHL webhooks (contact edits, messages, stage drags) need the
 Marketplace app from the launch plan (15.5); that's the next step and is not
 needed to create contacts and opportunities.
@@ -158,21 +169,43 @@ FIELD_KEYS = {
     "order_total": "opportunity.order_total",
     "delivery": "opportunity.delivery",
     "reg_date": "opportunity.reg_date",
+    "booked_by": "opportunity.booked_by",
+    "booked_by_email": "opportunity.booked_by_email",
+    "booking_type": "opportunity.booking_type",
+    "addons": "opportunity.addons",
 }
+# Contact custom fields (the invitation email reads them).
+CONTACT_FIELD_KEYS = {
+    "contact_invite_link": "contact.nbc_invite_link",
+    "contact_booked_by": "contact.nbc_booked_by",
+}
+DEFAULT_TAGS = {"student": "nbc-student", "booked_self": "nbc-booked-self",
+                "booked_by_other": "nbc-booked-by-someone-else", "booker": "nbc-booker",
+                "bring_a_friend": "nbc-bring-a-friend", "send_invite": "nbc-send-invite",
+                "course_prefix": "nbc-course-", "city_prefix": "nbc-city-", "addon_prefix": "nbc-addon-"}
 
 
 def load_custom_fields() -> dict:
-    """Find the opportunity custom fields by key and save their ids. Needs the
-    Private Integration scope 'View Custom Fields' (locations/customFields.readonly)."""
-    try:
-        body = _call("GET", f"/locations/{location_id()}/customFields", params={"model": "opportunity"})
-    except IntegrationError as exc:
-        if exc.status in (401, 403):
-            raise IntegrationError("GHL: the token can't read custom fields. In the Private Integration, add the "
-                                   "scope “View Custom Fields” (locations/customFields.readonly).", retry=False) from exc
-        raise
-    by_key = {f.get("fieldKey"): f.get("id") for f in body.get("customFields") or []}
-    found = {name: by_key[key] for name, key in FIELD_KEYS.items() if by_key.get(key)}
+    """Find the opportunity and contact custom fields by key and save their ids. Needs the
+    Private Integration scope 'View Custom Fields' (locations/customFields.readonly).
+    Booking questions mapped to an opportunity field are looked up too (saved under the field key)."""
+    by_key: dict[str, str] = {}
+    for model in ("opportunity", "contact"):
+        try:
+            body = _call("GET", f"/locations/{location_id()}/customFields", params={"model": model})
+        except IntegrationError as exc:
+            if exc.status in (401, 403):
+                raise IntegrationError("GHL: the token can't read custom fields. In the Private Integration, add the "
+                                       "scope “View Custom Fields” (locations/customFields.readonly).",
+                                       retry=False) from exc
+            raise
+        by_key.update({f.get("fieldKey"): f.get("id") for f in body.get("customFields") or [] if f.get("fieldKey")})
+    wanted = {**FIELD_KEYS, **CONTACT_FIELD_KEYS}
+    with db.engine().connect() as conn:
+        for key in conn.execute(text("SELECT DISTINCT ghl_field_key FROM booking_questions "
+                                     "WHERE ghl_field_key IS NOT NULL")).scalars():
+            wanted[key] = key
+    found = {name: by_key[key] for name, key in wanted.items() if by_key.get(key)}
     with db.transaction() as conn:
         raw = conn.execute(text("SELECT value FROM app_settings WHERE key = 'ghl_custom_field_ids' FOR NO KEY UPDATE")).scalar()
         current = raw if isinstance(raw, dict) else {}
@@ -180,13 +213,48 @@ def load_custom_fields() -> dict:
         if merged != current:
             conn.execute(text("UPDATE app_settings SET value = CAST(:v AS jsonb), updated_at = now() "
                               "WHERE key = 'ghl_custom_field_ids'"), {"v": json.dumps(merged)})
-    return {"found": sorted(found), "missing": sorted(set(FIELD_KEYS) - set(found))}
+    return {"found": sorted(found), "missing": sorted(set(wanted) - set(found))}
+
+
+def _field_ids() -> dict:
+    with db.engine().connect() as conn:
+        raw = conn.execute(text("SELECT value FROM app_settings WHERE key = 'ghl_custom_field_ids'")).scalar()
+    return raw if isinstance(raw, dict) else (json.loads(raw) if isinstance(raw, str) and raw else {})
+
+
+def tags() -> dict:
+    """Tag names from Business settings ("GHL tags"), with the defaults for any left out."""
+    with db.engine().connect() as conn:
+        raw = conn.execute(text("SELECT value FROM app_settings WHERE key = 'ghl_tags'")).scalar()
+    return {**DEFAULT_TAGS, **(raw if isinstance(raw, dict) else {})}
+
+
+def add_tags(contact_id: str, names: list[str]) -> None:
+    names = sorted({n.strip().lower() for n in names if n and n.strip()})
+    if names:
+        _call("POST", f"/contacts/{contact_id}/tags", json_body={"tags": names})
+
+
+def remove_tags(contact_id: str, names: list[str]) -> None:
+    if names:
+        _call("DELETE", f"/contacts/{contact_id}/tags", json_body={"tags": names})
+
+
+def set_contact_fields(contact_id: str, values: dict[str, str]) -> None:
+    """values: {setting name: value} for contact fields whose ids are known."""
+    ids = _field_ids()
+    fields = [{"id": ids[k], "field_value": v} for k, v in values.items() if ids.get(k)]
+    if fields:
+        _call("PUT", f"/contacts/{contact_id}", json_body={"customFields": fields})
+
+
+def _slug(text_: str) -> str:
+    import re
+    return re.sub(r"[^a-z0-9]+", "-", (text_ or "").lower()).strip("-")
 
 
 def _custom_fields(reg: dict, reg_type: str | None) -> list[dict]:
-    with db.engine().connect() as conn:
-        raw = conn.execute(text("SELECT value FROM app_settings WHERE key = 'ghl_custom_field_ids'")).scalar()
-    ids = raw if isinstance(raw, dict) else (json.loads(raw) if isinstance(raw, str) and raw else {})
+    ids = _field_ids()
     from ..filters import local_dt
     start = local_dt(reg["starts_at"], reg["time_zone"])
     hours = (reg["ends_at"] - reg["starts_at"]).total_seconds() / 3600
@@ -212,9 +280,74 @@ def _custom_fields(reg: dict, reg_type: str | None) -> list[dict]:
         "order_total": f"{reg['order_total_cents'] / 100:.2f}",
         "reg_date": reg["confirmed_at"].strftime("%m/%d/%Y") if reg["confirmed_at"] else None,
         "city": reg["metro_name"],
+        "booked_by": f"{reg['buyer_first_name']} {reg['buyer_last_name']}",
+        "booked_by_email": reg["buyer_email"],
+        "booking_type": booking_type(reg),
+        "addons": ", ".join(a["name"] for a in reg.get("addons") or []) or None,
+        **{a["ghl_field_key"]: a["answer"] for a in reg.get("answers") or [] if a["ghl_field_key"]},
     }
     return [{"id": fid, "field_value": values[k]} for k, fid in (ids or {}).items()
             if fid and values.get(k) is not None]
+
+
+def booking_type(reg: dict) -> str:
+    if reg.get("is_bring_a_friend"):
+        return "Bring a friend"
+    return "Booked by themselves" if _booked_self(reg) else "Booked by someone else"
+
+
+def _booked_self(reg: dict) -> bool:
+    return (reg["buyer_email"] or "").lower() == (reg["attendee_email"] or "").lower()
+
+
+def _registration(reg_id: int) -> dict | None:
+    with db.engine().connect() as conn:
+        reg = conn.execute(text("""
+            SELECT r.id, r.public_id, r.status, r.reg_type, r.ghl_opportunity_id, r.ghl_stage_pushed,
+                   r.attendee_first_name, r.attendee_last_name, r.attendee_email, r.attendee_phone_e164,
+                   r.amount_paid_cents, r.person_id, r.unit_price_cents, r.confirmed_at, r.is_bring_a_friend,
+                   r.order_id, o.total_cents AS order_total_cents, o.buyer_first_name, o.buyer_last_name,
+                   o.buyer_email, o.buyer_person_id,
+                   s.starts_at, s.ends_at, s.time_zone, s.public_id AS session_public_id, s.delivery_mode,
+                   s.airtable_lead_instructor,
+                   si.name AS site_name, si.city AS site_city, si.address_line1, si.state_code AS site_state,
+                   si.postal_code, m.market_code, m.name AS metro_name, m.slug AS metro_slug,
+                   cf.slug AS course_slug, cf.name AS course_name,
+                   p.ghl_course_code, p.short_name, p.name AS product_name,
+                   pe.ghl_contact_id, pe.first_name, pe.last_name, pe.email, pe.phone_e164
+              FROM registrations r
+              JOIN orders o ON o.id = r.order_id
+              JOIN sessions s ON s.id = r.session_id
+              JOIN course_families cf ON cf.id = s.course_family_id
+              JOIN sites si ON si.id = s.site_id
+              JOIN metros m ON m.id = s.metro_id
+              JOIN products p ON p.id = r.product_id
+              LEFT JOIN people pe ON pe.id = r.person_id
+             WHERE r.id = :id
+        """), {"id": reg_id}).mappings().first()
+        if reg is None:
+            return None
+        reg = dict(reg)
+        reg["addons"] = [dict(a) for a in conn.execute(text("""
+            SELECT a.code, oa.name FROM order_addons oa JOIN addons a ON a.id = oa.addon_id
+             WHERE oa.order_id = :o AND oa.status = 'paid' AND (oa.registration_id = :r OR oa.registration_id IS NULL)
+             ORDER BY oa.id
+        """), {"o": reg["order_id"], "r": reg_id}).mappings()]
+        reg["answers"] = [dict(a) for a in conn.execute(text("""
+            SELECT q.ghl_field_key, ba.answer FROM booking_answers ba JOIN booking_questions q ON q.id = ba.question_id
+             WHERE ba.order_id = :o AND (ba.registration_id = :r OR ba.registration_id IS NULL)
+        """), {"o": reg["order_id"], "r": reg_id}).mappings()]
+    return reg
+
+
+def seat_tags(reg: dict) -> list[str]:
+    t = tags()
+    out = [t["student"], t["booked_self"] if _booked_self(reg) else t["booked_by_other"],
+           t["course_prefix"] + _slug(reg["course_slug"]), t["city_prefix"] + _slug(reg["metro_slug"])]
+    if reg.get("is_bring_a_friend"):
+        out.append(t["bring_a_friend"])
+    out += [t["addon_prefix"] + _slug(a["code"]) for a in reg.get("addons") or []]
+    return out
 
 
 def upsert_contact(first: str, last: str, email: str, phone: str | None) -> tuple[str, bool]:
@@ -252,27 +385,7 @@ def _create_opportunity(body: dict) -> dict:
 @handler("ghl", "sync_registration")
 def sync_registration(job: dict) -> None:
     reg_id = job["payload"]["registration_id"]
-    with db.engine().connect() as conn:
-        reg = conn.execute(text("""
-            SELECT r.id, r.public_id, r.status, r.reg_type, r.ghl_opportunity_id, r.ghl_stage_pushed,
-                   r.attendee_first_name, r.attendee_last_name, r.attendee_email, r.attendee_phone_e164,
-                   r.amount_paid_cents, r.person_id, r.unit_price_cents, r.confirmed_at,
-                   o.total_cents AS order_total_cents,
-                   s.starts_at, s.ends_at, s.time_zone, s.public_id AS session_public_id, s.delivery_mode,
-                   s.airtable_lead_instructor,
-                   si.name AS site_name, si.city AS site_city, si.address_line1, si.state_code AS site_state,
-                   si.postal_code, m.market_code, m.name AS metro_name,
-                   p.ghl_course_code, p.short_name, p.name AS product_name,
-                   pe.ghl_contact_id, pe.first_name, pe.last_name, pe.email, pe.phone_e164
-              FROM registrations r
-              JOIN orders o ON o.id = r.order_id
-              JOIN sessions s ON s.id = r.session_id
-              JOIN sites si ON si.id = s.site_id
-              JOIN metros m ON m.id = s.metro_id
-              JOIN products p ON p.id = r.product_id
-              LEFT JOIN people pe ON pe.id = r.person_id
-             WHERE r.id = :id
-        """), {"id": reg_id}).mappings().first()
+    reg = _registration(reg_id)
     if reg is None:
         raise IntegrationError(f"GHL: registration {reg_id} no longer exists.", retry=False)
     state = STATE_FOR_STATUS.get(reg["status"])
@@ -334,3 +447,59 @@ def sync_registration(job: dict) -> None:
                    reg_type = COALESCE(reg_type, :rt)
              WHERE id = :r
         """), {"o": opp_id, "st": stage["stage_name"], "rt": reg_type, "r": reg_id})
+    if state == "booked":
+        add_tags(contact_id, seat_tags(reg))
+
+
+@handler("ghl", "sync_booker")
+def sync_booker(job: dict) -> None:
+    """Someone booked seats for other people: they become a contact too, tagged as a booker."""
+    with db.engine().connect() as conn:
+        order = conn.execute(text("""
+            SELECT id, buyer_first_name, buyer_last_name, buyer_email, buyer_phone_e164, buyer_person_id
+              FROM orders WHERE id = :o
+        """), {"o": job["payload"]["order_id"]}).mappings().first()
+    if order is None:
+        raise IntegrationError(f"GHL: order {job['payload']['order_id']} no longer exists.", retry=False)
+    contact_id, _ = upsert_contact(order["buyer_first_name"], order["buyer_last_name"], order["buyer_email"],
+                                   order["buyer_phone_e164"])
+    add_tags(contact_id, [tags()["booker"]])
+    if order["buyer_person_id"]:
+        with db.transaction() as conn:
+            conn.execute(text("""UPDATE people SET ghl_contact_id = :c, ghl_synced_at = now()
+                                  WHERE id = :p AND (ghl_contact_id IS NULL OR ghl_contact_id = :c)
+                                    AND NOT EXISTS (SELECT 1 FROM people x WHERE x.ghl_contact_id = :c AND x.id <> :p)"""),
+                         {"c": contact_id, "p": order["buyer_person_id"]})
+
+
+@handler("ghl", "send_invite")
+def send_invite(job: dict) -> None:
+    """Email an attendee someone else booked an invite to make their own account.
+
+    GHL sends the email (its invitation template) when the send-invite tag is added;
+    the link and the booker's name are in the contact fields the template reads."""
+    from .. import invites
+    reg = _registration(job["payload"]["registration_id"])
+    if reg is None or reg["status"] not in ("confirmed", "awaiting_payment") or _booked_self(reg):
+        return
+    ids = _field_ids()
+    if not ids.get("contact_invite_link"):
+        raise IntegrationError("GHL: no contact field for the invite link. Create a contact custom field with the key "
+                               "contact.nbc_invite_link (and contact.nbc_booked_by), then press “Load custom fields” "
+                               "and Retry.", retry=False)
+    contact_id, _ = upsert_contact(reg["attendee_first_name"], reg["attendee_last_name"], reg["attendee_email"],
+                                   reg["attendee_phone_e164"])
+    with db.transaction() as conn:
+        link = invites.new_link(conn, reg["id"])
+    set_contact_fields(contact_id, {"contact_invite_link": link,
+                                    "contact_booked_by": f"{reg['buyer_first_name']} {reg['buyer_last_name']}"})
+    tag = tags()["send_invite"]
+    remove_tags(contact_id, [tag])          # so adding it starts the workflow again on a resend
+    add_tags(contact_id, [tag])
+    with db.transaction() as conn:          # what was sent, for the booker's dashboard and the console
+        conn.execute(text("""
+            INSERT INTO notifications (kind, audience, channel, provider, recipient, subject_type, subject_id,
+                                       dedupe_key, status, sent_at)
+            VALUES ('attendee_invite', 'customer', 'email', 'ghl', :to, 'registration', :r, :k, 'sent', now())
+            ON CONFLICT (dedupe_key) DO NOTHING
+        """), {"to": reg["attendee_email"], "r": reg["id"], "k": f"invite:{reg['id']}:{link[-16:]}"})

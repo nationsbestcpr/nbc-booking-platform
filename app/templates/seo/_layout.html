@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}{{ seo_title }}{% endblock %}
+{% block head_meta %}
+  <meta name="description" content="{{ seo_description }}">
+  <link rel="canonical" href="{{ canonical }}">
+  <meta property="og:title" content="{{ seo_title }}">
+  <meta property="og:description" content="{{ seo_description }}">
+  <meta property="og:url" content="{{ canonical }}">
+  {% for item in ld %}<script type="application/ld+json">{{ item|tojson }}</script>
+  {% endfor %}
+{% endblock %}
+{% block content %}
+<div class="wrap seo-page">
+  {% if crumbs is not defined %}{% set crumbs = ld[-1].itemListElement if ld and ld[-1]['@type'] == 'BreadcrumbList' else [] %}{% endif %}
+  {% if crumbs %}
+  <nav class="crumbs" aria-label="You are here"><ol>
+    {% for c in crumbs %}<li>{% if not loop.last %}<a href="{{ c.item }}">{{ c.name }}</a>{% else %}<span aria-current="page">{{ c.name }}</span>{% endif %}</li>{% endfor %}
+  </ol></nav>
+  {% endif %}
+  {% block seo %}{% endblock %}
+</div>
+{% endblock %}

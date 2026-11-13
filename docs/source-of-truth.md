@@ -70,6 +70,9 @@ second, wrong source of truth.
 | DND / opt-out state | **Not stored** | GHL sends every customer message, so GHL enforces DND. The engine's `notifications` table refuses customer messages that bypass GHL. |
 | Workflows (confirmations, reminders, coursework, reviews) | **Not stored** | They run in GHL, triggered by stage and field changes the engine pushes. |
 | Source / first-touch fields | **Snapshot** on the engine side (`order_attribution`, `people.first_order_id` as the write-once anchor); written to GHL once | So write-once logic doesn't need to read GHL. |
+| Tags the engine adds (who booked, course, city, add-ons, bring a friend, send invite) | **Owned names**: `app_settings.ghl_tags`. The tags themselves live on the GHL contact; the engine never reads them back. | GHL workflows (the emails built from the NBC sub-account's templates) start on tags, so the names are a setting staff can change to match a workflow. |
+| Who booked a seat (booked by, their email, booking type), its add-ons, mapped question answers | **Not stored as a copy**. Pushed to opportunity custom fields from the engine's own `orders`, `order_addons` and `booking_answers`. | The engine owns the booking; GHL gets what its workflows and reports need. |
+| Attendee invite link (`contact.nbc_invite_link`) and booker's name (`contact.nbc_booked_by`) | **Not stored**. Written to the contact when an invite goes out; only a hash of the link's token is kept (`action_tokens`, purpose `account_invite`), and each send is a `notifications` row. | GHL sends the invitation email from its template; the engine checks the link when it's opened. |
 | OAuth tokens | **Ledger**, encrypted: `oauth_connections` | Each refresh returns a new refresh token, so it can't live in Replit Secrets. Used once the Marketplace app (webhooks) is built; until then contacts and opportunities are written with a Private Integration token kept in Secrets (`GHL_API_TOKEN`), which doesn't rotate. |
 
 ### Microsoft (Entra ID) and Google — own their sign-in identities
@@ -133,6 +136,9 @@ nothing here is stored for it.
 - Instructor eligibility, requests, awards, assignments, attendance marks and pay records (from the portal launch)
 - CS notes, the audit log, consent evidence, accepted terms versions
 - Public page copy approved by Bre (`page_content`) and URL redirects
+- Booking questions and their answers (`booking_questions`, `booking_answers`), and add-ons with what each order bought (`addons`, `order_addons`): set up by staff in Admin → Booking setup, so a new question or add-on is data, not a release
+- Who booked whom: `orders.buyer_*` / `buyer_user_id` against each `registrations.attendee_*`, friends' seats (`registrations.is_bring_a_friend`) and follow-up purchases (`orders.parent_order_id`), and attendee invites (`action_tokens`, `notifications`)
+- The same-course rule (one email, one seat in a course per `same_course_block_months`), enforced by a trigger on `registrations`
 
 ## Environments
 
