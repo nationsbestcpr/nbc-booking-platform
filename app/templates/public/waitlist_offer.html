@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Your seat offer{% endblock %}
+{% block content %}
+<div class="wrap">
+  <div class="auth book">
+    <aside class="auth-side" aria-labelledby="class-title">
+      <span class="eyebrow" style="color:#ffb3b8">A seat opened up</span>
+      <h1 id="class-title">{{ o.course_name }}</h1>
+      <ul>
+        <li><span><strong class="num">{{ class_date(o.starts_at, o.time_zone) }}</strong><br><span class="num">{{ class_time(o.starts_at, o.ends_at, o.time_zone) }}</span></span></li>
+        <li><span><strong>{{ o.site_name }}</strong><br>{{ o.address_line1 }}<br>{{ o.site_city }}, {{ o.site_state }} {{ o.postal_code }}</span></li>
+        <li><span>{{ o.product_name }} · <span class="num">{{ o.price_cents|money }}</span> a seat</span></li>
+      </ul>
+    </aside>
+    <div class="auth-form">
+      {% if o.status == 'accepted' %}
+      <h2>You're booked</h2>
+      <p class="muted">This seat is paid for. Your confirmation is in your email, and the class is on your dashboard.</p>
+      <a class="pill" href="{{ url_for('me.home') }}" style="align-self:flex-start">My classes <span class="arrow" aria-hidden="true">→</span></a>
+      {% elif not o.can_pay %}
+      <h2>This offer has ended</h2>
+      <p class="muted">{% if o.status == 'queued' %}Your offer is on its way: we send offers between 8 AM and 6 PM, class time.{% else %}The time to pay ran out, so the seat went to the next person. You're still on the waiting list; we'll be in touch if another seat opens.{% endif %}</p>
+      <a class="pill" href="{{ url_for('public.home') }}#classes" style="align-self:flex-start">See other dates <span class="arrow" aria-hidden="true">→</span></a>
+      {% else %}
+      <h2>Your seat{{ 's are' if o.seats > 1 else ' is' }} held</h2>
+      <p class="notice warn" role="status">Pay by <strong class="num">{{ local_dt(o.expires_at, o.time_zone).strftime('%-I:%M %p on %a %b %-d') }}</strong> (class time) to keep {{ 'them' if o.seats > 1 else 'it' }}. After that the seat goes to the next person on the list.</p>
+      {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+      <form method="post" action="{{ url_for('waiting.offer_pay', offer_id=o.public_id) }}" class="book-form" novalidate>
+        {{ csrf_input() }}
+        {% if testing %}<p class="notice warn" role="note"><strong>Test booking.</strong> No payment is taken on the test site.</p>{% endif %}
+        {% if current_user %}
+        <h2>Your details <span class="muted small">(who pays)</span></h2>
+        <div class="row-2">
+          <div class="field"><label for="bf">First name</label><input type="text" id="bf" name="buyer_first" value="{{ form.buyer_first or o.first_name }}" required></div>
+          <div class="field"><label for="bl">Last name</label><input type="text" id="bl" name="buyer_last" value="{{ form.buyer_last or o.last_name }}" required></div>
+        </div>
+        {% endif %}
+        <h2>Who's attending</h2>
+        <fieldset class="field attendee"><legend>Seat 1</legend>
+          <p>{{ o.first_name }} {{ o.last_name }} · {{ o.email }}</p></fieldset>
+        {% for i in range(1, o.seats) %}
+        <fieldset class="field attendee"><legend>Seat {{ i + 1 }}</legend>
+          <div class="row-3">
+            <div class="field"><label for="a{{ i }}f">First name</label><input type="text" id="a{{ i }}f" name="a{{ i }}_first" value="{{ form.get('a%d_first' % i, '') }}"></div>
+            <div class="field"><label for="a{{ i }}l">Last name</label><input type="text" id="a{{ i }}l" name="a{{ i }}_last" value="{{ form.get('a%d_last' % i, '') }}"></div>
+            <div class="field"><label for="a{{ i }}e">Their own email</label><input type="email" id="a{{ i }}e" name="a{{ i }}_email" value="{{ form.get('a%d_email' % i, '') }}"></div>
+          </div></fieldset>
+        {% endfor %}
+        <div class="total-bar"><span>Total</span><strong class="num">{{ (o.price_cents * o.seats)|money }}</strong></div>
+        <button class="pill red" type="submit" style="align-self:flex-start">{{ 'Take the seat (test, no payment)' if testing else 'Continue to payment' }} <span class="arrow" aria-hidden="true">→</span></button>
+        {% if not current_user %}<p class="small muted">You'll sign in or make an account first, then come straight back here.</p>{% endif %}
+      </form>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

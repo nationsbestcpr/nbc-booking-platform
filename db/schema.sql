@@ -743,7 +743,8 @@ COMMENT ON TABLE seat_holds IS '[OWNED] Temporary seat reservations: 15-minute c
 CREATE TABLE checkout_sessions (
   id                          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   order_id                    bigint NOT NULL REFERENCES orders (id),
-  seat_hold_id                bigint NOT NULL REFERENCES seat_holds (id),
+  -- Empty only for a page collecting a transfer's price difference (no seat to hold; 0009).
+  seat_hold_id                bigint REFERENCES seat_holds (id),
   stripe_checkout_session_id  text NOT NULL UNIQUE,     -- 'cs_...'
   url                         text,
   status                      text NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'complete', 'expired')),
@@ -823,6 +824,7 @@ CREATE UNIQUE INDEX waitlist_offers_one_open ON waitlist_offers (waitlist_entry_
   WHERE status IN ('queued', 'sent');
 CREATE INDEX waitlist_offers_dispatch_idx ON waitlist_offers (send_after) WHERE status = 'queued';
 CREATE INDEX waitlist_offers_expiry_idx ON waitlist_offers (expires_at) WHERE status = 'sent';
+CREATE INDEX waitlist_offers_entry_idx ON waitlist_offers (waitlist_entry_id);
 COMMENT ON TABLE waitlist_offers IS '[OWNED] Each seat offer to a waitlisted student, with its hold and timing.';
 
 
@@ -1772,6 +1774,25 @@ CREATE CONSTRAINT TRIGGER waitlist_entries_limit
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW WHEN (NEW.status IN ('waiting', 'offered'))
   EXECUTE FUNCTION trg_waitlist_limit();
+
+-- Waiting-list size and location type come from the room (hub 9c, 9d; 0009):
+-- a room that holds more than one instructor's max is a co-instructor
+-- location, listing the room space above that max up to one instructor's
+-- worth; a one-instructor location lists one instructor's worth (12 / 9 / 6).
+CREATE FUNCTION trg_session_waitlist_rules() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.room_max_student_count > NEW.one_instructor_max THEN
+    NEW.location_type := 'co_instructor';
+    NEW.waitlist_limit := LEAST(NEW.room_max_student_count - NEW.one_instructor_max, NEW.one_instructor_max);
+  ELSE
+    NEW.location_type := 'one_instructor';
+    NEW.capacity_basis := 'one_instructor';
+    NEW.waitlist_limit := NEW.one_instructor_max;
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER sessions_waitlist_rules BEFORE INSERT OR UPDATE OF one_instructor_max, room_max_student_count
+  ON sessions FOR EACH ROW EXECUTE FUNCTION trg_session_waitlist_rules();
 
 -- A room only hosts the course families it is equipped for (when listed).
 CREATE FUNCTION trg_room_hosts_family() RETURNS trigger LANGUAGE plpgsql AS $$

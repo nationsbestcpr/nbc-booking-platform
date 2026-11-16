@@ -60,9 +60,12 @@ def _call(method: str, path: str, data: Any = None, *, idempotency_key: str | No
     return request(method, f"{API}/{path}", service="Stripe", headers=headers, data=data)
 
 
-def create_checkout_session(*, order_public_id: str, hold_public_id: str, line_items: list[dict],
-                            customer_email: str, expires_at: int, success_url: str, cancel_url: str) -> dict:
-    """line_items: [{name, description, unit_amount_cents, quantity}] (seats, a friend's seat, add-ons)."""
+def create_checkout_session(*, order_public_id: str, hold_public_id: str | None, line_items: list[dict],
+                            customer_email: str, expires_at: int, success_url: str, cancel_url: str,
+                            allow_codes: bool = True) -> dict:
+    """line_items: [{name, description, unit_amount_cents, quantity}] (seats, a friend's seat, add-ons).
+    hold_public_id is None for a page that collects money without holding a seat (a transfer's price
+    difference); discount codes are off there (allow_codes=False)."""
     data: list[tuple[str, str]] = [
         ("mode", "payment"),
         ("payment_method_types[0]", "card"),     # paid at once: no bank debits that clear after class day
@@ -78,7 +81,7 @@ def create_checkout_session(*, order_public_id: str, hold_public_id: str, line_i
             data.append((f"line_items[{i}][price_data][product_data][description]", item["description"][:500]))
     summary = ", ".join(f"{it['name']} × {it['quantity']}" for it in line_items)
     data += [
-        ("allow_promotion_codes", "true"),
+        ("allow_promotion_codes", "true" if allow_codes else "false"),
         ("customer_email", customer_email),
         ("customer_creation", "if_required"),
         ("expires_at", str(expires_at)),
@@ -86,11 +89,34 @@ def create_checkout_session(*, order_public_id: str, hold_public_id: str, line_i
         ("cancel_url", cancel_url),
         ("client_reference_id", order_public_id),
         ("metadata[order]", order_public_id),
-        ("metadata[hold]", hold_public_id),
+        ("metadata[hold]", hold_public_id or ""),
         ("payment_intent_data[metadata][order]", order_public_id),
         ("payment_intent_data[description]", summary[:1000]),
     ]
-    return _call("POST", "checkout/sessions", data, idempotency_key=f"checkout-{hold_public_id}")
+    return _call("POST", "checkout/sessions", data,
+                 idempotency_key=f"checkout-{hold_public_id or 'order-' + order_public_id}")
+
+
+def send_invoice(*, order_public_id: str, email: str, name: str, company: str | None, po_number: str | None,
+                 due_date: int, lines: list[dict]) -> dict:
+    """An invoice Stripe emails to the company, due on due_date (unix time). lines: [{description, amount_cents}].
+    Returns the finalised, sent invoice (id, hosted_invoice_url). Safe to repeat: every call has its own key."""
+    customer = _call("POST", "customers", [("email", email), ("name", (company or name)[:250]),
+                                           ("description", name[:250]), ("metadata[order]", order_public_id)],
+                     idempotency_key=f"invoice-customer-{order_public_id}")
+    data = [("customer", customer["id"]), ("collection_method", "send_invoice"), ("due_date", str(due_date)),
+            ("auto_advance", "false"), ("metadata[order]", order_public_id),
+            ("description", f"Nation's Best CPR class booking{' · PO ' + po_number if po_number else ''}"[:500])]
+    if po_number:
+        data += [("custom_fields[0][name]", "PO number"), ("custom_fields[0][value]", po_number[:30])]
+    invoice = _call("POST", "invoices", data, idempotency_key=f"invoice-{order_public_id}")
+    for i, line in enumerate(lines):
+        _call("POST", "invoiceitems", [("customer", customer["id"]), ("invoice", invoice["id"]), ("currency", "usd"),
+                                       ("amount", str(line["amount_cents"])),
+                                       ("description", line["description"][:500])],
+              idempotency_key=f"invoice-{order_public_id}-line-{i}")
+    _call("POST", f"invoices/{invoice['id']}/finalize", idempotency_key=f"invoice-{order_public_id}-finalize")
+    return _call("POST", f"invoices/{invoice['id']}/send", idempotency_key=f"invoice-{order_public_id}-send")
 
 
 def expire_checkout_session(checkout_session_id: str) -> None:

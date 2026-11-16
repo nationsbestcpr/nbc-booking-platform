@@ -99,3 +99,28 @@ BEGIN
       EXECUTE FUNCTION trg_same_course_block();
   END IF;
 END $$;
+
+-- 0009: the booking desk's actions, attendance and the waiting list.
+ALTER TABLE checkout_sessions ALTER COLUMN seat_hold_id DROP NOT NULL;
+CREATE INDEX IF NOT EXISTS waitlist_offers_entry_idx ON waitlist_offers (waitlist_entry_id);
+CREATE OR REPLACE FUNCTION trg_session_waitlist_rules() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.room_max_student_count > NEW.one_instructor_max THEN
+    NEW.location_type := 'co_instructor';
+    NEW.waitlist_limit := LEAST(NEW.room_max_student_count - NEW.one_instructor_max, NEW.one_instructor_max);
+  ELSE
+    NEW.location_type := 'one_instructor';
+    NEW.capacity_basis := 'one_instructor';
+    NEW.waitlist_limit := NEW.one_instructor_max;
+  END IF;
+  RETURN NEW;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'sessions_waitlist_rules'
+                    AND tgrelid = 'sessions'::regclass) THEN
+    CREATE TRIGGER sessions_waitlist_rules BEFORE INSERT OR UPDATE OF one_instructor_max, room_max_student_count
+      ON sessions FOR EACH ROW EXECUTE FUNCTION trg_session_waitlist_rules();
+    UPDATE sessions SET one_instructor_max = one_instructor_max;
+  END IF;
+END $$;

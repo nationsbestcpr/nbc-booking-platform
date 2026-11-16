@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}You're on the waiting list{% endblock %}
+{% block content %}
+<div class="wrap">
+  <section class="panel book-result" aria-labelledby="w-title">
+    <span class="eyebrow">Waiting list</span>
+    <h1 id="w-title" class="title">You're <span class="accent">on the List</span></h1>
+    {% if s %}
+    <p><strong>{{ s.course_name }}</strong> · <span class="num">{{ class_date(s.starts_at, s.time_zone) }} · {{ class_time(s.starts_at, s.ends_at, s.time_zone) }}</span> · {{ s.site_name }}, {{ s.site_city }}</p>
+    {% endif %}
+    <dl class="kv">
+      {% if e.position %}<dt>Your place</dt><dd class="num">{{ e.position }}</dd>{% endif %}
+      <dt>People</dt><dd class="num">{{ e.party_size }}</dd>
+      <dt>We'll contact</dt><dd>{{ e.email }}, by email and text</dd>
+    </dl>
+    <h2>What happens next</h2>
+    <ol class="steps">
+      <li>If a seat opens, we hold it for you and send a link to pay (between {{ t.window }}, class time).</li>
+      <li><strong>You have {{ t.hours }} hours to pay.</strong> After that the offer expires and the seat goes to the next person. You keep your place, but we won't offer you a seat again automatically.</li>
+      {% if s %}<li>The list closes <span class="num">{{ local_dt(t.closes, s.time_zone).strftime('%-I:%M %p on %a %b %-d') }}</span>. If no seat opens by then, we'll let you know and point you to other dates.</li>{% endif %}
+    </ol>
+    <a class="pill" href="{{ url_for('public.home') }}#classes" style="align-self:flex-start">See other dates <span class="arrow" aria-hidden="true">→</span></a>
+  </section>
+</div>
+{% endblock %}

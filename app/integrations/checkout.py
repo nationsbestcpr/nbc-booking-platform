@@ -13,6 +13,14 @@ The order of things (docs: launch hub 15.6, decision D2):
      the Stripe page. If money still arrives for a lapsed hold, the engine
      confirms it when a seat is free; otherwise it refunds automatically and
      lists it under the Integrations page's problems.
+
+Customer service uses the same path (hub 9b, 15.6): a phone booking holds the
+seats on a 'phone_link' hold for longer (Business settings) and the Stripe
+page is sent to the caller as a link; staff never type card numbers. An
+invoice booking confirms the seats on credit ('awaiting_payment') and Stripe
+emails the invoice. A transfer's price difference is a Stripe page with no
+seat hold. A waiting-list offer's seat is already held when the student
+opens the offer; paying uses that hold.
 """
 
 from __future__ import annotations
@@ -88,8 +96,12 @@ def bookable_session(public_id: str) -> dict | None:
                cf.name AS course_name, si.name AS site_name, si.address_line1, si.address_line2, si.city AS site_city,
                si.state_code AS site_state, si.postal_code, si.parking_notes_public, si.directions_public,
                m.name AS city_name, m.state_code, m.booking_system, a.seats_left, a.seat_limit,
+               a.waitlist_count, s.waitlist_limit, s.location_type, s.metro_id,
                (s.status = 'scheduled' AND s.is_published AND m.booking_system = 'engine' AND m.is_active
-                AND s.starts_at > now() AND (s.sales_close_at IS NULL OR s.sales_close_at > now())) AS on_sale
+                AND s.starts_at > now() AND (s.sales_close_at IS NULL OR s.sales_close_at > now())) AS on_sale,
+               -- A free seat goes to the waiting list first (hub 9c): someone waiting who fits is offered it.
+               EXISTS (SELECT 1 FROM waitlist_entries w WHERE w.session_id = s.id AND w.status = 'waiting'
+                          AND w.party_size <= a.seats_left) AS waiting_fits
           FROM sessions s
           JOIN metros m ON m.id = s.metro_id
           JOIN sites si ON si.id = s.site_id
@@ -98,6 +110,8 @@ def bookable_session(public_id: str) -> dict | None:
          WHERE s.public_id = CAST(:p AS uuid)
     """, p=public_id) if _is_uuid(public_id) else None
     if s:
+        if s["waiting_fits"] and s["seats_left"] > 0:
+            s["seats_left"] = 0           # being offered to the waiting list; not on public sale
         s["offers"] = db.fetch_all("""
             SELECT p.id, p.name, p.short_name, sp.price_cents FROM session_products sp
               JOIN products p ON p.id = sp.product_id
@@ -119,15 +133,28 @@ def _clash_message(clashes: list[dict]) -> str:
             "certifies each person by their own email. Use that person's own email, or pick a different course.")
 
 
-def start(*, session_public_id: str, product_id: int, buyer: Person, attendees: list[Person],
-          base_url: str, buyer_user_id: int | None = None, client_ip: str | None = None,
-          user_agent: str | None = None, booking_answers: dict[int, str] | None = None,
-          booking_addon_ids: list[int] | None = None, parent_order_id: int | None = None) -> str:
-    """Hold the seats and open Stripe Checkout. Returns the Stripe page URL.
+def start(**kw) -> str:
+    """Hold the seats and open Stripe Checkout. Returns the Stripe page URL (see _start)."""
+    return _start(**kw)["url"]
+
+
+def start_phone(*, staff_user_id: int, **kw) -> dict:
+    """Customer service books a caller: the seats are held on a payment link for
+    phone_link_hold_minutes. Returns {url, order_public_id, order_id, testing, hold_expires_at}."""
+    return _start(staff_user_id=staff_user_id, **kw)
+
+
+def _start(*, session_public_id: str, product_id: int, buyer: Person, attendees: list[Person],
+           base_url: str, buyer_user_id: int | None = None, client_ip: str | None = None,
+           user_agent: str | None = None, booking_answers: dict[int, str] | None = None,
+           booking_addon_ids: list[int] | None = None, parent_order_id: int | None = None,
+           staff_user_id: int | None = None) -> dict:
+    """Hold the seats and open Stripe Checkout.
 
     attendees may include one friend's seat (is_friend: priced with the bring-a-friend
     discount), each with their question answers and per-seat add-ons;
-    booking_answers / booking_addon_ids are the once-per-booking ones."""
+    booking_answers / booking_addon_ids are the once-per-booking ones. With
+    staff_user_id it's a phone booking: a longer 'phone_link' hold, made by that person."""
     testing = test_checkout()
     if not testing and stripe_api.check_key_for_environment():
         raise BookingError("Online booking isn't open yet. Call us to book this class.")
@@ -170,23 +197,30 @@ def start(*, session_public_id: str, product_id: int, buyer: Person, attendees: 
         + sum(order_addons_[aid]["price_cents"] for aid in booking_addon_ids or [])
     try:
         with db.transaction() as conn:
-            hold_minutes = _setting(conn, "checkout_hold_minutes", 15)
-            stripe_minutes = max(_setting(conn, "stripe_checkout_expiry_minutes", 30), 30) + 1
+            if staff_user_id:
+                # A payment link sent to a caller: held longer (Stripe allows 30 minutes to 24 hours).
+                hold_minutes = min(max(_setting(conn, "phone_link_hold_minutes", 120), 30), 1430)
+                stripe_minutes = hold_minutes + 1
+            else:
+                hold_minutes = _setting(conn, "checkout_hold_minutes", 15)
+                stripe_minutes = max(_setting(conn, "stripe_checkout_expiry_minutes", 30), 30) + 1
             order = conn.execute(text("""
                 INSERT INTO orders (channel, buyer_first_name, buyer_last_name, buyer_email, buyer_phone_e164,
                                     subtotal_cents, total_cents, livemode, client_ip, client_user_agent, buyer_user_id,
-                                    parent_order_id)
-                VALUES ('web', :fn, :ln, :em, :ph, :sub, :sub, :live, CAST(:ip AS inet), :ua, :uid, :parent)
+                                    parent_order_id, created_by_user_id)
+                VALUES (:ch, :fn, :ln, :em, :ph, :sub, :sub, :live, CAST(:ip AS inet), :ua, :uid, :parent, :staff)
                 RETURNING id, public_id
             """), {"uid": buyer_user_id, "fn": buyer.first_name, "ln": buyer.last_name, "em": buyer.email,
-                   "ph": buyer.phone_e164, "parent": parent_order_id,
+                   "ph": buyer.phone_e164, "parent": parent_order_id, "ch": "phone" if staff_user_id else "web",
+                   "staff": staff_user_id,
                    "sub": subtotal, "live": livemode, "ip": client_ip, "ua": (user_agent or "")[:500] or None}
             ).mappings().one()
             hold = conn.execute(text("""
                 INSERT INTO seat_holds (session_id, order_id, kind, quantity, expires_at)
-                VALUES (:s, :o, 'checkout', :q, now() + make_interval(mins => :m))
-                RETURNING id, public_id
-            """), {"s": s["id"], "o": order["id"], "q": quantity, "m": hold_minutes}).mappings().one()
+                VALUES (:s, :o, :kind, :q, now() + make_interval(mins => :m))
+                RETURNING id, public_id, expires_at
+            """), {"s": s["id"], "o": order["id"], "q": quantity, "m": hold_minutes,
+                   "kind": "phone_link" if staff_user_id else "checkout"}).mappings().one()
             for a in attendees:
                 reg_id = conn.execute(text("""
                     INSERT INTO registrations (order_id, seat_hold_id, session_id, product_id, attendee_first_name,
@@ -215,13 +249,15 @@ def start(*, session_public_id: str, product_id: int, buyer: Person, attendees: 
             raise BookingError("Someone just took the last seats in this class. Pick another date.") from exc
         raise
 
+    made = {"order_id": order["id"], "order_public_id": str(order["public_id"]), "testing": testing,
+            "hold_expires_at": hold["expires_at"]}
     if testing:
         # Confirmed now, exactly as a Stripe payment would (seats, records, GHL), with no payment row.
         amounts = {"subtotal": subtotal, "discount": 0, "tax": 0, "total": subtotal}
         with db.transaction() as conn:
             found = _lock_order(conn, order["id"], hold["id"], None)
             _confirm(conn, found, {"id": None, "customer": None, "payment_intent": None}, amounts)
-        return f"{base_url}/book/done?order={order['public_id']}"
+        return {**made, "url": f"{base_url}/book/done?order={order['public_id']}"}
 
     from ..filters import class_date
     expires_at = int((datetime.now(timezone.utc) + timedelta(minutes=stripe_minutes)).timestamp())
@@ -255,7 +291,7 @@ def start(*, session_public_id: str, product_id: int, buyer: Person, attendees: 
             INSERT INTO checkout_sessions (order_id, seat_hold_id, stripe_checkout_session_id, url, stripe_expires_at)
             VALUES (:o, :h, :cs, :url, to_timestamp(:exp))
         """), {"o": order["id"], "h": hold["id"], "cs": cs["id"], "url": cs.get("url"), "exp": expires_at})
-    return cs["url"]
+    return {**made, "url": cs["url"]}
 
 
 def _add_addon(conn: Connection, order_id: int, addon: dict, registration_id: int | None) -> None:
@@ -275,11 +311,16 @@ def _answer(conn: Connection, order_id: int, registration_id: int | None, questi
 
 
 def _release(conn: Connection, order_id: int, hold_id: int, reason: str, order_status: str = "expired") -> None:
+    """End an unpaid attempt: the order and its pending seats lapse and the hold is freed. A
+    waiting-list offer's hold stays (the offer runs to its own expiry): it only lets go of the order."""
+    conn.execute(text("""
+        UPDATE seat_holds SET order_id = NULL WHERE id = :h AND kind = 'waitlist_offer' AND order_id = :o
+    """), {"h": hold_id, "o": order_id})
     conn.execute(text("""
         UPDATE seat_holds SET status = CASE WHEN :reason IN ('hold_lapsed', 'checkout_expired') THEN 'expired'
                                             ELSE 'released' END,
                released_at = now(), release_reason = :reason
-         WHERE id = :h AND status = 'active'
+         WHERE id = :h AND status = 'active' AND kind <> 'waitlist_offer'
     """), {"h": hold_id, "reason": reason})
     conn.execute(text("UPDATE registrations SET status = 'expired' WHERE order_id = :o AND status = 'pending'"),
                  {"o": order_id})
@@ -304,13 +345,15 @@ def _expire_stripe_pages(conn: Connection, order_id: int) -> None:
 
 
 def cancel_by_customer(order_public_id: str) -> None:
-    """The customer came back from Stripe without paying: free the seats now."""
+    """The customer came back from Stripe without paying: free the seats now. A payment link
+    sent by customer service keeps its hold until it runs out (the caller may come back to it)."""
     if not _is_uuid(order_public_id):
         return
     with db.transaction() as conn:
         row = conn.execute(text("""
             SELECT o.id, h.id AS hold_id FROM orders o JOIN seat_holds h ON h.order_id = o.id
              WHERE o.public_id = CAST(:p AS uuid) AND o.status = 'open' AND h.status = 'active'
+               AND o.channel IN ('web', 'waitlist_offer')
              FOR NO KEY UPDATE OF o
         """), {"p": order_public_id}).mappings().first()
         if row:
@@ -352,7 +395,7 @@ def order_summary(order_public_id: str) -> dict | None:
         return None
     order = db.fetch_one("""
         SELECT o.id, o.public_id, o.status, o.buyer_first_name, o.buyer_email, o.buyer_user_id,
-               o.total_cents, o.discount_cents,
+               o.total_cents, o.discount_cents, o.channel, h.status AS hold_status, h.expires_at AS hold_expires_at,
                (SELECT count(*) FROM registrations r WHERE r.order_id = o.id
                    AND r.status IN ('confirmed', 'completed', 'no_show', 'awaiting_payment')) AS seats_confirmed,
                (NOT o.livemode AND o.status = 'paid' AND o.total_cents > 0
@@ -398,14 +441,17 @@ def handle_event(event: dict) -> str:
         return _paid(obj)
     if kind == "checkout.session.expired":
         return _stripe_expired(obj)
+    if kind == "invoice.paid":
+        return _invoice_paid(obj)
     return "ignored"
 
 
 def _find(conn: Connection, cs_id: str) -> dict | None:
-    """The checkout's order, hold and class, locked in a fixed order: order, hold, checkout."""
+    """The checkout's order, hold and class, locked in a fixed order: order, hold, checkout.
+    None for a page this engine didn't open, or one that holds no seat (a price difference)."""
     ids = conn.execute(text("""SELECT id, order_id, seat_hold_id FROM checkout_sessions
                                 WHERE stripe_checkout_session_id = :cs"""), {"cs": cs_id}).mappings().first()
-    if ids is None:
+    if ids is None or ids["seat_hold_id"] is None:
         return None
     return _lock_order(conn, ids["order_id"], ids["seat_hold_id"], ids["id"])
 
@@ -416,12 +462,12 @@ def _lock_order(conn: Connection, order_id: int, hold_id: int, checkout_id: int 
                buyer_email, buyer_phone_e164
           FROM orders WHERE id = :o FOR NO KEY UPDATE
     """), {"o": order_id}).mappings().one()
-    hold = conn.execute(text("SELECT session_id FROM seat_holds WHERE id = :h FOR NO KEY UPDATE"),
+    hold = conn.execute(text("SELECT session_id, kind FROM seat_holds WHERE id = :h FOR NO KEY UPDATE"),
                         {"h": hold_id}).mappings().one()
     if checkout_id is not None:
         conn.execute(text("SELECT 1 FROM checkout_sessions WHERE id = :c FOR NO KEY UPDATE"), {"c": checkout_id})
     return {"checkout_id": checkout_id, "order_id": order_id, "seat_hold_id": hold_id,
-            **order, "session_id": hold["session_id"]}
+            **order, "session_id": hold["session_id"], "hold_kind": hold["kind"]}
 
 
 class NoSeat(Exception):
@@ -469,6 +515,10 @@ def _amounts(cs: dict) -> dict:
 def _paid(cs: dict) -> str:
     cs_id = cs.get("id", "")
     amounts = _amounts(cs)
+    difference = db.fetch_one("""SELECT id, order_id FROM checkout_sessions
+                                  WHERE stripe_checkout_session_id = :cs AND seat_hold_id IS NULL""", cs=cs_id)
+    if difference:
+        return _difference_paid(difference, cs, amounts)
     with db.transaction() as conn:
         found = _find(conn, cs_id)
         if not found:
@@ -572,6 +622,9 @@ def _confirm(conn: Connection, found: dict, cs: dict, amounts: dict) -> None:
         UPDATE seat_holds SET status = 'converted', released_at = now(), release_reason = 'paid'
          WHERE id = :h AND status <> 'converted'
     """), {"h": found["seat_hold_id"]})
+    if found.get("hold_kind") == "waitlist_offer":
+        from .. import waitlist
+        waitlist.converted(conn, found["seat_hold_id"], found["order_id"])
     conn.execute(text("""
         UPDATE orders SET status = 'paid', paid_at = now(), subtotal_cents = :sub, discount_cents = :disc,
                tax_cents = :tax, total_cents = :tot, amount_paid_cents = :tot, buyer_person_id = :buyer,
@@ -625,6 +678,223 @@ def _stripe_expired(cs: dict) -> str:
         if found["order_status"] == "open":
             _release(conn, found["order_id"], found["seat_hold_id"], "checkout_expired", "expired")
     return "processed"
+
+
+# --- Money without a new seat: a transfer's price difference, invoices -------------------
+
+def open_difference_page(order_id: int, base_url: str) -> str | None:
+    """A Stripe page for a 'transfer_adjustment' order (no seat hold). Returns its URL, or None on the
+    test site without Stripe, where the difference is recorded as paid at once (no money moves)."""
+    order = db.fetch_one("""
+        SELECT o.id, o.public_id, o.total_cents, o.buyer_email, t.registration_id, cf.name AS course_name,
+               s.starts_at, s.time_zone, si.name AS site_name
+          FROM orders o
+          JOIN registration_transfers t ON t.settlement_order_id = o.id
+          JOIN sessions s ON s.id = t.to_session_id
+          JOIN sites si ON si.id = s.site_id
+          JOIN course_families cf ON cf.id = s.course_family_id
+         WHERE o.id = :o AND o.channel = 'transfer_adjustment'
+    """, o=order_id)
+    if test_checkout():
+        with db.transaction() as conn:
+            _settle_order(conn, order_id, order["total_cents"], method=None, reference=None, livemode=False)
+        return None
+    from ..filters import class_date
+    expires_at = int((datetime.now(timezone.utc) + timedelta(hours=23)).timestamp())
+    cs = stripe_api.create_checkout_session(
+        order_public_id=str(order["public_id"]), hold_public_id=None, allow_codes=False,
+        line_items=[{"name": f"Class change: {order['course_name']}", "quantity": 1,
+                     "description": f"Price difference for {class_date(order['starts_at'], order['time_zone'])} "
+                                    f"· {order['site_name']}", "unit_amount_cents": order["total_cents"]}],
+        customer_email=order["buyer_email"], expires_at=expires_at,
+        success_url=f"{base_url}/book/done?order={order['public_id']}",
+        cancel_url=f"{base_url}/")
+    with db.transaction() as conn:
+        conn.execute(text("""
+            INSERT INTO checkout_sessions (order_id, seat_hold_id, stripe_checkout_session_id, url, stripe_expires_at)
+            VALUES (:o, NULL, :cs, :url, to_timestamp(:exp))
+        """), {"o": order_id, "cs": cs["id"], "url": cs.get("url"), "exp": expires_at})
+    return cs["url"]
+
+
+def _difference_paid(row: dict, cs: dict, amounts: dict) -> str:
+    with db.transaction() as conn:
+        order = conn.execute(text("SELECT status, livemode FROM orders WHERE id = :o FOR NO KEY UPDATE"),
+                             {"o": row["order_id"]}).mappings().one()
+        if order["status"] == "paid":
+            return "processed"
+        if bool(cs.get("livemode")) != order["livemode"]:
+            runs.issue(conn, source="stripe", code="LIVEMODE_MISMATCH", severity="error", external_ref=cs.get("id"),
+                       message="A Stripe event's test/live mode doesn't match its order. It was not applied.")
+            return "ignored"
+        _settle_order(conn, row["order_id"], amounts["total"], method="card", reference=None,
+                      livemode=order["livemode"], payment_intent=cs.get("payment_intent"))
+        conn.execute(text("UPDATE checkout_sessions SET status = 'complete', completed_at = now() WHERE id = :c"),
+                     {"c": row["id"]})
+    return "processed"
+
+
+def _settle_order(conn: Connection, order_id: int, amount_cents: int, *, method: str | None, reference: str | None,
+                  livemode: bool, payment_intent: str | None = None, invoice_id: str | None = None,
+                  recorded_by: int | None = None) -> None:
+    """Money came in for an order that already has its seats (invoice / PO, or a price difference):
+    record the payment, mark the order paid, and confirm seats that were waiting on it."""
+    if method and amount_cents > 0:
+        conn.execute(text("""
+            INSERT INTO payments (order_id, method, status, amount_cents, stripe_payment_intent_id, stripe_invoice_id,
+                                  received_at, manual_reference, recorded_by_user_id, livemode)
+            VALUES (:o, :m, 'succeeded', :a, :pi, :inv, now(), :ref, :by, :live)
+        """), {"o": order_id, "m": method, "a": amount_cents, "pi": payment_intent, "inv": invoice_id,
+               "ref": reference, "by": recorded_by, "live": livemode})
+    conn.execute(text("""
+        UPDATE orders SET status = 'paid', paid_at = now(), amount_paid_cents = amount_paid_cents + :a
+         WHERE id = :o
+    """), {"o": order_id, "a": amount_cents})
+    # Invoice seats: paid now. Each seat's share of the invoice is its own price.
+    conn.execute(text("""
+        UPDATE registrations SET status = CASE WHEN status = 'awaiting_payment' THEN 'confirmed' ELSE status END,
+               confirmed_at = COALESCE(confirmed_at, now()),
+               amount_paid_cents = unit_price_cents - discount_cents
+         WHERE order_id = :o AND status IN ('awaiting_payment', 'completed', 'no_show')
+           AND amount_paid_cents = 0
+    """), {"o": order_id})
+    # A price difference adds to what the moved seat has paid (so a later refund can include it).
+    conn.execute(text("""
+        UPDATE registrations r SET amount_paid_cents = r.amount_paid_cents + :a
+          FROM registration_transfers t
+         WHERE t.settlement_order_id = :o AND r.id = t.registration_id
+    """), {"o": order_id, "a": amount_cents})
+
+
+def book_on_invoice(*, session_public_id: str, product_id: int, buyer: Person, attendees: list[Person],
+                    company: str, po_number: str | None, due_on, staff_user_id: int) -> dict:
+    """An employer or group pays later: the seats are confirmed now ('awaiting_payment'), the order
+    is due on due_on, and Stripe emails the invoice (the test site without Stripe skips the email;
+    staff record the payment by hand). Returns {order_id, order_public_id}."""
+    if not attendees or len(attendees) > 50:
+        raise BookingError("Book between 1 and 50 seats on one invoice.")
+    emails = [a.email.lower() for a in attendees]
+    if len(set(emails)) != len(emails):
+        raise BookingError("Each person attending needs their own email address.")
+    s = bookable_session(session_public_id)
+    if not s or not s["on_sale"]:
+        raise BookingError("This class isn't on sale any more. Pick another date.")
+    offer = next((o for o in s["offers"] if o["id"] == product_id), None)
+    if not offer:
+        raise BookingError("Choose one of the courses offered at this class.")
+    if len(attendees) > s["seats_left"]:
+        raise BookingError(f"Only {s['seats_left']} seat{'s' if s['seats_left'] != 1 else ''} left in this class.")
+    clashes = booking_setup.same_course_clashes(s["id"], emails)
+    if clashes:
+        raise BookingError(_clash_message(clashes))
+    price, total = offer["price_cents"], offer["price_cents"] * len(attendees)
+    livemode = False if test_checkout() else stripe_api.is_live_key()
+    try:
+        with db.transaction() as conn:
+            order = conn.execute(text("""
+                INSERT INTO orders (channel, status, buyer_first_name, buyer_last_name, buyer_email, buyer_phone_e164,
+                                    buyer_company, po_number, invoice_due_on, subtotal_cents, total_cents, livemode,
+                                    created_by_user_id)
+                VALUES ('invoice', 'awaiting_payment', :fn, :ln, :em, :ph, :co, :po, :due, :t, :t, :live, :u)
+                RETURNING id, public_id
+            """), {"fn": buyer.first_name, "ln": buyer.last_name, "em": buyer.email, "ph": buyer.phone_e164,
+                   "co": company, "po": po_number, "due": due_on, "t": total, "live": livemode,
+                   "u": staff_user_id}).mappings().one()
+            buyer_id = _person(conn, buyer.first_name, buyer.last_name, buyer.email, buyer.phone_e164)
+            conn.execute(text("UPDATE orders SET buyer_person_id = :p WHERE id = :o"), {"p": buyer_id, "o": order["id"]})
+            for a in attendees:
+                pid = _person(conn, a.first_name, a.last_name, a.email, a.phone_e164)
+                reg_id = conn.execute(text("""
+                    INSERT INTO registrations (order_id, session_id, product_id, person_id, attendee_first_name,
+                                               attendee_last_name, attendee_email, attendee_phone_e164, status,
+                                               unit_price_cents)
+                    VALUES (:o, :s, :p, :pid, :fn, :ln, :em, :ph, 'awaiting_payment', :price)
+                    RETURNING id
+                """), {"o": order["id"], "s": s["id"], "p": product_id, "pid": pid, "fn": a.first_name,
+                       "ln": a.last_name, "em": a.email, "ph": a.phone_e164, "price": price}).scalar_one()
+                conn.execute(text("UPDATE people SET first_order_id = COALESCE(first_order_id, :o) WHERE id = :p"),
+                             {"o": order["id"], "p": pid})
+                enqueue(conn, "ghl", "sync_registration", key=f"ghl-registration-{reg_id}-booked",
+                        entity_type="registration", entity_id=reg_id, payload={"registration_id": reg_id})
+                if a.email.lower() != buyer.email.lower():
+                    enqueue(conn, "ghl", "send_invite", key=f"ghl-invite-{reg_id}-first", entity_type="registration",
+                            entity_id=reg_id, payload={"registration_id": reg_id})
+            if any(e != buyer.email.lower() for e in emails):
+                enqueue(conn, "ghl", "sync_booker", key=f"ghl-booker-order-{order['id']}", entity_type="order",
+                        entity_id=order["id"], payload={"order_id": order["id"]})
+            if not test_checkout():
+                enqueue(conn, "stripe", "send_invoice", key=f"invoice-{order['id']}", entity_type="order",
+                        entity_id=order["id"], payload={"order_id": order["id"]})
+    except DBAPIError as exc:
+        if "same course within" in str(exc.orig):
+            raise BookingError("Someone in this booking already has this course within the same-course limit.") from exc
+        if "is full" in str(exc.orig) or "not open" in str(exc.orig):
+            raise BookingError("Someone just took the last seats in this class. Pick another date.") from exc
+        raise
+    return {"order_id": order["id"], "order_public_id": str(order["public_id"])}
+
+
+@handler("stripe", "send_invoice")
+def _invoice_job(job: dict) -> None:
+    from ..filters import class_date
+    order = db.fetch_one("""
+        SELECT o.id, o.public_id, o.status, o.buyer_first_name, o.buyer_last_name, o.buyer_email, o.buyer_company,
+               o.po_number, o.invoice_due_on, o.stripe_invoice_id
+          FROM orders o WHERE o.id = :o
+    """, o=job["payload"]["order_id"])
+    if not order or order["stripe_invoice_id"] or order["status"] != "awaiting_payment":
+        return
+    lines = db.fetch_all("""
+        SELECT r.attendee_first_name, r.attendee_last_name, r.unit_price_cents - r.discount_cents AS amount,
+               p.name AS product_name, s.starts_at, s.time_zone, si.name AS site_name
+          FROM registrations r JOIN products p ON p.id = r.product_id JOIN sessions s ON s.id = r.session_id
+          JOIN sites si ON si.id = s.site_id
+         WHERE r.order_id = :o AND r.status IN ('awaiting_payment', 'completed', 'no_show') ORDER BY r.id
+    """, o=order["id"])
+    due = datetime.combine(order["invoice_due_on"], datetime.min.time(), tzinfo=timezone.utc) + timedelta(hours=17)
+    invoice = stripe_api.send_invoice(
+        order_public_id=str(order["public_id"]), email=order["buyer_email"],
+        name=f"{order['buyer_first_name']} {order['buyer_last_name']}", company=order["buyer_company"],
+        po_number=order["po_number"], due_date=int(due.timestamp()),
+        lines=[{"amount_cents": x["amount"],
+                "description": f"{x['product_name']} · {x['attendee_first_name']} {x['attendee_last_name']} · "
+                               f"{class_date(x['starts_at'], x['time_zone'])} · {x['site_name']}"} for x in lines])
+    with db.transaction() as conn:
+        conn.execute(text("UPDATE orders SET stripe_invoice_id = :i WHERE id = :o AND stripe_invoice_id IS NULL"),
+                     {"i": invoice.get("id"), "o": order["id"]})
+
+
+def _invoice_paid(inv: dict) -> str:
+    order_ref = (inv.get("metadata") or {}).get("order")
+    with db.transaction() as conn:
+        order = conn.execute(text("""
+            SELECT id, status, livemode FROM orders
+             WHERE stripe_invoice_id = :i OR (CAST(:ref AS text) IS NOT NULL AND CAST(public_id AS text) = :ref)
+             ORDER BY id LIMIT 1 FOR NO KEY UPDATE
+        """), {"i": inv.get("id"), "ref": order_ref}).mappings().first()
+        if order is None:
+            return "ignored"           # an invoice another app on the same Stripe account sent
+        if order["status"] != "awaiting_payment":
+            return "processed"
+        _settle_order(conn, order["id"], int(inv.get("amount_paid") or 0), method="invoice", reference=None,
+                      livemode=order["livemode"], payment_intent=inv.get("payment_intent"), invoice_id=inv.get("id"))
+    return "processed"
+
+
+def record_payment(order_id: int, amount_cents: int, reference: str, user_id: int) -> None:
+    """Staff record money an invoice / PO booking paid outside Stripe (a cheque, a bank transfer)."""
+    with db.transaction() as conn:
+        order = conn.execute(text("""SELECT status, total_cents, livemode FROM orders WHERE id = :o
+                                      FOR NO KEY UPDATE"""), {"o": order_id}).mappings().one()
+        if order["status"] != "awaiting_payment":
+            raise BookingError("This booking isn't waiting for a payment.")
+        if amount_cents != order["total_cents"]:
+            raise BookingError(f"Record the full amount due ({order['total_cents'] / 100:,.2f}).")
+        _settle_order(conn, order_id, amount_cents, method="manual", reference=reference[:200] or None,
+                      livemode=order["livemode"], recorded_by=user_id)
+        from .. import audit
+        audit.record(conn, "booking.payment_record", "order", order_id,
+                     after={"amount_cents": amount_cents, "reference": reference[:200]})
 
 
 @handler("stripe", "refund")

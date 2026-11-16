@@ -1,0 +1,70 @@
+{% extends "dash/layout.html" %}
+{% import "_roster.html" as rl with context %}
+{% block title %}{{ s.course_name }} · {{ class_date(s.starts_at, s.time_zone) }}{% endblock %}
+{% block heading %}{{ s.course_name }} <span class="accent">{{ class_date(s.starts_at, s.time_zone) }}</span>{% endblock %}
+{% block subhead %}<p><span class="num">{{ class_time(s.starts_at, s.ends_at, s.time_zone) }}</span> · {{ s.site_name }}, {{ s.city_name }} ·
+  {% if s.status == 'cancelled' %}<span class="status bad">Cancelled</span>{% elif s.status == 'completed' %}<span class="status ok">Finished</span>{% else %}<span class="num">{{ s.sold_seats }} of {{ s.seat_limit }}</span> seats sold{% if s.waitlist_count %} · <span class="num">{{ s.waitlist_count }}</span> waiting{% endif %}{% endif %}</p>{% endblock %}
+{% block panel %}
+<p class="small"><a href="{{ url_for('console.find') }}">← Find a student</a>{% if current_user.has_permission('class.view') %} · <a href="{{ url_for('admin.classes_detail', sid=s.id) }}">Seats and instructors →</a>{% endif %}</p>
+
+{% if s.status == 'cancelled' %}
+<section class="panel" id="move" aria-labelledby="move-title">
+  <h2 id="move-title">Move everyone to another class</h2>
+  <p class="muted small">NBC cancelled this class{% if s.cancel_reason %} ({{ s.cancel_reason }}){% endif %}. Move its booked students to another class of the same course together: either everyone fits or nobody moves. Each keeps their course (A&amp;P or Adult) where the new class offers it, and nothing is charged. A cheaper class's difference can be refunded from each booking.</p>
+  {% set booked = students|selectattr('status', 'in', ['confirmed', 'awaiting_payment', 'displaced'])|list %}
+  {% if not booked %}
+  <div class="empty">No booked students left in this class.</div>
+  {% elif moves %}
+  <form method="post" action="{{ url_for('console.class_move_all', public_id=s.public_id) }}" class="stack">
+    {{ csrf_input() }}
+    <fieldset class="field"><legend>New class for {{ booked|length }} student{{ 's' if booked|length != 1 }}</legend>
+      <div class="pick-list">{% for t in moves %}
+        <label class="pick{{ ' full' if t.seats_left < booked|length }}"><input type="radio" name="to" value="{{ t.id }}" required>
+          <span><strong class="num">{{ class_date(t.starts_at, t.time_zone) }} · {{ class_time(t.starts_at, t.ends_at, t.time_zone) }}</strong><br>{{ t.site_name }}, {{ t.city_name }}</span>
+          <span class="status {{ 'ok' if t.seats_left >= booked|length else 'bad' }} num">{{ t.seats_left }} left</span></label>
+      {% endfor %}</div></fieldset>
+    <div class="field"><label for="mv-note">Note</label><input type="text" id="mv-note" name="note" maxlength="500" placeholder="Why the class was cancelled"></div>
+    <button class="pill red" type="submit" style="align-self:flex-start">Move everyone <span class="arrow" aria-hidden="true">→</span></button>
+  </form>
+  {% else %}
+  <p class="muted small">No other upcoming class of this course in your cities, or your role can't move a whole class. Move or refund students one by one from their bookings.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+{{ rl.roster(s, students, can, 'console.class_mark', show_contacts=can.contacts, link_bookings=true) }}
+
+{% if s.status != 'cancelled' %}
+<div class="cols">
+  <section class="panel" aria-labelledby="fin-title">
+    <h2 id="fin-title">After class</h2>
+    {% if s.status == 'completed' %}
+    <p class="small">Finished. Pay records were made for the instructors with a rate set.</p>
+    {% elif can.can_finish %}
+    <form method="post" action="{{ url_for('console.class_finish', public_id=s.public_id) }}" class="stack">
+      {{ csrf_input() }}
+      <p class="muted small">When every student is marked Complete or No show, finish the class: it closes, and each instructor gets a pay record at their rate.</p>
+      <button class="pill plain" type="submit" style="align-self:flex-start">Finish the class</button>
+    </form>
+    {% else %}
+    <p class="muted small">The class can be finished on class day, once every student is marked.</p>
+    {% endif %}
+    {% if can.can_export %}<p class="small"><a href="{{ url_for('console.class_export', public_id=s.public_id) }}">Download the Red Cross class list (CSV)</a>{% if s.roster_exported_at %} <span class="muted">· last {{ s.roster_exported_at|office_time }}</span>{% endif %}</p>{% endif %}
+  </section>
+  {% if waiting is not none %}
+  <section class="panel" aria-labelledby="wl-title">
+    <h2 id="wl-title">Waiting list</h2>
+    {% if waiting %}
+    <ul class="list">{% for w in waiting %}
+      <li><span><span class="num">{{ w.position }}.</span> {{ w.first_name }} {{ w.last_name }}{% if w.party_size > 1 %} <span class="small muted">(party of {{ w.party_size }})</span>{% endif %}</span>
+        <span class="status {{ {'waiting': 'wait', 'offered': 'ok', 'offer_expired': 'off'}.get(w.status, 'off') }}">{{ {'waiting': 'Waiting', 'offered': 'Seat offered', 'offer_expired': 'Offer expired'}.get(w.status, w.status) }}</span></li>
+    {% endfor %}</ul>
+    <p class="small"><a href="{{ url_for('admin.waitlists') }}">Manage waiting lists →</a></p>
+    {% else %}
+    <p class="muted small">Nobody is waiting.</p>
+    {% endif %}
+  </section>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

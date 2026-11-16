@@ -14,14 +14,49 @@
         <li><span>{{ s.delivery_mode|capitalize }} class{% if s.delivery_mode == 'blended' %}: an online part before class day, then the skills session here{% endif %}</span></li>
         {% if s.parking_notes_public %}<li><span>Parking: {{ s.parking_notes_public }}</span></li>{% endif %}
       </ul>
-      <p class="num" style="color:#d9d9ee">{% if s.on_sale and s.seats_left > 0 %}{{ s.seats_left }} of {{ s.seat_limit }} seats left{% elif s.on_sale %}This class is full.{% else %}This class isn't on sale.{% endif %}</p>
+      <p class="num" style="color:#d9d9ee">{% if s.on_sale and s.seats_left > 0 %}{{ s.seats_left }} of {{ s.seat_limit }} seats left{% elif s.on_sale %}This class is full.{% if s.waitlist_count %} {{ s.waitlist_count }} waiting.{% endif %}{% else %}This class isn't on sale.{% endif %}</p>
     </aside>
 
-    {% if not s.on_sale or s.seats_left <= 0 %}
+    {% if s.on_sale and s.seats_left <= 0 and wait.open %}
+    <div class="auth-form">
+      <h2>Class full: join the waiting list</h2>
+      {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+      <p class="muted">Every seat is taken. Join the waiting list for free: if a seat opens, we hold it for you and text and email you a link to pay.</p>
+      <div class="notice waitlist-terms" role="note">
+        <p><strong>You'll have {{ wait.hours }} hours to pay.</strong> Offers go out between {{ wait.window }} (class time). If you don't pay within {{ wait.hours }} hours, the offer expires and the seat goes to the next person; you keep your place but won't be offered a seat again automatically.</p>
+        <p>The list closes <span class="num">{{ local_dt(wait.closes, s.time_zone).strftime('%-I:%M %p on %a %b %-d') }}</span>. If no seat opens by then, we'll let you know and point you to other dates.</p>
+      </div>
+      {% if wl_error %}<p class="alert" role="alert">{{ wl_error }}</p>{% endif %}
+      <form method="post" action="{{ url_for('waiting.join', public_id=s.public_id) }}" class="book-form" novalidate>
+        {{ csrf_input() }}
+        <div class="row-2">
+          <div class="field"><label for="wf">First name</label><input type="text" id="wf" name="wl_first" value="{{ wl_form.wl_first or buyer.first_name }}" autocomplete="given-name" required></div>
+          <div class="field"><label for="wln">Last name</label><input type="text" id="wln" name="wl_last" value="{{ wl_form.wl_last or buyer.last_name }}" autocomplete="family-name" required></div>
+        </div>
+        <div class="row-2">
+          <div class="field"><label for="we">Email</label><input type="email" id="we" name="wl_email" value="{{ wl_form.wl_email or buyer.email }}" autocomplete="email" required></div>
+          <div class="field"><label for="wp">Mobile phone</label><input type="text" inputmode="tel" id="wp" name="wl_phone" value="{{ wl_form.wl_phone or buyer.phone }}" autocomplete="tel" required><span class="hint">Offers come by text as well as email.</span></div>
+        </div>
+        <div class="row-2">
+          <fieldset class="field"><legend>Course</legend>
+            <div class="choice-tiles">{% for o in s.offers %}
+              <label class="tile"><input type="radio" name="wl_product" value="{{ o.id }}" {{ 'checked' if (wl_form.wl_product|string == o.id|string) or (not wl_form.wl_product and loop.first) }}>
+                <strong>{{ o.short_name }} · <span class="num">{{ o.price_cents|money }}</span></strong><span>{{ o.name }}</span></label>
+            {% endfor %}</div></fieldset>
+          <div class="field"><label for="wn">How many people?</label>
+            <select id="wn" name="wl_party">{% for n in range(1, [wait.room, 12]|min + 1) %}<option value="{{ n }}"{{ ' selected' if wl_form.wl_party|string == n|string }}>{{ n }}</option>{% endfor %}</select>
+            <span class="hint">A group is offered seats only when the whole group fits.</span></div>
+        </div>
+        <label class="check"><input type="checkbox" name="wl_sms" value="yes"{{ ' checked' if wl_form.wl_sms == 'yes' or not wl_form }}> Text me about a seat on this class. Message and data rates may apply; reply STOP to opt out.</label>
+        <button class="pill red" type="submit" style="align-self:flex-start">Join the waiting list <span class="arrow" aria-hidden="true">→</span></button>
+        <p class="small muted">No payment now. <a href="{{ url_for('public.home') }}#classes">Or pick another date</a>.</p>
+      </form>
+    </div>
+    {% elif not s.on_sale or s.seats_left <= 0 %}
     <div class="auth-form">
       <h2>{{ 'Class full' if s.on_sale else 'Not on sale' }}</h2>
-      {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
-      <p class="muted">{{ 'Every seat in this class is taken.' if s.on_sale else 'This class is no longer taking bookings.' }} Pick another date.</p>
+      {% if error or wl_error %}<p class="alert" role="alert">{{ error or wl_error }}</p>{% endif %}
+      <p class="muted">{{ 'Every seat in this class is taken, and its waiting list is closed.' if s.on_sale else 'This class is no longer taking bookings.' }} Pick another date.</p>
       <a class="pill" href="{{ url_for('public.home') }}#classes" style="align-self:flex-start">See classes <span class="arrow" aria-hidden="true">→</span></a>
     </div>
     {% elif not online %}
@@ -50,7 +85,7 @@
         <input type="hidden" name="seats" value="{{ seats }}">
         <div class="book-form">
           {% if testing %}<p class="notice warn" role="note"><strong>Test booking.</strong> No payment is taken: the seat is confirmed at once and recorded like a paid booking. This only happens on the test site, before card payments are switched on.</p>{% endif %}
-          {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+          {% if error or wl_error %}<p class="alert" role="alert">{{ error or wl_error }}</p>{% endif %}
 
           <fieldset class="field">
             <legend>Course</legend>

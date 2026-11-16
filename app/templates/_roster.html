@@ -1,0 +1,41 @@
+{# The class roster with attendance buttons. mark_endpoint: where a mark is posted (console or teach). #}
+{% macro roster(s, students, can, mark_endpoint, show_contacts=false, link_bookings=false) %}
+{% set statuses = {'confirmed': ('wait', 'Booked'), 'awaiting_payment': ('wait', 'Booked (invoice)'),
+                   'completed': ('ok', 'Complete'), 'no_show': ('bad', 'No show'), 'displaced': ('bad', 'Needs a new date')} %}
+<section class="panel" id="roster" aria-labelledby="roster-title">
+  <div class="panel-head"><h2 id="roster-title">Class list</h2>
+    {% set done = students|selectattr('status', 'in', ['completed', 'no_show'])|list|length %}
+    <span class="small muted num">{{ students|length }} student{{ 's' if students|length != 1 }} · {{ done }} marked · {{ students|selectattr('checked_in_at')|list|length }} checked in</span></div>
+  {% if not can.class_day %}
+  <p class="muted small">Check-in and Complete / No Show open on class day ({{ s.local_date.strftime('%a %b %-d') }}).</p>
+  {% elif not can.can_mark and s.status != 'cancelled' %}
+  <p class="muted small">Attendance is closed for this class{% if s.status == 'completed' %}: it's finished{% endif %}. The office can still correct a mark.</p>
+  {% endif %}
+  {% if students %}
+  <div class="scroll-x"><table class="table roster">
+    <thead><tr><th>Student</th><th>Course</th><th>Status</th>{% if can.can_mark %}<th><span class="sr-only">Attendance</span></th>{% endif %}</tr></thead>
+    <tbody>{% for r in students %}{% set st = statuses.get(r.status, ('off', r.status)) %}
+      <tr>
+        <td>{% if link_bookings %}<a href="{{ url_for('console.find_booking', public_id=r.public_id) }}">{{ r.attendee_last_name }}, {{ r.attendee_first_name }}</a>{% else %}<strong>{{ r.attendee_last_name }}, {{ r.attendee_first_name }}</strong>{% endif %}
+          {% if show_contacts %}<br><span class="small muted">{{ r.attendee_email }}{% if r.attendee_phone_e164 %} · <span class="num">{{ r.attendee_phone_e164 }}</span>{% endif %}</span>{% endif %}</td>
+        <td>{{ r.product_name }}</td>
+        <td><span class="status {{ st[0] }}">{{ st[1] }}</span>{% if r.checked_in_at %} <span class="status ok">Checked in</span>{% endif %}
+          {% if r.last_mark %}<br><span class="small muted">{{ r.last_mark.mark|replace('_', ' ')|capitalize }} by {{ r.last_mark.by or 'staff' }}</span>{% endif %}</td>
+        {% if can.can_mark %}
+        <td>{% if r.status != 'displaced' %}
+          <form method="post" action="{{ url_for(mark_endpoint, public_id=s.public_id) }}" class="mark-row">
+            {{ csrf_input() }}<input type="hidden" name="seat" value="{{ r.public_id }}">
+            {% if not r.checked_in_at and r.status in ('confirmed', 'awaiting_payment') %}<button class="btn-small" name="mark" value="checked_in" type="submit">Check in</button>{% endif %}
+            {% if r.status != 'completed' %}<button class="btn-small primary" name="mark" value="complete" type="submit">Complete</button>{% endif %}
+            {% if r.status != 'no_show' %}<button class="btn-small" name="mark" value="no_show" type="submit">No show</button>{% endif %}
+            {% if r.status in ('completed', 'no_show') or r.checked_in_at %}<button class="btn-small plain" name="mark" value="cleared" type="submit">Clear</button>{% endif %}
+          </form>{% endif %}</td>
+        {% endif %}
+      </tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}
+  <div class="empty">No students booked in this class.</div>
+  {% endif %}
+</section>
+{% endmacro %}

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from flask import Flask
@@ -103,3 +103,4 @@ def init_app(app: Flask) -> None:
     app.add_template_global(local_dt)
     app.add_template_global(class_date)
     app.add_template_global(class_time)
+    app.add_template_global(date.today, "today")

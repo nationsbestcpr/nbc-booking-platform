@@ -1,0 +1,49 @@
+{% extends "dash/layout.html" %}
+{% block title %}Cancel · {{ r.attendee_first_name }} {{ r.attendee_last_name }}{% endblock %}
+{% block heading %}Cancel the booking <span class="accent">{{ r.attendee_first_name }} {{ r.attendee_last_name }}</span>{% endblock %}
+{% block subhead %}<p>{{ r.course_name }} · <span class="num">{{ class_date(r.starts_at, r.time_zone) }} · {{ class_time(r.starts_at, r.ends_at, r.time_zone) }}</span> · {{ r.site_name }}</p>{% endblock %}
+{% block panel %}
+<p class="small"><a href="{{ url_for('console.find_booking', public_id=r.public_id) }}">← Back to the booking</a></p>
+{% if not live %}
+<p class="notice warn" role="status">This seat isn't booked any more ({{ reg_status.get(r.status, ('', r.status))[1] }}), so there's nothing to cancel.</p>
+{% else %}
+<div class="cols">
+  <section class="panel" aria-labelledby="facts-title">
+    <h2 id="facts-title">What the rules look at</h2>
+    <dl class="kv">
+      <dt>Class starts</dt><dd class="num">{% if r.hours_to_class > 0 %}in {{ (r.hours_to_class // 24)|int }} days {{ (r.hours_to_class % 24)|int }} hours{% else %}has started or finished{% endif %}</dd>
+      <dt>Paid for this seat</dt><dd class="num">{{ r.amount_paid_cents|money }}{% if r.amount_refunded_cents %} · {{ r.amount_refunded_cents|money }} refunded{% endif %}</dd>
+      <dt>Can go back</dt><dd class="num"><strong>{{ info.left|money }}</strong></dd>
+      <dt>Policy</dt><dd>{% if hint.policy %}{{ hint.policy.title }} <span class="small muted">v{{ hint.policy.version }}</span>{% for w in hint.why %}<br><span class="small">{{ w }}</span>{% endfor %}
+        {% else %}<span class="status wait">Not loaded yet</span><br><span class="small muted">Until NBC's written policy is loaded, follow it by hand: a full refund up to 7 days before class; inside that, a transfer instead. Under 24 hours' notice the fee is kept. Your choice is logged.</span>{% endif %}</dd>
+    </dl>
+    <p class="muted small">A move to another date is often better for the student: <a href="{{ url_for('console.find_booking_action', public_id=r.public_id, action='transfer') }}">Move to another class</a>.</p>
+  </section>
+
+  <section class="panel" aria-labelledby="form-title">
+    <h2 id="form-title">Cancel this seat</h2>
+    {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+    <form method="post" action="{{ url_for('console.booking_cancel', public_id=r.public_id) }}" class="stack" novalidate>
+      {{ csrf_input() }}
+      <div class="field"><label for="reason">Why</label>
+        <select id="reason" name="reason" required>
+          <option value="">Choose…</option>
+          {% for k, v in reasons.items() %}<option value="{{ k }}"{{ ' selected' if form.reason == k }}>{{ v }}</option>{% endfor %}
+        </select></div>
+      {% if can_refund and info.left > 0 %}
+      <div class="field"><label for="refund">Refund to the card (dollars)</label>
+        <input type="text" id="refund" name="refund" inputmode="decimal" value="{{ form.refund or ('%.2f'|format(hint.refund_cents / 100) if hint.refund_cents is not none else '0') }}">
+        <span class="hint">Up to {{ info.left|money }}. 0 for none. The usual refund rules apply: without a large-refund amount set, customer service refunds wait for a manager.</span></div>
+      {% elif info.left > 0 %}
+      <p class="small muted">Your role can't refund: cancel here, then ask someone who can to refund it.</p>
+      {% endif %}
+      <div class="field"><label for="note">Note</label>
+        <textarea id="note" name="note" rows="2" maxlength="500" placeholder="What they told you">{{ form.note }}</textarea>
+        <span class="hint">Required for “Fixing a mistake” and “NBC cancelled: another reason”.</span></div>
+      <label class="check"><input type="checkbox" name="confirm" value="yes"{{ ' checked' if form.confirm == 'yes' }}> The seat goes back on sale at once (to the waiting list first), and GHL moves to Cancelled, which sends the cancellation message.</label>
+      <button class="pill red" type="submit" style="align-self:flex-start">Cancel the booking <span class="arrow" aria-hidden="true">→</span></button>
+    </form>
+  </section>
+</div>
+{% endif %}
+{% endblock %}

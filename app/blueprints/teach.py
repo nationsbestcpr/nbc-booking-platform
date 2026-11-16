@@ -1,14 +1,17 @@
-"""Instructor area: the classes this instructor teaches and their certifications.
+"""Instructor area: the classes this instructor teaches, class day, and their certifications.
 
 Needs 'own.classes_view' (the instructor role has it). Only this account's own
-instructor record is read; lead and helper instructors see the same page.
+instructor record is read; lead and helper instructors see the same page and
+can both mark attendance (hub 9d). Class day: the roster, check-in, Complete /
+No Show (each mark records who made it), finishing the class, and the Red
+Cross class list (app/attendance.py).
 """
 
 from __future__ import annotations
 
-from flask import Blueprint, render_template
+from flask import Blueprint, Response, abort, flash, redirect, render_template, request, url_for
 
-from .. import areas, auth, db
+from .. import areas, attendance, auth, db
 
 bp = Blueprint("teach", __name__, url_prefix="/teach")
 
@@ -22,27 +25,17 @@ def home():
           FROM instructors i LEFT JOIN metros hm ON hm.id = i.hub_metro_id
          WHERE i.user_account_id = :id
     """, id=user.id)
-    classes, certs = [], []
+    classes, certs, recent = [], [], []
     if instructor:
-        classes = db.fetch_all("""
-            SELECT a.role, s.starts_at, s.ends_at, s.time_zone, cf.name AS course_name,
-                   si.name AS site_name, m.name AS city_name, av.sold_seats, av.seat_limit, av.waitlist_count
-              FROM assignments a
-              JOIN sessions s ON s.id = a.session_id
-              JOIN sites si ON si.id = s.site_id
-              JOIN metros m ON m.id = s.metro_id
-              JOIN course_families cf ON cf.id = s.course_family_id
-              JOIN session_availability av ON av.session_id = s.id
-             WHERE a.instructor_id = :iid AND a.status = 'assigned'
-               AND s.status = 'scheduled' AND s.starts_at > now()
-             ORDER BY s.starts_at
-        """, iid=instructor["id"])
+        classes = [c for c in attendance.recent_for_instructor(instructor["id"])
+                   if not c["past"] and c["status"] == "scheduled"]
+        recent = [c for c in attendance.recent_for_instructor(instructor["id"]) if c["past"]]
         certs = db.fetch_all("""
             SELECT cert_type, expires_on, (expires_on - current_date) AS days_left, verified_at
               FROM instructor_certs WHERE instructor_id = :iid ORDER BY expires_on
         """, iid=instructor["id"])
     return render_template("teach/home.html", instructor=instructor, classes=classes, certs=certs,
-                           tabs=areas.tabs_for(user))
+                           recent=recent, tabs=areas.tabs_for(user))
 
 
 def _my_instructor_id() -> int | None:
@@ -82,3 +75,61 @@ def pay():
         totals[r["status"]] = totals.get(r["status"], 0) + r["amount_cents"]
     return render_template("teach/pay.html", linked=iid is not None, rows=rows, totals=totals,
                            tabs=areas.tabs_for(auth.current_user()))
+
+
+# --- Class day ---------------------------------------------------------------------------
+
+def _my_class(public_id: str) -> tuple[dict, dict]:
+    """The class, if this instructor teaches it (lead or helper)."""
+    s = attendance.session_by_public_id(public_id)
+    if not s:
+        abort(404)
+    can = attendance.access(s)
+    if can["assignment"] is None:
+        abort(404)
+    return s, can
+
+
+@bp.get("/classes/<public_id>")
+@auth.permission_required("own.classes_view")
+def class_day(public_id: str):
+    s, can = _my_class(public_id)
+    return render_template("teach/class.html", s=s, can=can, students=attendance.roster(s["id"]),
+                           marks=attendance.MARKS, tabs=areas.tabs_for(auth.current_user()))
+
+
+@bp.post("/classes/<public_id>/attendance")
+@auth.permission_required("own.attendance")
+def class_mark(public_id: str):
+    s, _ = _my_class(public_id)
+    try:
+        attendance.mark(s, request.form.get("seat", ""), request.form.get("mark", ""))
+    except attendance.AttendanceError as exc:
+        flash(str(exc), "error")
+    return redirect(url_for("teach.class_day", public_id=public_id) + "#roster")
+
+
+@bp.post("/classes/<public_id>/finish")
+@auth.permission_required("own.attendance")
+def class_finish(public_id: str):
+    s, _ = _my_class(public_id)
+    try:
+        done = attendance.finish(s)
+        flash("Class finished. Thank you!" + (" Your pay record is under Pay." if done["pay_records"] else
+                                              " Your pay record is made once the operations team sets the rate."),
+              "ok")
+    except attendance.AttendanceError as exc:
+        flash(str(exc), "error")
+    return redirect(url_for("teach.class_day", public_id=public_id))
+
+
+@bp.get("/classes/<public_id>/class-list.csv")
+@auth.permission_required("own.roster_export")
+def class_export(public_id: str):
+    s, _ = _my_class(public_id)
+    try:
+        body = attendance.export_csv(s)
+    except attendance.AttendanceError:
+        abort(403)
+    name = f"class-list-{s['local_date'].isoformat()}-{s['course_code'].lower()}.csv"
+    return Response(body, mimetype="text/csv", headers={"Content-Disposition": f'attachment; filename="{name}"'})

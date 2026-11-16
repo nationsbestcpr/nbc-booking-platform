@@ -1,0 +1,69 @@
+{% extends "dash/layout.html" %}
+{% block title %}Move to another class · {{ r.attendee_first_name }} {{ r.attendee_last_name }}{% endblock %}
+{% block heading %}Move to another class <span class="accent">{{ r.attendee_first_name }} {{ r.attendee_last_name }}</span>{% endblock %}
+{% block subhead %}<p>Now: {{ r.course_name }} ({{ r.product_name }}) · <span class="num">{{ class_date(r.starts_at, r.time_zone) }} · {{ class_time(r.starts_at, r.ends_at, r.time_zone) }}</span> · {{ r.site_name }}</p>{% endblock %}
+{% block panel %}
+<p class="small"><a href="{{ url_for('console.find_booking', public_id=r.public_id) }}">← Back to the booking</a></p>
+{% if not live %}
+<p class="notice warn" role="status">This seat isn't booked any more ({{ reg_status.get(r.status, ('', r.status))[1] }}), so it can't be moved.</p>
+{% else %}
+<div class="cols">
+  <section class="panel" aria-labelledby="facts-title">
+    <h2 id="facts-title">What the rules look at</h2>
+    <dl class="kv">
+      <dt>Class starts</dt><dd class="num">{% if r.hours_to_class > 0 %}in {{ (r.hours_to_class // 24)|int }} days {{ (r.hours_to_class % 24)|int }} hours{% else %}has started or finished{% endif %}</dd>
+      <dt>Moves so far</dt><dd class="num">{{ r.transfers_used }}</dd>
+      <dt>Paid for this seat</dt><dd class="num">{{ r.amount_paid_cents|money }}{% if r.amount_refunded_cents %} · {{ r.amount_refunded_cents|money }} refunded{% endif %}{% if r.status == 'awaiting_payment' %} · <span class="status wait">Invoice not paid yet</span>{% endif %}</dd>
+      <dt>Policy</dt><dd>{% if hint.policy %}{{ hint.policy.title }} <span class="small muted">v{{ hint.policy.version }}</span>{% for w in hint.why %}<br><span class="small">{{ w }}</span>{% endfor %}
+        {% else %}<span class="status wait">Not loaded yet</span><br><span class="small muted">Until NBC's written policy is loaded, follow it by hand: one free transfer 24 hours or more before class; Instructor Training has its own rules. Your choice is logged.</span>{% endif %}</dd>
+    </dl>
+    <p class="muted small">The price difference is worked out from the two classes' prices: a dearer class sends the buyer a payment link (text and email), a cheaper one refunds the difference to the card.{% if r.status == 'awaiting_payment' %} On an unpaid invoice nothing is charged or refunded now.{% endif %}</p>
+  </section>
+
+  <section class="panel" aria-labelledby="form-title">
+    <h2 id="form-title">Move the seat</h2>
+    {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+    <form method="get" action="{{ url_for('console.find_booking_action', public_id=r.public_id, action='transfer') }}" class="desk-search-row">
+      <label class="sr-only" for="tq">Search classes</label>
+      <input type="search" id="tq" name="q" value="{{ q }}" placeholder="Site or city">
+      <button class="btn-small" type="submit">Search</button>
+    </form>
+    <form method="post" action="{{ url_for('console.booking_move', public_id=r.public_id) }}" class="stack" novalidate>
+      {{ csrf_input() }}
+      <fieldset class="field">
+        <legend>New class <span class="muted small">(same course; this city first)</span></legend>
+        {% if targets %}
+        <div class="pick-list">
+          {% for t in targets %}{% for o in (t.offers or []) %}
+          {% set key = t.id ~ ':' ~ o.id %}
+          <label class="pick{{ ' full' if t.seats_left <= 0 }}"><input type="radio" name="target" value="{{ key }}" {{ 'checked' if form.target == key }}>
+            <span><strong class="num">{{ class_date(t.starts_at, t.time_zone) }} · {{ class_time(t.starts_at, t.ends_at, t.time_zone) }}</strong><br>
+              {{ t.site_name }}, {{ t.city_name }} · {{ o.short_name }} <span class="num">{{ o.price_cents|money }}</span>{% if o.price_cents != r.unit_price_cents %} <span class="small muted num">({{ '+' if o.price_cents > r.unit_price_cents else '−' }}{{ ((o.price_cents - r.unit_price_cents)|abs)|money }})</span>{% endif %}</span>
+            <span class="status {{ 'ok' if t.seats_left > 0 else 'bad' }} num">{{ t.seats_left if t.seats_left > 0 else 'Full' }}{{ ' left' if t.seats_left > 0 }}</span></label>
+          {% endfor %}{% endfor %}
+        </div>
+        {% else %}
+        <div class="empty">No upcoming class of this course{% if q %} matches “{{ q }}”{% endif %}.</div>
+        {% endif %}
+      </fieldset>
+      <div class="field"><label for="reason">Why</label>
+        <select id="reason" name="reason" required>
+          {% for k, v in reasons.items() %}<option value="{{ k }}"{{ ' selected' if (form.reason or 'customer_request') == k }}>{{ v }}</option>{% endfor %}
+        </select></div>
+      <div class="field"><label for="fee">Transfer fee (dollars)</label>
+        <input type="text" id="fee" name="fee" inputmode="decimal" value="{{ form.fee or ('%.2f'|format(hint.fee_cents / 100) if hint.fee_cents is not none else '0') }}">
+        <span class="hint">0 for a free transfer. Charged with any price difference.</span></div>
+      {% if can_override %}
+      <div class="field"><label for="extra">Extra seat over the limit <span class="muted">(managers)</span></label>
+        <input type="text" id="extra" name="extra_seat" value="{{ form.extra_seat }}" maxlength="500" placeholder="Only if the class is full: why one more seat is OK">
+        <span class="hint">Leave empty unless the new class is full. It adds one seat to that class, logged with your name.</span></div>
+      {% endif %}
+      <div class="field"><label for="note">Note</label>
+        <textarea id="note" name="note" rows="2" maxlength="500" placeholder="What they asked for">{{ form.note }}</textarea></div>
+      <button class="pill red" type="submit" style="align-self:flex-start">Move the seat <span class="arrow" aria-hidden="true">→</span></button>
+      <p class="muted small">One step: the seat moves, the old class gets it back (offered to its waiting list first), GHL gets the new date and place and sends the “class changed” message.</p>
+    </form>
+  </section>
+</div>
+{% endif %}
+{% endblock %}

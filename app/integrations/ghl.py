@@ -178,10 +178,19 @@ FIELD_KEYS = {
 CONTACT_FIELD_KEYS = {
     "contact_invite_link": "contact.nbc_invite_link",
     "contact_booked_by": "contact.nbc_booked_by",
+    # A payment link customer service sends (phone booking, a class change's price difference).
+    "contact_payment_link": "contact.nbc_payment_link",
+    "contact_payment_amount": "contact.nbc_payment_amount",
+    # A waiting-list seat offer: the pay link and when it runs out (class's local time).
+    "contact_offer_link": "contact.nbc_offer_link",
+    "contact_offer_expires": "contact.nbc_offer_expires",
 }
 DEFAULT_TAGS = {"student": "nbc-student", "booked_self": "nbc-booked-self",
                 "booked_by_other": "nbc-booked-by-someone-else", "booker": "nbc-booker",
                 "bring_a_friend": "nbc-bring-a-friend", "send_invite": "nbc-send-invite",
+                "payment_link": "nbc-send-payment-link", "class_moved": "nbc-class-moved", "waitlist": "nbc-waitlist",
+                "waitlist_offer": "nbc-waitlist-offer", "offer_expired": "nbc-offer-expired",
+                "waitlist_no_seat": "nbc-waitlist-no-seat",
                 "course_prefix": "nbc-course-", "city_prefix": "nbc-city-", "addon_prefix": "nbc-addon-"}
 
 
@@ -224,6 +233,8 @@ FIELD_NAMES = {
     "order_total": "Order Total", "delivery": "Delivery", "reg_date": "Reg Date", "booked_by": "Booked By",
     "booked_by_email": "Booked By Email", "booking_type": "Booking Type", "addons": "Addons",
     "contact_invite_link": "NBC Invite Link", "contact_booked_by": "NBC Booked By",
+    "contact_payment_link": "NBC Payment Link", "contact_payment_amount": "NBC Payment Amount",
+    "contact_offer_link": "NBC Offer Link", "contact_offer_expires": "NBC Offer Expires",
 }
 
 
@@ -478,9 +489,10 @@ def sync_registration(job: dict) -> None:
     name = opportunity_name(reg)
     opp_id = reg["ghl_opportunity_id"]
     if opp_id:
-        if reg["ghl_stage_pushed"] != stage["stage_name"]:
+        if reg["ghl_stage_pushed"] != stage["stage_name"] or job["payload"].get("refresh"):
             _call("PUT", f"/opportunities/{opp_id}", json_body={
-                "pipelineId": stage["pipeline_id"], "pipelineStageId": stage["stage_id"], "status": "open"})
+                "pipelineId": stage["pipeline_id"], "pipelineStageId": stage["stage_id"], "status": "open",
+                "name": name, "customFields": _custom_fields(reg, reg_type)})
     else:
         opp_id = _find_opportunity(contact_id, stage["pipeline_id"], name, reg_id)
         if opp_id:
@@ -575,3 +587,127 @@ def send_invite(job: dict) -> None:
             VALUES ('attendee_invite', 'customer', 'email', 'ghl', :to, 'registration', :r, :k, 'sent', now())
             ON CONFLICT (dedupe_key) DO NOTHING
         """), {"to": reg["attendee_email"], "r": reg["id"], "k": f"invite:{reg['id']}:{link[-16:]}"})
+
+
+# --- The desk: a class move and payment links (hub 9b) ---------------------------------
+
+def _retag(contact_id: str, tag: str) -> None:
+    """Remove then add a tag, so the GHL workflow that starts on it runs again each time."""
+    remove_tags(contact_id, [tag])
+    add_tags(contact_id, [tag])
+
+
+@handler("ghl", "move_registration")
+def move_registration(job: dict) -> None:
+    """A seat moved to another class: the same opportunity gets the new date, place and fields
+    (name included), and the attendee's contact is tagged so GHL sends the "class changed" message."""
+    sync_registration({**job, "payload": {**job["payload"], "refresh": True}})
+    reg = _registration(job["payload"]["registration_id"])
+    if reg is None:
+        return
+    contact_id = reg["ghl_contact_id"] or upsert_contact(
+        reg["first_name"] or reg["attendee_first_name"], reg["last_name"] or reg["attendee_last_name"],
+        reg["email"] or reg["attendee_email"], reg["phone_e164"] or reg["attendee_phone_e164"])[0]
+    _retag(contact_id, tags()["class_moved"])
+
+
+@handler("ghl", "send_payment_link")
+def send_payment_link(job: dict) -> None:
+    """A payment link for the buyer (a phone booking, or a class change's price difference): saved on
+    their contact and tagged, so a GHL workflow texts and emails it."""
+    p = job["payload"]
+    with db.engine().connect() as conn:
+        order = conn.execute(text("""
+            SELECT buyer_first_name, buyer_last_name, buyer_email, buyer_phone_e164, status FROM orders WHERE id = :o
+        """), {"o": p["order_id"]}).mappings().first()
+    if order is None or order["status"] not in ("open", "awaiting_payment"):
+        return                                     # paid, cancelled or lapsed meanwhile: nothing to send
+    ids = _field_ids()
+    if not ids.get("contact_payment_link"):
+        raise IntegrationError("GHL: no contact field for the payment link. Press “Create missing fields in GHL” "
+                               "on the Integrations page (it adds NBC Payment Link), then Retry.", retry=False)
+    contact_id, _ = upsert_contact(order["buyer_first_name"], order["buyer_last_name"], order["buyer_email"],
+                                   order["buyer_phone_e164"])
+    set_contact_fields(contact_id, {"contact_payment_link": p["url"],
+                                    "contact_payment_amount": f"{p['amount_cents'] / 100:.2f}"})
+    _retag(contact_id, tags()["payment_link"])
+
+
+# --- The waiting list (hub 9c) -----------------------------------------------------------
+
+def _entry(entry_id: int) -> dict | None:
+    """A waiting-list entry with the fields an opportunity needs (the same shape as a registration)."""
+    with db.engine().connect() as conn:
+        row = conn.execute(text("""
+            SELECT w.id, w.public_id, w.status, w.first_name, w.last_name, w.email, w.phone_e164, w.party_size,
+                   w.ghl_opportunity_id, w.first_name AS attendee_first_name, w.last_name AS attendee_last_name,
+                   w.email AS attendee_email, w.first_name AS buyer_first_name, w.last_name AS buyer_last_name,
+                   w.email AS buyer_email, false AS is_bring_a_friend, NULL::timestamptz AS confirmed_at,
+                   sp.price_cents AS unit_price_cents, 0 AS order_total_cents,
+                   s.starts_at, s.ends_at, s.time_zone, s.public_id AS session_public_id, s.delivery_mode,
+                   s.airtable_lead_instructor, si.name AS site_name, si.city AS site_city, si.address_line1,
+                   si.state_code AS site_state, si.postal_code, m.market_code, m.name AS metro_name,
+                   m.slug AS metro_slug, cf.slug AS course_slug, p.ghl_course_code, p.short_name,
+                   p.name AS product_name
+              FROM waitlist_entries w
+              JOIN sessions s ON s.id = w.session_id
+              JOIN session_products sp ON sp.session_id = w.session_id AND sp.product_id = w.preferred_product_id
+              JOIN products p ON p.id = w.preferred_product_id
+              JOIN course_families cf ON cf.id = s.course_family_id
+              JOIN sites si ON si.id = s.site_id
+              JOIN metros m ON m.id = s.metro_id
+             WHERE w.id = :id
+        """), {"id": entry_id}).mappings().first()
+    return dict(row) if row else None
+
+
+@handler("ghl", "sync_waitlist_entry")
+def sync_waitlist_entry(job: dict) -> None:
+    """Someone joined a waiting list: their contact, and an opportunity in the Waitlisted stage
+    (it moves to Pending if they get a seat and pay)."""
+    entry = _entry(job["payload"]["entry_id"])
+    if entry is None or entry["status"] not in ("waiting", "offered", "offer_expired"):
+        return
+    contact_id, _ = upsert_contact(entry["first_name"], entry["last_name"], entry["email"], entry["phone_e164"])
+    if not entry["ghl_opportunity_id"]:
+        stage = _stage("waitlisted")
+        res = _create_opportunity({
+            "locationId": location_id(), "pipelineId": stage["pipeline_id"], "pipelineStageId": stage["stage_id"],
+            "name": opportunity_name(entry), "status": "open", "contactId": contact_id, "monetaryValue": 0,
+            "source": "NBC booking engine", "customFields": _custom_fields(entry, None)})
+        opp_id = (res.get("opportunity") or {}).get("id")
+        if opp_id:
+            with db.transaction() as conn:
+                conn.execute(text("UPDATE waitlist_entries SET ghl_opportunity_id = :o WHERE id = :id"),
+                             {"o": opp_id, "id": entry["id"]})
+    t = tags()
+    add_tags(contact_id, [t["waitlist"], t["course_prefix"] + _slug(entry["course_slug"]),
+                          t["city_prefix"] + _slug(entry["metro_slug"])])
+
+
+@handler("ghl", "waitlist_notice")
+def waitlist_notice(job: dict) -> None:
+    """A seat offer (link and expiry on the contact, then the offer tag), "Offer expired", or the
+    cut-off's "no seat opened" notice: each is a tag a GHL workflow starts on."""
+    p = job["payload"]
+    entry = _entry(p["entry_id"])
+    if entry is None:
+        return
+    contact_id, _ = upsert_contact(entry["first_name"], entry["last_name"], entry["email"], entry["phone_e164"])
+    t = tags()
+    if p["kind"] == "offer":
+        ids = _field_ids()
+        if not ids.get("contact_offer_link"):
+            raise IntegrationError("GHL: no contact field for the waiting-list offer link. Press “Create missing "
+                                   "fields in GHL” on the Integrations page (it adds NBC Offer Link), then Retry.",
+                                   retry=False)
+        set_contact_fields(contact_id, {"contact_offer_link": p["url"], "contact_offer_expires": p["expires"]})
+        _retag(contact_id, t["waitlist_offer"])
+    elif p["kind"] == "expired":
+        _retag(contact_id, t["offer_expired"])
+    elif p["kind"] == "no_seat":
+        _retag(contact_id, t["waitlist_no_seat"])
+        if entry["ghl_opportunity_id"]:
+            stage = _stage("cancelled")
+            _call("PUT", f"/opportunities/{entry['ghl_opportunity_id']}", json_body={
+                "pipelineId": stage["pipeline_id"], "pipelineStageId": stage["stage_id"], "status": "open"})

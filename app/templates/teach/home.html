@@ -1,7 +1,7 @@
 {% extends "dash/layout.html" %}
 {% block title %}Instructor dashboard{% endblock %}
 {% block heading %}Hi, {{ current_user.first_name }} <span class="accent">Your Teaching</span>{% endblock %}
-{% block subhead %}<p>The classes you teach, live seat numbers and your certifications.</p>{% endblock %}
+{% block subhead %}<p>The classes you teach, live seat numbers, class-day attendance and your certifications.</p>{% endblock %}
 {% block panel %}
 {% if not instructor %}
 <section class="panel">
@@ -24,7 +24,7 @@
     <ul class="list">
       {% for c in classes %}
       <li>
-        <span><strong>{{ c.course_name }}</strong><br>
+        <span><strong><a href="{{ url_for('teach.class_day', public_id=c.public_id) }}">{{ c.course_name }}</a></strong>{% if c.today %} <span class="status ok">Today: take attendance</span>{% endif %}<br>
           <span class="meta num">{{ class_date(c.starts_at, c.time_zone) }} · {{ class_time(c.starts_at, c.ends_at, c.time_zone) }}</span><br>
           <span class="meta">{{ c.site_name }}, {{ c.city_name }} · <span class="num">{{ c.sold_seats }} of {{ c.seat_limit }} seats sold</span>{% if c.waitlist_count %} · <span class="num">{{ c.waitlist_count }}</span> waiting{% endif %}</span></span>
         <span class="status {{ 'ok' if c.role == 'lead' else 'wait' }}">{{ 'Lead instructor' if c.role == 'lead' else 'Helper instructor' }}</span>
@@ -33,6 +33,18 @@
     </ul>
     {% else %}
     <div class="empty">No upcoming classes assigned to you yet.</div>
+    {% endif %}
+    {% if recent %}
+    <h3 class="sub-head">This past week</h3>
+    <ul class="list">
+      {% for c in recent %}
+      <li><span><a href="{{ url_for('teach.class_day', public_id=c.public_id) }}">{{ c.course_name }}</a><br>
+        <span class="meta num">{{ class_date(c.starts_at, c.time_zone) }} · {{ c.site_name }}</span></span>
+        {% if c.status == 'completed' %}<span class="status ok">Finished</span>
+        {% elif c.unmarked %}<span class="status wait">{{ c.unmarked }} to mark</span>
+        {% else %}<span class="status wait">Ready to finish</span>{% endif %}</li>
+      {% endfor %}
+    </ul>
     {% endif %}
   </section>
   <section class="panel" aria-labelledby="cert-title">

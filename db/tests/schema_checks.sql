@@ -601,5 +601,23 @@ SELECT pg_temp.check(
   AND NOT EXISTS (SELECT 1 FROM role_permissions WHERE permission_code = 'booking_setup.manage'),
   'booking questions and add-ons are set up by admins (no other role has it yet)');
 
+-- 0009: waiting-list size and location type follow the room; desk settings; price-difference pages.
+SELECT pg_temp.check((SELECT location_type = 'co_instructor' AND waitlist_limit = 8 FROM sessions, ids WHERE id = s1)
+                     AND (SELECT location_type = 'one_instructor' AND waitlist_limit = 12 FROM sessions, ids WHERE id = s2),
+  'a big room is a co-instructor location listing the space above one instructor''s max; a small room lists one instructor''s worth');
+UPDATE sessions SET room_max_student_count = 30, capacity = 12 FROM ids WHERE sessions.id = s1;
+SELECT pg_temp.check((SELECT waitlist_limit = 12 FROM sessions, ids WHERE id = s1),
+  'a waiting list is never longer than one instructor''s worth');
+UPDATE sessions SET room_max_student_count = 20 FROM ids WHERE sessions.id = s1;
+SELECT pg_temp.check((SELECT count(*) = 3 FROM app_settings
+                       WHERE key IN ('phone_link_hold_minutes', 'invoice_due_days', 'attendance_instructor_days')),
+  'phone links, invoices and attendance have their business settings');
+SELECT pg_temp.check((SELECT value ? 'class_moved' AND value ? 'waitlist_offer' AND value ? 'payment_link'
+                        FROM app_settings WHERE key = 'ghl_tags'),
+  'GHL tags exist for a class move, a payment link and waiting-list offers');
+SELECT pg_temp.check((SELECT is_nullable = 'YES' FROM information_schema.columns
+                       WHERE table_name = 'checkout_sessions' AND column_name = 'seat_hold_id'),
+  'a page collecting a transfer''s price difference holds no seat');
+
 \echo 'All schema checks passed.'
 ROLLBACK;

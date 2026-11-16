@@ -58,7 +58,9 @@ def tick() -> dict:
     """One pass. Each step is independent: one failing doesn't stop the others."""
     from . import airtable_sync, checkout, outbox
     done: dict = {}
+    from .. import waitlist
     for name, step in (("holds_released", checkout.expire_holds),
+                       ("waitlist", waitlist.tick),
                        ("jobs", lambda: {k: v for k, v in outbox.run_due().items() if v}),
                        ("airtable", lambda: airtable_sync.run("schedule") if airtable_due() else None)):
         try:

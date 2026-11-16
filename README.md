@@ -401,6 +401,8 @@ above before the first publish.
 | Accounts for booking: sign in before booking, Google and Microsoft sign-in, My classes dashboard | Done |
 | Booking console skeleton: desk for customer service and managers (find a student, booking page, notes; transfer, cancel, refund, phone and invoice booking pages laid out) | Done |
 | Console refunds: customer service asks, a manager approves (all refunds until the large-refund amount is set), money back through Stripe; Find a student lists the next classes' students with filters | Done |
-| Booking console actions: transfer, cancel, phone and invoice bookings | Next |
-| 2. Search pages and SEO | To do |
+| Booking console actions: move a seat (price difference charged or credited, a manager adds a seat over the limit), cancel (refund or forfeit), move a cancelled class together, phone bookings (Stripe link through GHL) and invoice / PO bookings (Stripe invoice or a recorded cheque) | Done |
+| Attendance: either instructor (or the office) marks Complete / No show, finishing the class makes pay records, Red Cross class list (CSV) | Done |
+| Customer waiting list: join a full class, seats offered for 2 hours (8 AM – 6 PM class time), "Offer expired", cut-offs, groups only when they fit, staff remove / offer again | Done |
+| 2. Search pages and SEO | Done |
 | 4. GHL webhooks (GHL → engine) · 4a tracking · 4c instructor portal · Airtable write-back | To do |

@@ -27,7 +27,7 @@ def create_app(overrides: dict | None = None) -> Flask:
     cli.init_app(app)
 
     from .blueprints import (account, admin, admin_integrations, admin_records, admin_setup,  # noqa: F401
-                             book, console, health, me, public, seo, teach, webhooks)
+                             book, console, health, me, public, seo, teach, waiting, webhooks)
 
     seo.init_app(app)                      # address parts (/richmond-va/bls/...) before any rule uses them
 
@@ -36,6 +36,7 @@ def create_app(overrides: dict | None = None) -> Flask:
     app.register_blueprint(account.bp)
     app.register_blueprint(public.bp)
     app.register_blueprint(book.bp)
+    app.register_blueprint(waiting.bp)
     app.register_blueprint(me.bp)
     app.register_blueprint(teach.bp)
     app.register_blueprint(admin.bp)

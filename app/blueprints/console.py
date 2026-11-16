@@ -6,20 +6,24 @@ in; admins reach it from the admin sidebar. What each person sees is set by
 permissions (db/seed.sql), and every list only shows classes in the cities
 their role covers (user_has_permission(..., metro_id) in SQL).
 
-This is the skeleton: finding students and bookings, a booking's full
-picture (seats, payments, refunds, transfers, GHL, notes) and notes work.
-Transfer, cancel, refund, phone and invoice bookings and refund approvals have
-their pages, which say what each will do, but don't change anything yet.
+Finding students and bookings, a booking's full picture (seats, payments,
+refunds, transfers, GHL, notes), notes, refunds with manager approval, moving
+a seat to another class, cancelling, phone bookings (a payment link) and
+invoice bookings, and a class's roster: attendance, moving a cancelled class's
+students together, and the Red Cross class list (app/desk.py,
+app/attendance.py, app/integrations/checkout.py).
 """
 
 from __future__ import annotations
 
 import re
 
-from flask import Blueprint, abort, flash, redirect, render_template, request, url_for
+from datetime import date, timedelta
+
+from flask import Blueprint, Response, abort, current_app, flash, redirect, render_template, request, url_for
 from sqlalchemy import text
 
-from .. import areas, audit, auth, classes, db, refunds
+from .. import areas, attendance, audit, auth, classes, db, desk, refunds, waitlist
 
 bp = Blueprint("console", __name__, url_prefix="/console")
 
@@ -37,7 +41,7 @@ REFUND_STATUS = {
 CHANNELS = {"web": "Online", "phone": "Phone", "invoice": "Invoice", "admin": "Staff",
             "waitlist_offer": "Waiting-list offer", "transfer_adjustment": "Transfer difference"}
 
-# The actions on a booking, with the permission each needs. Their pages are placeholders for now.
+# The actions on a booking, with the permission each needs.
 ACTIONS = {
     "transfer": ("Move to another class", "booking.transfer"),
     "cancel": ("Cancel the booking", "booking.cancel"),
@@ -240,7 +244,8 @@ def _booking_or_404(public_id: str) -> dict:
         SELECT r.*, o.id AS order_id, o.public_id AS order_public_id, o.channel, o.status AS order_status,
                o.buyer_first_name, o.buyer_last_name, o.buyer_email, o.buyer_phone_e164, o.buyer_user_id,
                o.total_cents, o.discount_cents AS order_discount_cents, o.livemode, o.created_at AS ordered_at,
-               s.id AS session_id, s.metro_id, s.starts_at, s.ends_at, s.time_zone, s.status AS class_status,
+               s.id AS session_id, s.public_id AS session_public_id, s.metro_id, s.starts_at, s.ends_at,
+               s.time_zone, s.status AS class_status,
                s.delivery_mode, cf.name AS course_name, cf.code AS course_code, si.name AS site_name,
                si.address_line1, si.city AS site_city, si.state_code AS site_state, m.name AS city_name,
                p.short_name AS product_name, p.name AS product_full_name,
@@ -307,14 +312,98 @@ def find_booking(public_id: str):
          WHERE (l.entity_type = 'registration' AND l.entity_id = :r) OR (l.entity_type = 'order' AND l.entity_id = :o)
          ORDER BY l.occurred_at DESC LIMIT 20
     """, r=r["id"], o=r["order_id"])
-    actions = [{"key": k, "label": label, "allowed": user.can(perm, r["metro_id"])}
+    live = r["status"] in desk.LIVE
+    actions = [{"key": k, "label": label, "allowed": user.can(perm, r["metro_id"]) and (live or k == "refund")}
                for k, (label, perm) in ACTIONS.items()]
     can_decide = user.can("refund.approve_large", r["metro_id"])
     for f in refunds:
         f["can_decide"] = can_decide and f["status"] == "requested"
     return render_template("console/booking.html", r=r, seats=seats, payments=payments, refunds=refunds,
                            transfers=transfers, notes=notes, history=history, actions=actions,
-                           show_money=show_money, can_note=user.can("student.note", r["metro_id"]), **_ctx())
+                           show_money=show_money, can_note=user.can("student.note", r["metro_id"]),
+                           pay=_payment_state(r), **_ctx())
+
+
+def _payment_state(r: dict) -> dict:
+    """What's still to pay on this booking: a phone booking's open payment link, an invoice, or a class
+    change's price difference."""
+    user = auth.current_user()
+    link = db.fetch_one("""
+        SELECT c.url, h.expires_at FROM checkout_sessions c JOIN seat_holds h ON h.id = c.seat_hold_id
+         WHERE c.order_id = :o AND c.status = 'open' AND h.status = 'active' AND h.expires_at > now()
+         ORDER BY c.id DESC LIMIT 1
+    """, o=r["order_id"]) if r["order_status"] == "open" else None
+    invoice = db.fetch_one("""
+        SELECT invoice_due_on, po_number, buyer_company, stripe_invoice_id, total_cents FROM orders WHERE id = :o
+    """, o=r["order_id"]) if r["order_status"] == "awaiting_payment" else None
+    differences = db.fetch_all("""
+        SELECT o.id, o.status, o.total_cents, o.invoice_due_on,
+               (SELECT c.url FROM checkout_sessions c WHERE c.order_id = o.id AND c.status = 'open'
+                 ORDER BY c.id DESC LIMIT 1) AS url
+          FROM registration_transfers t JOIN orders o ON o.id = t.settlement_order_id
+         WHERE t.registration_id = :r ORDER BY t.created_at
+    """, r=r["id"])
+    return {"link": link, "invoice": invoice, "differences": differences,
+            "can_record": invoice is not None and user.can("booking.create_invoice", r["metro_id"]),
+            "can_send": user.can("booking.create_phone", r["metro_id"]) or user.can("booking.transfer", r["metro_id"])}
+
+
+def _base_url() -> str:
+    configured = current_app.config.get("PUBLIC_BASE_URL", "")
+    if configured and "localhost" not in configured:
+        return configured.rstrip("/")
+    return request.url_root.rstrip("/")
+
+
+@bp.post("/bookings/<public_id>/payment")
+@auth.permission_required("booking.create_invoice")
+def booking_record_payment(public_id: str):
+    """An invoice / PO booking paid outside Stripe (a cheque, a bank transfer): record it."""
+    from ..integrations import checkout
+    r = _booking_or_404(public_id)
+    if not auth.current_user().can("booking.create_invoice", r["metro_id"]):
+        abort(403)
+    amount = _cents(request.form.get("amount", ""))
+    reference = request.form.get("reference", "").strip()
+    if amount is None or not reference:
+        flash("Enter the amount received and a reference (cheque number, bank transfer id).", "error")
+    else:
+        try:
+            checkout.record_payment(r["order_id"], amount, reference, auth.current_user().id)
+            flash("Payment recorded. The seats on this invoice are paid.", "ok")
+        except checkout.BookingError as exc:
+            flash(str(exc), "error")
+    return redirect(url_for("console.find_booking", public_id=public_id) + "#money")
+
+
+@bp.post("/bookings/<public_id>/send-link")
+@auth.any_permission_required("booking.create_phone", "booking.transfer")
+def booking_send_link(public_id: str):
+    """Send the open payment link (a phone booking, or a class change's price difference) again through GHL."""
+    from ..integrations.outbox import enqueue
+    r = _booking_or_404(public_id)
+    pay = _payment_state(r)
+    if not pay["can_send"]:
+        abort(403)
+    order_id = request.form.get("order", type=int)
+    target = None
+    if pay["link"] and order_id == r["order_id"]:
+        target = (r["order_id"], pay["link"]["url"], r["total_cents"])
+    for d in pay["differences"]:
+        if d["id"] == order_id and d["status"] == "awaiting_payment":
+            url = d["url"] or desk.send_payment_link(d["id"], _base_url())
+            target = (d["id"], url, d["total_cents"]) if url else None
+    if not target:
+        flash("There's no open payment link on this booking.", "error")
+    else:
+        import uuid
+        with db.transaction() as conn:
+            enqueue(conn, "ghl", "send_payment_link", key=f"ghl-payment-link-{target[0]}-{uuid.uuid4().hex[:8]}",
+                    entity_type="order", entity_id=target[0],
+                    payload={"order_id": target[0], "url": target[1], "amount_cents": target[2]})
+            audit.record(conn, "booking.payment_link_send", "order", target[0])
+        flash("Sending the payment link again (GHL texts and emails it).", "ok")
+    return redirect(url_for("console.find_booking", public_id=public_id) + "#money")
 
 
 @bp.post("/bookings/<public_id>/notes")
@@ -341,7 +430,7 @@ def find_booking_note(public_id: str):
 @bp.get("/bookings/<public_id>/<action>")
 @auth.permission_required("student.view")
 def find_booking_action(public_id: str, action: str):
-    """Transfer and cancel: the page each will have (not built yet). Refund: the real form."""
+    """Move to another class, cancel, refund."""
     if action not in ACTIONS:
         abort(404)
     user = auth.current_user()
@@ -350,15 +439,83 @@ def find_booking_action(public_id: str, action: str):
         abort(403)
     if action == "refund":
         return _refund_page(r)
-    policy = db.fetch_one("""
-        SELECT version, title, rules, approved_by FROM policy_versions
-         WHERE kind = 'refund_transfer_rules' AND effective_from <= now()
-           AND (effective_to IS NULL OR effective_to > now())
-         ORDER BY effective_from DESC LIMIT 1
-    """)
-    threshold = db.fetch_value("SELECT value FROM app_settings WHERE key = 'large_refund_threshold_cents'")
-    return render_template("console/action.html", r=r, action=action, title=ACTIONS[action][0],
-                           policy=policy, threshold=threshold, **_ctx())
+    if action == "transfer":
+        return _move_page(r)
+    return _cancel_page(r)
+
+
+def _move_page(r: dict, error: str | None = None, form: dict | None = None, code: int = 200):
+    user = auth.current_user()
+    q = (request.values.get("q") or "").strip()[:80]
+    return render_template("console/move.html", r=r, error=error, form=form or {}, q=q,
+                           targets=desk.targets(r, user.id, q=q), reasons=desk.MOVE_REASONS,
+                           hint=desk.suggestions(r), live=r["status"] in desk.LIVE,
+                           can_override=user.can("class.capacity_override", r["metro_id"]), **_ctx()), code
+
+
+def _cancel_page(r: dict, error: str | None = None, form: dict | None = None, code: int = 200):
+    user = auth.current_user()
+    return render_template("console/cancel.html", r=r, error=error, form=form or {}, reasons=desk.CANCEL_REASONS,
+                           hint=desk.suggestions(r), live=r["status"] in desk.LIVE,
+                           info=refunds.preview(r["id"]), can_refund=user.can("refund.issue", r["metro_id"]),
+                           **_ctx()), code
+
+
+@bp.post("/bookings/<public_id>/transfer")
+@auth.permission_required("booking.transfer")
+def booking_move(public_id: str):
+    r = _booking_or_404(public_id)
+    if not auth.current_user().can("booking.transfer", r["metro_id"]):
+        abort(403)
+    form = {k: request.form.get(k, "") for k in ("target", "reason", "fee", "note", "extra_seat")}
+    target, _, product = form["target"].partition(":")
+    fee = _cents(form["fee"] or "0")
+    if not (target.isdigit() and product.isdigit()):
+        return _move_page(r, "Pick the class to move to.", form, 400)
+    if fee is None:
+        return _move_page(r, "Enter the fee in dollars, like 25 or 0.", form, 400)
+    try:
+        done = desk.move(r["id"], to_session_id=int(target), to_product_id=int(product), reason=form["reason"],
+                         fee_cents=fee, note=form["note"], extra_seat_reason=form["extra_seat"],
+                         base_url=_base_url())
+    except desk.DeskError as exc:
+        return _move_page(r, str(exc), form, 400)
+    message = "Moved. GHL gets the new date and place and sends the “class changed” message."
+    if done["charge_cents"]:
+        message += (f" {done['charge_cents'] / 100:,.2f} to pay: a payment link is on its way to the buyer by "
+                    "text and email." if done["payment_url"] else
+                    f" {done['charge_cents'] / 100:,.2f} difference recorded as paid (test booking, no card).")
+    if done["credit_cents"]:
+        message += f" {done['credit_cents'] / 100:,.2f} is going back to the card."
+    flash(message, "ok")
+    return redirect(url_for("console.find_booking", public_id=public_id))
+
+
+@bp.post("/bookings/<public_id>/cancel")
+@auth.permission_required("booking.cancel")
+def booking_cancel(public_id: str):
+    r = _booking_or_404(public_id)
+    if not auth.current_user().can("booking.cancel", r["metro_id"]):
+        abort(403)
+    form = {k: request.form.get(k, "") for k in ("reason", "refund", "note", "confirm")}
+    refund = _cents(form["refund"] or "0")
+    if refund is None:
+        return _cancel_page(r, "Enter the refund in dollars, like 108 or 0.", form, 400)
+    if form["confirm"] != "yes":
+        return _cancel_page(r, "Tick the box to confirm: the seat goes back on sale at once.", form, 400)
+    try:
+        done = desk.cancel(r["id"], reason=form["reason"], refund_cents=refund, note=form["note"])
+    except desk.DeskError as exc:
+        return _cancel_page(r, str(exc), form, 400)
+    except refunds.RefundError as exc:
+        flash(f"Cancelled, but the refund didn't go ahead: {exc}", "error")
+        return redirect(url_for("console.find_booking", public_id=public_id))
+    message = "Cancelled. The seat is free again (offered to the waiting list first), and GHL moves to Cancelled."
+    if done["refund"]:
+        flash(_refund_message(done["refund"]["id"], message + " ")[0], "ok")
+    else:
+        flash(message, "ok")
+    return redirect(url_for("console.find_booking", public_id=public_id))
 
 
 # --- Book by phone or invoice --------------------------------------------------------
@@ -371,6 +528,19 @@ def new_booking():
     return render_template("console/new_booking.html", found=found, **_ctx())
 
 
+def _new_page(s: dict, form, error: str | None = None, code: int = 200):
+    user = auth.current_user()
+    from ..integrations import checkout
+    due_days = db.fetch_value("SELECT value FROM app_settings WHERE key = 'invoice_due_days'")
+    due = date.today() + timedelta(days=int(due_days) if isinstance(due_days, (int, float)) else 30)
+    hold = db.fetch_value("SELECT value FROM app_settings WHERE key = 'phone_link_hold_minutes'")
+    seats = max(1, min(request.values.get("seats", type=int) or 1, 50))
+    return render_template("console/new_booking_class.html", s=s, form=form, error=error, seats=seats,
+                           due=due, hold_minutes=hold, testing=checkout.test_checkout(),
+                           can_phone=user.can("booking.create_phone", s["metro_id"]),
+                           can_invoice=user.can("booking.create_invoice", s["metro_id"]), **_ctx()), code
+
+
 @bp.get("/new/<public_id>")
 @auth.any_permission_required("booking.create_phone", "booking.create_invoice")
 def new_booking_class(public_id: str):
@@ -378,7 +548,183 @@ def new_booking_class(public_id: str):
     s = checkout.bookable_session(public_id)
     if not s:
         abort(404)
-    return render_template("console/new_booking_class.html", s=s, **_ctx())
+    return _new_page(s, {})
+
+
+@bp.post("/new/<public_id>")
+@auth.any_permission_required("booking.create_phone", "booking.create_invoice")
+def new_booking_submit(public_id: str):
+    """Book a caller (payment link) or a company (invoice). Card details are never typed here."""
+    from ..integrations import checkout
+    user = auth.current_user()
+    s = checkout.bookable_session(public_id)
+    if not s:
+        abort(404)
+    f = request.form
+    how = f.get("how", "")
+    if how not in ("phone", "invoice") or not user.can(f"booking.create_{how}", s["metro_id"]):
+        return _new_page(s, f, "Choose how they'll pay.", 400)
+    seats = max(1, min(f.get("seats", type=int) or 1, 50))
+    phone = checkout.normalise_phone(f.get("buyer_phone"))
+    buyer = checkout.Person(f.get("buyer_first", "").strip(), f.get("buyer_last", "").strip(),
+                            f.get("buyer_email", "").strip().lower(), phone or None)
+    if not (buyer.first_name and buyer.last_name and checkout.EMAIL.match(buyer.email)):
+        return _new_page(s, f, "Enter the buyer's first name, last name and email.", 400)
+    if phone == "" or (how == "phone" and not phone):
+        return _new_page(s, f, "Enter a valid mobile number: the payment link goes by text and email." if how == "phone"
+                         else "Enter a valid phone number, or leave it blank.", 400)
+    attendees = []
+    for i in range(seats):
+        if i == 0 and f.get("buyer_attends") == "yes":
+            attendees.append(checkout.Person(buyer.first_name, buyer.last_name, buyer.email, phone or None))
+            continue
+        first, last = f.get(f"a{i}_first", "").strip(), f.get(f"a{i}_last", "").strip()
+        email = f.get(f"a{i}_email", "").strip().lower()
+        if not (first and last and checkout.EMAIL.match(email)):
+            return _new_page(s, f, f"Seat {i + 1}: enter the attendee's first name, last name and their own email.",
+                             400)
+        attendees.append(checkout.Person(first, last, email))
+    product_id = f.get("product_id", type=int) or 0
+    try:
+        if how == "phone":
+            made = checkout.start_phone(staff_user_id=user.id, session_public_id=public_id, product_id=product_id,
+                                        buyer=buyer, attendees=attendees, base_url=_base_url())
+            order_id = made["order_id"]
+        else:
+            try:
+                due_on = date.fromisoformat(f.get("due_on", ""))
+            except ValueError:
+                return _new_page(s, f, "Pick the date the invoice is due.", 400)
+            if due_on < date.today():
+                return _new_page(s, f, "The due date can't be in the past.", 400)
+            company = f.get("company", "").strip()
+            if not company:
+                return _new_page(s, f, "Enter the company (or group) the invoice is for.", 400)
+            made = checkout.book_on_invoice(session_public_id=public_id, product_id=product_id, buyer=buyer,
+                                            attendees=attendees, company=company[:200],
+                                            po_number=f.get("po_number", "").strip()[:60] or None, due_on=due_on,
+                                            staff_user_id=user.id)
+            order_id = made["order_id"]
+    except checkout.BookingError as exc:
+        return _new_page(checkout.bookable_session(public_id) or s, f, str(exc), 400)
+    with db.transaction() as conn:
+        audit.record(conn, f"booking.create_{how}", "order", order_id, after={"seats": len(attendees)})
+        if how == "phone" and not made["testing"]:
+            from ..integrations.outbox import enqueue
+            total = conn.execute(text("SELECT total_cents FROM orders WHERE id = :o"), {"o": order_id}).scalar()
+            enqueue(conn, "ghl", "send_payment_link", key=f"ghl-payment-link-{order_id}-first", entity_type="order",
+                    entity_id=order_id, payload={"order_id": order_id, "url": made["url"], "amount_cents": total})
+    first_seat = db.fetch_value("SELECT public_id FROM registrations WHERE order_id = :o ORDER BY id LIMIT 1",
+                                o=order_id)
+    if how == "phone":
+        flash("Booked as a test (no payment taken): the seats are confirmed." if made["testing"] else
+              "Seats held. The payment link is on its way to the buyer by text and email; it's below to copy too.",
+              "ok")
+    else:
+        flash("Booked on invoice: the seats are confirmed and the booking shows “Payment due” until it's paid."
+              + ("" if checkout.test_checkout() else " Stripe emails the invoice."), "ok")
+    return redirect(url_for("console.find_booking", public_id=first_seat) + ("#money" if how == "phone" else ""))
+
+
+# --- A class: roster, attendance, moving a cancelled class's students ------------------
+
+def _class_or_404(public_id: str) -> dict:
+    s = attendance.session_by_public_id(public_id)
+    if not s or not auth.current_user().can("class.view", s["metro_id"]) and \
+            not auth.current_user().can("student.view", s["metro_id"]):
+        abort(404)
+    return s
+
+
+@bp.get("/classes/<public_id>")
+@auth.any_permission_required("class.view", "student.view")
+def class_page(public_id: str):
+    """One class at the desk: the roster with attendance, its waiting list, and (cancelled) moving everyone."""
+    user = auth.current_user()
+    s = _class_or_404(public_id)
+    can = attendance.access(s)
+    moves = desk.targets({"session_id": s["id"]}, user.id) \
+        if s["status"] == "cancelled" and user.can("booking.transfer_bulk", s["metro_id"]) else []
+    waiting = db.fetch_all("""
+        SELECT q.id, q.first_name, q.last_name, q.party_size, q.status, q.position, q.joined_at
+          FROM waitlist_queue q WHERE q.session_id = :s ORDER BY q.position
+    """, s=s["id"]) if user.can("waitlist.view", s["metro_id"]) else None
+    return render_template("console/class.html", s=s, can=can, students=attendance.roster(s["id"]),
+                           marks=attendance.MARKS, moves=moves, waiting=waiting, **_ctx())
+
+
+@bp.post("/classes/<public_id>/attendance")
+@auth.any_permission_required("booking.attendance", "own.attendance")
+def class_mark(public_id: str):
+    s = _class_or_404(public_id)
+    try:
+        attendance.mark(s, request.form.get("seat", ""), request.form.get("mark", ""))
+    except attendance.AttendanceError as exc:
+        flash(str(exc), "error")
+    return redirect(url_for("console.class_page", public_id=public_id) + "#roster")
+
+
+@bp.post("/classes/<public_id>/finish")
+@auth.any_permission_required("booking.attendance", "own.attendance")
+def class_finish(public_id: str):
+    s = _class_or_404(public_id)
+    try:
+        done = attendance.finish(s)
+        flash("Class finished." + (f" {done['pay_records']} pay record{'s' if done['pay_records'] != 1 else ''} "
+                                   "created." if done["pay_records"] else "") +
+              (" No rate is set for the " + " and ".join(done["missing_rates"]) +
+               " instructor yet, so no pay record was made for them." if done["missing_rates"] else ""), "ok")
+    except attendance.AttendanceError as exc:
+        flash(str(exc), "error")
+    return redirect(url_for("console.class_page", public_id=public_id))
+
+
+@bp.get("/classes/<public_id>/class-list.csv")
+@auth.any_permission_required("class.roster_export", "own.roster_export")
+def class_export(public_id: str):
+    s = _class_or_404(public_id)
+    try:
+        body = attendance.export_csv(s)
+    except attendance.AttendanceError:
+        abort(403)
+    name = f"class-list-{s['local_date'].isoformat()}-{s['course_code'].lower()}.csv"
+    return Response(body, mimetype="text/csv", headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@bp.post("/classes/<public_id>/move-all")
+@auth.permission_required("booking.transfer_bulk")
+def class_move_all(public_id: str):
+    s = _class_or_404(public_id)
+    to = request.form.get("to", type=int)
+    if not to:
+        flash("Pick the class to move everyone to.", "error")
+        return redirect(url_for("console.class_page", public_id=public_id) + "#move")
+    try:
+        done = desk.move_class(s["id"], to_session_id=to, note=request.form.get("note", ""))
+        flash(f"Moved {done['moved']} student{'s' if done['moved'] != 1 else ''}. GHL gets each new date and "
+              "place and sends the “class changed” message.", "ok")
+    except desk.DeskError as exc:
+        flash(str(exc), "error")
+    return redirect(url_for("console.class_page", public_id=public_id))
+
+
+@bp.post("/waitlist/<int:entry_id>/<what>")
+@auth.permission_required("waitlist.manage")
+def waitlist_action(entry_id: int, what: str):
+    """Remove someone from a waiting list, or offer a seat again after "Offer expired"."""
+    try:
+        if what == "remove":
+            waitlist.remove(entry_id, request.form.get("why", ""))
+            flash("Removed from the waiting list.", "ok")
+        elif what == "reoffer":
+            waitlist.reoffer(entry_id)
+            flash("Seat offered again: the offer goes out by text and email (8 AM – 6 PM class time).", "ok")
+        else:
+            abort(404)
+    except waitlist.WaitlistError as exc:
+        flash(str(exc), "error")
+    back = request.form.get("back")
+    return redirect(back if auth.is_safe_next(back) else url_for("admin.waitlists"))
 
 
 # --- Refunds -------------------------------------------------------------------------
@@ -421,7 +767,8 @@ def _refund_message(refund_id: int, prefix: str = "") -> tuple[str, str]:
                      id=refund_id)
     amount = f"${f['amount_cents'] / 100:,.2f}"
     if f["status"] == "requested":
-        return f"Refund of {amount} sent to a manager to approve. It's under Refunds → Waiting for a manager.", "ok"
+        return prefix + (f"Refund of {amount} sent to a manager to approve. It's under Refunds → Waiting for a "
+                         "manager."), "ok"
     if f["status"] == "succeeded":
         return prefix + (f"Refunded: {amount} is going back to the card (Stripe)." if f["payment_id"] else
                          f"Refund of {amount} recorded (test booking: no card was charged)."), "ok"

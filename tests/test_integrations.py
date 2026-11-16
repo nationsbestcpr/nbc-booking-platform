@@ -102,6 +102,7 @@ class FakePlatforms:
         self.ghl_created_fields: list[dict] = []           # fields made through the API
         self.ghl_refuse_field_create = False
         self.stripe_refuse_refunds = False
+        self.stripe_invoices: dict[str, dict] = {}          # invoice id -> fields, lines, finalized, sent
         self.ghl_refuse_second_opportunity = False
 
     def add_class(self, *, status=("Enrollware",), start="9:00 AM", minutes=240, course=None, day=None,
@@ -163,6 +164,20 @@ class FakePlatforms:
         if m:
             self.stripe_expired.append(m.group(1))
             return Res(200, {"id": m.group(1), "status": "expired"})
+        if path == "customers":
+            return Res(200, {"id": "cus_" + "".join(random.choices(string.ascii_letters, k=12)), **data})
+        if path == "invoices":
+            inv_id = "in_" + "".join(random.choices(string.ascii_letters, k=14))
+            self.stripe_invoices[inv_id] = {**data, "lines": [], "finalized": False, "sent": False}
+            return Res(200, {"id": inv_id, "status": "draft"})
+        if path == "invoiceitems":
+            self.stripe_invoices[data["invoice"]]["lines"].append(data)
+            return Res(200, {"id": "ii_" + "".join(random.choices(string.ascii_letters, k=12))})
+        m = re.fullmatch(r"invoices/(in_\w+)/(finalize|send)", path)
+        if m:
+            self.stripe_invoices[m.group(1)]["finalized" if m.group(2) == "finalize" else "sent"] = True
+            return Res(200, {"id": m.group(1), "status": "open",
+                             "hosted_invoice_url": f"https://invoice.stripe.test/{m.group(1)}"})
         if path == "refunds":
             if self.stripe_refuse_refunds:
                 return Res(400, {"error": {"type": "invalid_request_error", "code": "charge_already_refunded",
@@ -1061,3 +1076,123 @@ def test_the_home_page_lists_every_city_and_puts_nearby_classes_first(fake, run_
         with app.app_context(), db.transaction() as conn:
             conn.execute(text("UPDATE metros SET booking_system = 'enrollware', cutover_at = NULL WHERE slug = :s"),
                          {"s": fake.metro_slug})
+
+
+# --- The desk: phone, invoice and class-change payments (hub 9b) --------------------------
+
+def desk_booking(client, s, q, how: str, **extra):
+    pid = q("SELECT product_id FROM session_products WHERE session_id = :s AND is_offered ORDER BY price_cents DESC "
+            "LIMIT 1", s=s["id"])[0]["product_id"]
+    page = f"/console/new/{s['public_id']}"
+    data = {"csrf_token": csrf_from(client, page), "how": how, "seats": "1", "product_id": pid,
+            "buyer_first": "Pat", "buyer_last": "Caller", "buyer_email": unique_email("caller"),
+            "buyer_phone": "(757) 555-0142", "buyer_attends": "yes", **extra}
+    return client.post(page, data=data)
+
+
+def test_phone_booking_sends_a_stripe_link_through_ghl(fake, on_sale, client, sign_in, q, app):
+    fake.ghl_contact_fields += ["nbc_payment_link", "nbc_payment_amount"]
+    sign_in("cs@example.test")
+    res = desk_booking(client, on_sale, q, "phone")
+    assert res.status_code == 302 and res.headers["Location"].endswith("#money")
+    cs_id, sent = list(fake.stripe_sessions.items())[-1]
+    assert sent["line_items[0][price_data][unit_amount]"] == "10800"
+    order = order_of(q, cs_id)
+    assert (order["channel"], order["status"]) == ("phone", "open") and order["created_by_user_id"]
+    hold = q("SELECT kind, expires_at - now() AS left FROM seat_holds WHERE order_id = :o", o=order["id"])[0]
+    assert hold["kind"] == "phone_link" and timedelta(minutes=100) < hold["left"] <= timedelta(minutes=120)
+    page = text_of(client.get(res.headers["Location"]))
+    assert f"https://checkout.stripe.test/{cs_id}" in page                     # to copy, or send again
+    with app.app_context():
+        ghl.load_custom_fields()
+        outbox.run_due(targets=["ghl"])
+    contact = fake.ghl_contacts[order["buyer_email"]]
+    assert (contact, "nbc-send-payment-link") in fake.ghl_tag_events
+    assert fake.ghl_contact_values[contact]["cf-contact-nbc_payment_link"] == f"https://checkout.stripe.test/{cs_id}"
+    assert fake.ghl_contact_values[contact]["cf-contact-nbc_payment_amount"] == "108.00"
+    stripe_post(client, completed_event(cs_id, 10800))
+    assert order_of(q, cs_id)["status"] == "paid"
+    assert q("SELECT status FROM registrations WHERE order_id = :o", o=order["id"])[0]["status"] == "confirmed"
+
+
+def test_invoice_booking_is_emailed_by_stripe_and_paid_by_webhook(fake, on_sale, client, sign_in, q, app):
+    sign_in("cs@example.test")
+    res = desk_booking(client, on_sale, q, "invoice", company="Harbor Shipyard", po_number="PO-55",
+                       due_on=(date.today() + timedelta(days=30)).isoformat())
+    assert res.status_code == 302
+    order = q("SELECT o.* FROM orders o JOIN registrations r ON r.order_id = o.id "
+              "WHERE r.session_id = :s AND o.channel = 'invoice'", s=on_sale["id"])[0]
+    assert order["status"] == "awaiting_payment" and order["buyer_company"] == "Harbor Shipyard"
+    with app.app_context():
+        outbox.run_due(targets=["stripe"])
+    inv_id, inv = list(fake.stripe_invoices.items())[-1]
+    assert inv["finalized"] and inv["sent"] and inv["collection_method"] == "send_invoice"
+    assert inv["custom_fields[0][value]"] == "PO-55" and [x["amount"] for x in inv["lines"]] == ["10800"]
+    order = q("SELECT * FROM orders WHERE id = :o", o=order["id"])[0]
+    assert order["stripe_invoice_id"] == inv_id
+    event = {"id": "evt_" + "".join(random.choices(string.ascii_letters, k=16)), "type": "invoice.paid",
+             "livemode": False, "data": {"object": {"id": inv_id, "object": "invoice", "amount_paid": 10800,
+                                                    "payment_intent": "pi_" + "".join(random.choices(string.ascii_letters, k=16)),
+                                                    "metadata": {"order": str(order["public_id"])}}}}
+    assert stripe_post(client, event).get_json()["result"] == "processed"
+    assert q("SELECT status, amount_paid_cents FROM orders WHERE id = :o", o=order["id"])[0] == \
+        {"status": "paid", "amount_paid_cents": 10800}
+    assert q("SELECT status, amount_paid_cents FROM registrations WHERE order_id = :o", o=order["id"])[0] == \
+        {"status": "confirmed", "amount_paid_cents": 10800}
+    assert q("SELECT method, stripe_invoice_id FROM payments WHERE order_id = :o", o=order["id"])[0] == \
+        {"method": "invoice", "stripe_invoice_id": inv_id}
+
+
+def test_a_class_change_with_a_fee_is_paid_through_stripe(fake, on_sale, run_sync, client, sign_in, q, app):
+    rid = fake.add_class(day=(date.today() + timedelta(days=402)).isoformat())
+    run_sync()
+    later = session_for(q, rid)
+    cs = book(client, on_sale, seats=1).headers["Location"].rsplit("/", 1)[1]
+    stripe_post(client, completed_event(cs, 10800))
+    reg = q("""SELECT r.id, r.public_id, r.product_id FROM registrations r JOIN checkout_sessions c
+                 ON c.order_id = r.order_id WHERE c.stripe_checkout_session_id = :cs""", cs=cs)[0]
+    sign_in("cs@example.test")
+    page = f"/console/bookings/{reg['public_id']}/transfer"
+    res = client.post(page, data={"csrf_token": csrf_from(client, page), "target": f"{later['id']}:{reg['product_id']}",
+                                  "reason": "customer_request", "fee": "20", "note": ""})
+    assert res.status_code == 302
+    assert "a payment link is on its way" in text_of(client.get(res.headers["Location"]))
+    diff_cs, sent = list(fake.stripe_sessions.items())[-1]
+    assert sent["line_items[0][price_data][unit_amount]"] == "2000" and sent["metadata[hold]"] == ""
+    assert q("SELECT session_id FROM registrations WHERE id = :r", r=reg["id"])[0]["session_id"] == later["id"]
+    assert q("SELECT 1 FROM outbox_jobs WHERE operation = 'send_payment_link' AND payload->>'url' LIKE :u",
+             u=f"%{diff_cs}")
+    stripe_post(client, completed_event(diff_cs, 2000))
+    t = q("SELECT settlement_order_id FROM registration_transfers WHERE registration_id = :r", r=reg["id"])[0]
+    assert q("SELECT status FROM orders WHERE id = :o", o=t["settlement_order_id"])[0]["status"] == "paid"
+    assert q("SELECT amount_paid_cents FROM registrations WHERE id = :r", r=reg["id"])[0]["amount_paid_cents"] == 12800
+
+
+def test_waiting_list_people_get_a_waitlisted_opportunity_and_their_offer_tag(fake, on_sale, q, app):
+    fake.ghl_contact_fields += ["nbc_offer_link", "nbc_offer_expires"]
+    email = unique_email("waiting")
+    with app.app_context(), db.transaction() as conn:
+        entry = conn.execute(text("""
+            INSERT INTO waitlist_entries (session_id, preferred_product_id, first_name, last_name, email, phone_e164,
+                                          party_size)
+            SELECT :s, product_id, 'Wren', 'Waiting', :e, '+17575550188', 1 FROM session_products
+             WHERE session_id = :s AND is_offered ORDER BY price_cents DESC LIMIT 1
+            RETURNING id
+        """), {"s": on_sale["id"], "e": email}).scalar_one()
+        outbox.enqueue(conn, "ghl", "sync_waitlist_entry", key=f"t-wl-{entry}", entity_type="waitlist_entry",
+                       entity_id=entry, payload={"entry_id": entry})
+        outbox.enqueue(conn, "ghl", "waitlist_notice", key=f"t-wl-offer-{entry}", entity_type="waitlist_entry",
+                       entity_id=entry, payload={"entry_id": entry, "kind": "offer", "url": "https://x.test/offer/1",
+                                                 "expires": "2:15 PM on Sat, Jan 16"}, delay_seconds=0)
+    with app.app_context():
+        ghl.load_custom_fields()
+        outbox.run_due(targets=["ghl"])
+        outbox.run_due(targets=["ghl"])
+    opp_id = q("SELECT ghl_opportunity_id FROM waitlist_entries WHERE id = :e", e=entry)[0]["ghl_opportunity_id"]
+    assert fake.ghl_opps[opp_id]["pipelineStageId"] == "st-wait" and fake.ghl_opps[opp_id]["monetaryValue"] == 0
+    contact = fake.ghl_contacts[email]
+    assert (contact, "nbc-waitlist") in fake.ghl_tag_events and (contact, "nbc-waitlist-offer") in fake.ghl_tag_events
+    assert fake.ghl_contact_values[contact]["cf-contact-nbc_offer_link"] == "https://x.test/offer/1"
+    assert fake.ghl_contact_values[contact]["cf-contact-nbc_offer_expires"] == "2:15 PM on Sat, Jan 16"
+    with app.app_context(), db.transaction() as conn:
+        conn.execute(text("UPDATE waitlist_entries SET status = 'removed' WHERE id = :e"), {"e": entry})

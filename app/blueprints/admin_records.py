@@ -200,7 +200,8 @@ def waitlists():
     """, uid=user.id, **f)
     show_contact = user.has_permission("student.view")
     return render_template("admin/waitlists.html", rows=rows, f=f, wait_status=WAIT_STATUS,
-                           show_contact=show_contact, **_filters(), **_ctx())
+                           show_contact=show_contact, can_manage=user.has_permission("waitlist.manage"),
+                           **_filters(), **_ctx())
 
 
 # --- Locations -----------------------------------------------------------------------

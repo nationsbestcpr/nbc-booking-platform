@@ -96,12 +96,13 @@ def test_booking_page_shows_the_whole_picture(client, sign_in, alder):
         assert part in page, part
 
 
-def test_transfer_and_cancel_are_placeholders_that_change_nothing(client, sign_in, alder, q):
+def test_move_and_cancel_pages_show_the_facts_and_change_nothing_until_sent(client, sign_in, alder, q):
     sign_in("cs@example.test")
     before = q("SELECT status, session_id FROM registrations WHERE id = :i", i=alder["id"])[0]
-    for action in ("transfer", "cancel"):
-        page = text_of(client.get(f"/console/bookings/{alder['public_id']}/{action}"))
-        assert "Coming next" in page and "disabled" in page
+    move = text_of(client.get(f"/console/bookings/{alder['public_id']}/transfer"))
+    assert "Move the seat" in move and "What the rules look at" in move and "Not loaded yet" in move
+    cancel = text_of(client.get(f"/console/bookings/{alder['public_id']}/cancel"))
+    assert "Cancel the booking" in cancel and "goes back on sale at once" in cancel
     assert client.get(f"/console/bookings/{alder['public_id']}/delete").status_code == 404
     assert q("SELECT status, session_id FROM registrations WHERE id = :i", i=alder["id"])[0] == before
 
@@ -153,7 +154,7 @@ def test_phone_booking_starts_from_the_class_search(client, sign_in, q):
                WHERE s.status = 'scheduled' AND s.is_published AND s.starts_at > now() AND a.seats_left > 0
                  AND m.booking_system = 'engine' ORDER BY s.starts_at LIMIT 1""")[0]["public_id"]
     page = text_of(client.get(f"/console/new/{sid}"))
-    assert "Send payment link" in page and "Book and invoice" in page and "Coming next" in page
+    assert "Card, by payment link" in page and "Invoice or PO" in page and "Never take card numbers" in page
 
 
 def test_signing_in_takes_staff_to_their_dashboard_and_customers_to_classes(client, post_form):

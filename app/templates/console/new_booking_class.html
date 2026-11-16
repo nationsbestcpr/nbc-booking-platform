@@ -4,27 +4,75 @@
 {% block subhead %}<p>{{ s.course_name }} · <span class="num">{{ class_date(s.starts_at, s.time_zone) }} · {{ class_time(s.starts_at, s.ends_at, s.time_zone) }}</span> · {{ s.site_name }}, {{ s.city_name }} · <span class="num">{{ s.seats_left }}</span> seats left</p>{% endblock %}
 {% block panel %}
 <p class="small"><a href="{{ url_for('console.new_booking') }}#pick">← Pick another class</a></p>
-<p class="notice warn" role="status"><strong>Coming next.</strong> The form is laid out so the desk can see it; it doesn't book anything yet.</p>
-<div class="cols">
-  <section class="panel" aria-labelledby="phone-title">
-    <h2 id="phone-title">2a. Caller pays by card</h2>
-    <p class="muted small">The seat is held while we text and email them a secure payment link (Stripe). Card details are never typed into this site.</p>
-    <ol class="steps">
-      <li>Enter the buyer and each attendee (name and email; phone for texts).</li>
-      <li>Send the payment link: the seats are held for the same time as an online booking.</li>
-      <li>Once they pay, it's the same as an online booking: confirmation from GHL, seat on their account.</li>
-    </ol>
-    <button class="pill red" type="button" disabled aria-disabled="true">Send payment link <span class="arrow" aria-hidden="true">→</span></button>
+{% if not s.on_sale or s.seats_left <= 0 %}
+<p class="notice warn" role="status">{{ 'This class is full' if s.on_sale else "This class isn't on sale" }}. {% if s.on_sale and s.waitlist_count %}People are waiting for seats here.{% endif %} Pick another date{% if s.on_sale %}, or the caller can join the waiting list from the class page{% endif %}.</p>
+{% else %}
+<form method="get" action="{{ url_for('console.new_booking_class', public_id=s.public_id) }}" class="seat-row">
+  <label for="seats">Seats</label>
+  <select id="seats" name="seats">{% for n in range(1, [s.seats_left, 50]|min + 1) %}<option value="{{ n }}"{{ ' selected' if n == seats }}>{{ n }}</option>{% endfor %}</select>
+  <button class="btn-small" type="submit">Update</button>
+</form>
+<form method="post" action="{{ url_for('console.new_booking_submit', public_id=s.public_id) }}" class="stack" novalidate>
+  {{ csrf_input() }}
+  <input type="hidden" name="seats" value="{{ seats }}">
+  {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+  {% if testing %}<p class="notice warn" role="note"><strong>Test site without Stripe.</strong> A phone booking is confirmed at once with no payment, and an invoice booking isn't emailed: record its payment by hand.</p>{% endif %}
+
+  <section class="panel" aria-labelledby="how-title">
+    <h2 id="how-title">How will they pay?</h2>
+    <div class="choice-tiles">
+      {% if can_phone %}<label class="tile"><input type="radio" name="how" value="phone"{{ ' checked' if form.how != 'invoice' }}><strong>Card, by payment link</strong>
+        <span>We text and email a secure Stripe link; the seats are held for {{ hold_minutes }} minutes while they pay. Never take card numbers over the phone.</span></label>{% endif %}
+      {% if can_invoice %}<label class="tile"><input type="radio" name="how" value="invoice"{{ ' checked' if form.how == 'invoice' or not can_phone }}><strong>Invoice or PO</strong>
+        <span>For employers and groups: seats confirmed now, Stripe emails the invoice, due by the date below.</span></label>{% endif %}
+    </div>
+    <fieldset class="field">
+      <legend>Course</legend>
+      <div class="choice-tiles">
+        {% for o in s.offers %}
+        <label class="tile"><input type="radio" name="product_id" value="{{ o.id }}" {{ 'checked' if (form.product_id|string == o.id|string) or (not form.product_id and loop.first) }}>
+          <strong>{{ o.short_name }} · <span class="num">{{ o.price_cents|money }}</span></strong><span>{{ o.name }}</span></label>
+        {% endfor %}
+      </div>
+    </fieldset>
   </section>
-  <section class="panel" aria-labelledby="inv-title">
-    <h2 id="inv-title">2b. Company pays by invoice</h2>
-    <p class="muted small">For employers and groups: seats are confirmed now and the money is due by the invoice date.</p>
-    <ol class="steps">
-      <li>Company, billing contact, PO number if they have one.</li>
-      <li>Each attendee (name and email).</li>
-      <li>Stripe sends the invoice; the booking shows "Payment due" until it's paid.</li>
-    </ol>
-    <button class="pill red" type="button" disabled aria-disabled="true">Book and invoice <span class="arrow" aria-hidden="true">→</span></button>
+
+  <section class="panel" aria-labelledby="buyer-title">
+    <h2 id="buyer-title">Buyer <span class="muted small">(who pays; gets the link or the invoice)</span></h2>
+    <div class="row-3">
+      <div class="field"><label for="bf">First name</label><input type="text" id="bf" name="buyer_first" value="{{ form.buyer_first }}" required></div>
+      <div class="field"><label for="bl">Last name</label><input type="text" id="bl" name="buyer_last" value="{{ form.buyer_last }}" required></div>
+      <div class="field"><label for="be">Email</label><input type="email" id="be" name="buyer_email" value="{{ form.buyer_email }}" required></div>
+    </div>
+    <div class="row-3">
+      <div class="field"><label for="bp">Mobile phone</label><input type="text" inputmode="tel" id="bp" name="buyer_phone" value="{{ form.buyer_phone }}"><span class="hint">Needed for a payment link (it goes by text too).</span></div>
+      {% if can_invoice %}
+      <div class="field"><label for="co">Company <span class="muted">(invoice)</span></label><input type="text" id="co" name="company" value="{{ form.company }}" maxlength="200"></div>
+      <div class="field"><label for="po">PO number <span class="muted">(if they have one)</span></label><input type="text" id="po" name="po_number" value="{{ form.po_number }}" maxlength="60"></div>
+      {% endif %}
+    </div>
+    {% if can_invoice %}
+    <div class="field" style="max-width:16rem"><label for="due">Invoice due <span class="muted">(invoice)</span></label><input type="date" id="due" name="due_on" value="{{ form.due_on or due.isoformat() }}"></div>
+    {% endif %}
   </section>
-</div>
+
+  <section class="panel" aria-labelledby="who-title">
+    <h2 id="who-title">Who's attending</h2>
+    <p class="notice email-rule small" role="note"><strong>Every person needs their own email address.</strong> The Red Cross emails each certificate to the person's own address.</p>
+    {% for i in range(seats) %}
+    <fieldset class="field attendee">
+      <legend>Seat {{ i + 1 }}</legend>
+      {% if i == 0 %}<label class="check"><input type="checkbox" name="buyer_attends" value="yes"{{ ' checked' if form.buyer_attends == 'yes' }}> The buyer is attending (use their details)</label>{% endif %}
+      <div class="row-3">
+        <div class="field"><label for="a{{ i }}f">First name</label><input type="text" id="a{{ i }}f" name="a{{ i }}_first" value="{{ form.get('a%d_first' % i, '') }}"></div>
+        <div class="field"><label for="a{{ i }}l">Last name</label><input type="text" id="a{{ i }}l" name="a{{ i }}_last" value="{{ form.get('a%d_last' % i, '') }}"></div>
+        <div class="field"><label for="a{{ i }}e">Their own email</label><input type="email" id="a{{ i }}e" name="a{{ i }}_email" value="{{ form.get('a%d_email' % i, '') }}"></div>
+      </div>
+    </fieldset>
+    {% endfor %}
+    <p class="muted small">Each attendee booked by someone else gets an invite to make their own account. GHL gets every seat as an opportunity, the same as an online booking.</p>
+    <button class="pill red" type="submit" style="align-self:flex-start">Book <span class="arrow" aria-hidden="true">→</span></button>
+  </section>
+</form>
+{% endif %}
 {% endblock %}

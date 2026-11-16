@@ -67,10 +67,13 @@ def _extras(s: dict) -> dict:
                                              for o in s["offers"]}}
 
 
-def _render(s: dict, *, seats: int, form, buyer: dict, error: str | None, product_id, status: int = 200):
+def _render(s: dict, *, seats: int, form, buyer: dict, error: str | None, product_id, status: int = 200,
+            wl_form=None, wl_error: str | None = None):
+    from .. import waitlist
     return render_template("public/book.html", s=s, seats=seats, form=form, buyer=buyer, error=error,
                            product_id=product_id, online=checkout.online_booking(),
-                           testing=checkout.test_checkout(), **_extras(s)), status
+                           testing=checkout.test_checkout(), wait=waitlist.terms(s), wl_form=wl_form or {},
+                           wl_error=wl_error, **_extras(s)), status
 
 
 @bp.get("/<public_id>")

@@ -1,0 +1,35 @@
+{% extends "dash/layout.html" %}
+{% import "_roster.html" as rl with context %}
+{% block title %}{{ s.course_name }} · {{ class_date(s.starts_at, s.time_zone) }}{% endblock %}
+{% block heading %}{{ s.course_name }} <span class="accent">{{ class_date(s.starts_at, s.time_zone) }}</span>{% endblock %}
+{% block subhead %}<p><span class="num">{{ class_time(s.starts_at, s.ends_at, s.time_zone) }}</span> · {{ s.site_name }}, {{ s.address_line1 }}, {{ s.site_city }} ·
+  {% if can.assignment.role == 'co' %}<span class="status wait">Helper instructor</span>{% else %}<span class="status ok">Lead instructor</span>{% endif %}
+  {% if s.status == 'completed' %} · <span class="status ok">Finished</span>{% endif %}</p>{% endblock %}
+{% block panel %}
+<p class="small"><a href="{{ url_for('teach.home') }}">← My classes</a></p>
+<div class="stats">
+  <div class="stat"><strong class="num">{{ s.sold_seats }}</strong><span>Seats sold</span></div>
+  <div class="stat"><strong class="num">{{ s.seats_left if s.seats_left > 0 else 0 }}</strong><span>Seats left</span></div>
+  <div class="stat"><strong class="num">{{ s.seat_limit }}</strong><span>Class max</span></div>
+  <div class="stat"><strong class="num">{{ s.waitlist_count }}</strong><span>Waiting</span></div>
+</div>
+
+{{ rl.roster(s, students, can, 'teach.class_mark') }}
+
+<section class="panel" aria-labelledby="fin-title">
+  <h2 id="fin-title">After class</h2>
+  {% if s.status == 'completed' %}
+  <p class="small">Finished. Thank you! Your pay record is under <a href="{{ url_for('teach.pay') }}">Pay</a> once your rate is set.</p>
+  {% elif can.can_finish %}
+  <form method="post" action="{{ url_for('teach.class_finish', public_id=s.public_id) }}" class="stack">
+    {{ csrf_input() }}
+    <p class="muted small">Mark every student Complete or No show, then finish the class. Either instructor can do it; your pay record is made when it's finished.</p>
+    <button class="pill red" type="submit" style="align-self:flex-start">Finish the class <span class="arrow" aria-hidden="true">→</span></button>
+  </form>
+  {% else %}
+  <p class="muted small">On class day: check students in as they arrive, mark each Complete or No show, then finish the class.</p>
+  {% endif %}
+  {% if can.can_export %}<p class="small"><a href="{{ url_for('teach.class_export', public_id=s.public_id) }}">Download the Red Cross class list (CSV)</a> for the Red Cross Learning Center.</p>{% endif %}
+  <p class="muted small">Need a student moved, or details fixed? Customer service makes changes to bookings.</p>
+</section>
+{% endblock %}

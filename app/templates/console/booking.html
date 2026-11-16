@@ -40,9 +40,43 @@
       <dt>Type</dt><dd>{{ r.delivery_mode|capitalize }}</dd>
       <dt>Class status</dt><dd>{{ r.class_status|replace('_', ' ')|capitalize }}</dd>
     </dl>
-    {% if current_user.has_permission('class.view') %}<p class="small"><a href="{{ url_for('admin.classes_detail', sid=r.session_id) }}">Class list and seats →</a></p>{% endif %}
+    <p class="small"><a href="{{ url_for('console.class_page', public_id=r.session_public_id) }}">Class list and attendance →</a></p>
   </section>
 </div>
+
+{% if pay.link or pay.invoice or pay.differences|selectattr('status', 'equalto', 'awaiting_payment')|list %}
+<section class="panel" id="money" aria-labelledby="due-title">
+  <h2 id="due-title">Still to pay</h2>
+  {% if pay.link %}
+  <dl class="kv">
+    <dt>Payment link</dt><dd><input class="copy-field" type="text" readonly value="{{ pay.link.url }}" aria-label="Payment link" onclick="this.select()">
+      <span class="small muted">Seats held until <span class="num">{{ pay.link.expires_at|office_time }}</span>. Sent to the buyer by text and email (GHL).</span></dd>
+  </dl>
+  {% if pay.can_send %}<form method="post" action="{{ url_for('console.booking_send_link', public_id=r.public_id) }}">{{ csrf_input() }}<input type="hidden" name="order" value="{{ r.order_id }}"><button class="btn-small" type="submit">Send the link again</button></form>{% endif %}
+  {% endif %}
+  {% if pay.invoice %}
+  <dl class="kv">
+    <dt>Invoice</dt><dd class="num">{{ pay.invoice.total_cents|money }} due {{ pay.invoice.invoice_due_on.strftime('%b %-d, %Y') }}{% if pay.invoice.invoice_due_on < today() %} <span class="status bad">Overdue</span>{% endif %}<br>
+      <span class="small muted">{{ pay.invoice.buyer_company or '' }}{% if pay.invoice.po_number %} · PO {{ pay.invoice.po_number }}{% endif %} · {% if pay.invoice.stripe_invoice_id %}emailed by Stripe <a href="https://dashboard.stripe.com/{{ '' if r.livemode else 'test/' }}invoices/{{ pay.invoice.stripe_invoice_id }}" target="_blank" rel="noopener">(open)</a>{% else %}not emailed by Stripe{% endif %}</span></dd>
+  </dl>
+  {% if pay.can_record %}
+  <form method="post" action="{{ url_for('console.booking_record_payment', public_id=r.public_id) }}" class="seat-row">
+    {{ csrf_input() }}
+    <label class="sr-only" for="pay-amt">Amount received</label><input type="text" id="pay-amt" name="amount" inputmode="decimal" value="{{ '%.2f'|format(pay.invoice.total_cents / 100) }}" style="max-width:8rem">
+    <label class="sr-only" for="pay-ref">Reference</label><input type="text" id="pay-ref" name="reference" maxlength="200" placeholder="Cheque no. or bank transfer id">
+    <button class="btn-small primary" type="submit">Record payment</button>
+  </form>
+  <p class="muted small">Only for money paid outside Stripe. A paid Stripe invoice is recorded on its own.</p>
+  {% endif %}
+  {% endif %}
+  {% for d in pay.differences if d.status == 'awaiting_payment' %}
+  <dl class="kv">
+    <dt>Class change</dt><dd class="num">{{ d.total_cents|money }} price difference to pay{% if d.url %}<br><input class="copy-field" type="text" readonly value="{{ d.url }}" aria-label="Payment link for the price difference" onclick="this.select()">{% endif %}</dd>
+  </dl>
+  {% if pay.can_send %}<form method="post" action="{{ url_for('console.booking_send_link', public_id=r.public_id) }}">{{ csrf_input() }}<input type="hidden" name="order" value="{{ d.id }}"><button class="btn-small" type="submit">Send the link again</button></form>{% endif %}
+  {% endfor %}
+</section>
+{% endif %}
 
 <section class="panel" aria-labelledby="order-title">
   <div class="panel-head"><h2 id="order-title">Order <span class="muted small num">#{{ r.order_public_id|string|truncate(8, true, '') }}</span></h2>

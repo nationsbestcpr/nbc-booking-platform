@@ -45,8 +45,14 @@ INSERT INTO app_settings (key, value, description) VALUES
   ('invite_link_days',               '60',
    'How long the link in an attendee''s invite works (someone booked them a seat).'),
   ('ghl_tags',
-   '{"student":"nbc-student","booked_self":"nbc-booked-self","booked_by_other":"nbc-booked-by-someone-else","booker":"nbc-booker","bring_a_friend":"nbc-bring-a-friend","send_invite":"nbc-send-invite","course_prefix":"nbc-course-","city_prefix":"nbc-city-","addon_prefix":"nbc-addon-"}',
-   'Tags the engine puts on GHL contacts. GHL workflows (emails from templates) start on them; change a name here if a workflow uses another.');
+   '{"student":"nbc-student","booked_self":"nbc-booked-self","booked_by_other":"nbc-booked-by-someone-else","booker":"nbc-booker","bring_a_friend":"nbc-bring-a-friend","send_invite":"nbc-send-invite","course_prefix":"nbc-course-","city_prefix":"nbc-city-","addon_prefix":"nbc-addon-","payment_link":"nbc-send-payment-link","class_moved":"nbc-class-moved","waitlist":"nbc-waitlist","waitlist_offer":"nbc-waitlist-offer","offer_expired":"nbc-offer-expired","waitlist_no_seat":"nbc-waitlist-no-seat"}',
+   'Tags the engine puts on GHL contacts. GHL workflows (emails from templates) start on them; change a name here if a workflow uses another.'),
+  ('phone_link_hold_minutes',        '120',
+   'How long a payment link sent by customer service holds the seats (30 to 1440 minutes, Stripe''s limits). OPEN: confirm (hub open item 12).'),
+  ('invoice_due_days',               '30',
+   'Days until an invoice or PO booking is due, unless customer service picks another date. OPEN: NBC''s invoice terms (Jennifer).'),
+  ('attendance_instructor_days',     '7',
+   'Instructors can mark attendance from class day until this many days after it. Office staff with the attendance permission can mark any time.');
 
 -- -----------------------------------------------------------------------------
 -- Roles (one dashboard each) and permissions
