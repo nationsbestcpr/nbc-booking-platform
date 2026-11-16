@@ -15,7 +15,7 @@
   <div class="scroll-x"><table class="table">
     <thead><tr><th>Student</th><th>Class</th><th>Status</th>{% if show_money %}<th>Paid</th>{% endif %}<th>Booked</th></tr></thead>
     <tbody>{% for r in rows %}{% set st = reg_status.get(r.status, ('off', r.status)) %}
-      <tr><td><strong>{{ r.attendee_first_name }} {{ r.attendee_last_name }}</strong><br><span class="muted small">{{ r.attendee_email }}{% if r.buyer_email != r.attendee_email %} · booked by {{ r.buyer_email }}{% endif %}</span></td>
+      <tr><td><strong><a href="{{ url_for('console.find_booking', public_id=r.public_id) }}">{{ r.attendee_first_name }} {{ r.attendee_last_name }}</a></strong><br><span class="muted small">{{ r.attendee_email }}{% if r.buyer_email != r.attendee_email %} · booked by {{ r.buyer_email }}{% endif %}</span></td>
         <td><a href="{{ url_for('admin.classes_detail', sid=r.session_id) }}">{{ r.course_name }}</a> · {{ r.short_name }}<br><span class="muted small num">{{ class_date(r.starts_at, r.time_zone) }} · {{ r.site_name }}, {{ r.city_name }}</span></td>
         <td><span class="status {{ st[0] }}">{{ st[1] }}</span></td>
         {% if show_money %}<td class="num">{{ r.amount_paid_cents|money }}{% if r.amount_refunded_cents %}<br><span class="muted small">{{ r.amount_refunded_cents|money }} refunded</span>{% endif %}</td>{% endif %}

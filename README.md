@@ -225,6 +225,15 @@ Notes:
   extensions and the hosting settings need changing first.
 - Never run `db load-demo` there (it refuses anyway).
 
+## Test data on the test site
+
+Admin → **Test data** (test site only; the live site refuses it) loads seven invented classes at a
+real location from the schedule: full classes with people waiting, a full class with nobody
+waiting, an open class with card, group and invoice bookings and a refund waiting for approval, a
+later class to move to, a class running today (attendance) and a cancelled class to move. Attendees
+have `@example.test` addresses. "Load a fresh set" replaces them; "Remove" deletes them and every
+booking in them. From the Shell: `.venv/bin/python -m flask --app wsgi testdata load` (or `remove`).
+
 ## Updating a Replit project from GitHub
 
 Every publish adds a "Published your App" commit of Replit's own, so

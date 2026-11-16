@@ -560,3 +560,32 @@ def integrations():
     set_secrets = {n for c in INTEGRATIONS for n in c.get("optional", []) if os.environ.get(n)}
     return render_template("admin/integrations.html", cards=cards, issues=issues, runs=runs, unsynced=unsynced,
                            set_secrets=set_secrets, tabs=areas.tabs_for(auth.current_user()))
+
+
+# --- Test data (test site only) -------------------------------------------------------------
+
+@bp.get("/test-data")
+@auth.permission_required("system.health_view")
+def test_data():
+    from .. import testdata
+    return render_template("admin/test_data.html", refused=testdata.refused(), classes=testdata.classes(),
+                           kinds=testdata.KINDS)
+
+
+@bp.post("/test-data")
+@auth.permission_required("system.health_view")
+def test_data_post():
+    from .. import testdata
+    user = auth.current_user()
+    try:
+        if request.form.get("do") == "remove":
+            r = testdata.remove(user.id)
+            flash(f"Removed {r['classes']} test classes and everything booked in them." if r["classes"]
+                  else "There was no test data to remove.", "ok")
+        else:
+            r = testdata.load(user.id)
+            flash(f"Loaded {r['classes']} test classes: {r['course']} at {r['site']}, {r['city']}"
+                  + (" (the earlier set was removed first)." if r["removed"]["classes"] else "."), "ok")
+    except testdata.TestDataError as exc:
+        flash(str(exc), "error")
+    return redirect(url_for("admin.test_data"))

@@ -115,7 +115,7 @@ def classes_detail(sid: int):
          ORDER BY a.role DESC
     """, id=sid)
     roster = db.fetch_all("""
-        SELECT r.attendee_first_name, r.attendee_last_name, r.attendee_email, r.status, r.checked_in_at,
+        SELECT r.public_id, r.attendee_first_name, r.attendee_last_name, r.attendee_email, r.status, r.checked_in_at,
                r.amount_paid_cents, p.short_name, o.channel
           FROM registrations r
           JOIN products p ON p.id = r.product_id
@@ -149,7 +149,7 @@ def bookings():
     user = auth.current_user()
     f = {k: request.args.get(k, "") for k in ("q", "status", "city")}
     rows = db.fetch_all("""
-        SELECT r.id, r.created_at, r.attendee_first_name, r.attendee_last_name, r.attendee_email, r.status,
+        SELECT r.id, r.public_id, r.created_at, r.attendee_first_name, r.attendee_last_name, r.attendee_email, r.status,
                r.amount_paid_cents, r.amount_refunded_cents, o.channel, o.buyer_email,
                s.id AS session_id, s.starts_at, s.time_zone, s.metro_id,
                cf.name AS course_name, si.name AS site_name, m.name AS city_name, p.short_name
@@ -182,7 +182,7 @@ def waitlists():
     f = {k: request.args.get(k, "") for k in ("city", "status")}
     rows = db.fetch_all("""
         SELECT w.id, w.first_name, w.last_name, w.email, w.party_size, w.status, w.joined_at,
-               q.position, s.id AS session_id, s.starts_at, s.time_zone,
+               q.position, s.id AS session_id, s.public_id AS session_public_id, s.starts_at, s.time_zone,
                cf.name AS course_name, si.name AS site_name, m.name AS city_name, av.seats_left
           FROM waitlist_entries w
           LEFT JOIN waitlist_queue q ON q.id = w.id

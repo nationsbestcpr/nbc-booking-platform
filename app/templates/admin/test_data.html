@@ -1,0 +1,47 @@
+{% extends "dash/layout.html" %}
+{% block title %}Test data{% endblock %}
+{% block heading %}Test <span class="accent">Data</span>{% endblock %}
+{% block subhead %}<p>Ready-made classes and bookings for trying every desk action on the test site. Never on the live site.</p>{% endblock %}
+{% block panel %}
+{% if refused %}
+<p class="notice warn" role="status">{{ refused }}</p>
+{% else %}
+<section class="panel" aria-labelledby="td-title">
+  <h2 id="td-title">{{ 'The test classes' if classes else 'Load the test classes' }}</h2>
+  <p class="muted small">Seven invented classes at a real location from the schedule, with paid, group and invoice
+    bookings and people waiting. Attendees have made-up <code>@example.test</code> addresses, so nothing is emailed
+    while loading; changing their bookings afterwards sends the usual GHL updates. Loading again replaces the set
+    (classes on later dates, today's class moved to today). Airtable leaves these classes alone.</p>
+  <div class="toolbar">
+    <form method="post" action="{{ url_for('admin.test_data_post') }}">{{ csrf_input() }}
+      <button class="pill red" type="submit">{{ 'Load a fresh set' if classes else 'Load test data' }} <span class="arrow" aria-hidden="true">→</span></button></form>
+    {% if classes %}
+    <form method="post" action="{{ url_for('admin.test_data_post') }}">{{ csrf_input() }}<input type="hidden" name="do" value="remove">
+      <button class="btn-small plain" type="submit">Remove the test data</button></form>
+    {% endif %}
+  </div>
+</section>
+
+{% if classes %}
+<section class="panel" aria-labelledby="list-title">
+  <h2 id="list-title">What to try in each</h2>
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>Class</th><th>Seats</th><th>Try</th></tr></thead>
+    <tbody>{% for c in classes %}
+      <tr><td><strong>{{ c.kind.title }}</strong><br>
+          <span class="muted small num">{{ class_date(c.starts_at, c.time_zone) }} · {{ class_time(c.starts_at, c.ends_at, c.time_zone) }} · {{ c.site_name }}, {{ c.city_name }}</span><br>
+          <a href="{{ url_for('console.class_page', public_id=c.public_id) }}" class="small">Class list, attendance and waiting list</a>
+          {% if c.status != 'cancelled' %} · <a href="{{ url_for('book.form', public_id=c.public_id) }}" class="small">Booking page</a>{% endif %}</td>
+        <td class="num">{{ c.sold_seats }} of {{ c.seat_limit }}{% if c.waitlist_count %}<br><span class="muted small">{{ c.waitlist_count }} waiting</span>{% endif %}
+          {% if c.status == 'cancelled' %}<br><span class="status off">Cancelled</span>{% endif %}</td>
+        <td class="small">{{ c.kind.try_it }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  <p class="muted small">Also try: <a href="{{ url_for('console.new_booking') }}">Book by phone or invoice</a> on an open class,
+    <a href="{{ url_for('console.approvals') }}">Refund approvals</a> (a $20 refund is waiting), and
+    <a href="{{ url_for('console.find') }}">Find a student</a>. Waiting-list offers go out from the background worker
+    between 8 AM and 6 PM class time.</p>
+</section>
+{% endif %}
+{% endif %}
+{% endblock %}

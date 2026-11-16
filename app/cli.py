@@ -400,7 +400,36 @@ def sync_ghl_stages() -> None:
         raise click.ClickException(str(exc)) from exc
 
 
+testdata_cli = AppGroup("testdata", help="Test classes and bookings for the test site (never the live site).")
+
+
+@testdata_cli.command("load")
+def testdata_load() -> None:
+    """Remove the earlier test classes, then load a fresh set (see app/testdata.py)."""
+    from . import testdata
+    uid = testdata.default_admin()
+    if not uid:
+        raise click.ClickException("No active admin account to record as the one who booked by phone or invoice.")
+    try:
+        r = testdata.load(uid)
+    except testdata.TestDataError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Loaded {r['classes']} test classes: {r['course']} at {r['site']}, {r['city']}.")
+
+
+@testdata_cli.command("remove")
+def testdata_remove() -> None:
+    """Delete the test classes and everything booked in them."""
+    from . import testdata
+    try:
+        r = testdata.remove(0)
+    except testdata.TestDataError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Removed {r['classes']} test classes ({r['how']}).")
+
+
 def init_app(app: Flask) -> None:
+    app.cli.add_command(testdata_cli)
     app.cli.add_command(db_cli)
     app.cli.add_command(users_cli)
     app.cli.add_command(worker_cli)

@@ -13,7 +13,7 @@ belongs to the 'admin.classes' item.
 
 from __future__ import annotations
 
-from flask import Flask, request
+from flask import Flask, current_app, request
 
 from . import auth
 
@@ -37,6 +37,7 @@ AREAS: dict[str, tuple[str, str, list[tuple[str, list[Item]]]]] = {
         ]),
         ("System", [
             ("admin.integrations", "Integrations", ("system.health_view",)),
+            ("admin.test_data", "Test data", ("system.health_view",)),
             ("admin.log", "Action log", ("audit.view",)),
         ]),
         ("My account", [
@@ -72,6 +73,7 @@ AREAS: dict[str, tuple[str, str, list[tuple[str, list[Item]]]]] = {
         ]),
         ("System", [
             ("admin.integrations", "Integrations", ("system.health_view",)),
+            ("admin.test_data", "Test data", ("system.health_view",)),
             ("admin.log", "Action log", ("audit.view",)),
             ("admin.settings", "Business settings", ("settings.manage",)),
         ]),
@@ -103,6 +105,9 @@ AREAS: dict[str, tuple[str, str, list[tuple[str, list[Item]]]]] = {
 }
 
 
+TEST_SITE_ONLY = {"admin.test_data"}          # never in the live site's sidebar
+
+
 def home_endpoint(user: auth.CurrentUser) -> str:
     return AREAS[user.area][1]
 
@@ -114,10 +119,12 @@ def _is_current(endpoint: str, current: str) -> bool:
 def nav_for(user: auth.CurrentUser) -> list[dict]:
     """[{label, items: [{endpoint, label, current}]}] for this account's area."""
     current = request.endpoint or ""
+    live = current_app.config["APP_ENV"] == "production"
     sections = []
     for label, items in AREAS[user.area][2]:
         visible = [{"endpoint": e, "label": l, "current": _is_current(e, current)}
-                   for e, l, perms in items if not perms or any(p in user.permissions for p in perms)]
+                   for e, l, perms in items if (not perms or any(p in user.permissions for p in perms))
+                   and not (live and e in TEST_SITE_ONLY)]
         if visible:
             sections.append({"label": label, "items": visible})
     return sections

@@ -13,7 +13,7 @@
   <div class="scroll-x"><table class="table">
     <thead><tr><th>Class</th><th>Place</th><th>Who</th><th>Status</th><th>Joined</th>{% if can_manage %}<th><span class="sr-only">Actions</span></th>{% endif %}</tr></thead>
     <tbody>{% for w in rows %}{% set st = wait_status.get(w.status, ('off', w.status)) %}
-      <tr><td><a href="{{ url_for('admin.classes_detail', sid=w.session_id) }}">{{ w.course_name }}</a><br><span class="muted small num">{{ class_date(w.starts_at, w.time_zone) }} · {{ w.site_name }} · {{ w.seats_left if w.seats_left > 0 else 0 }} seats left</span></td>
+      <tr><td><a href="{{ url_for('admin.classes_detail', sid=w.session_id) }}">{{ w.course_name }}</a><br><span class="muted small num">{{ class_date(w.starts_at, w.time_zone) }} · {{ w.site_name }} · {{ w.seats_left if w.seats_left > 0 else 0 }} seats left</span><br><a class="small" href="{{ url_for('console.class_page', public_id=w.session_public_id) }}">Class list and waiting list</a></td>
         <td class="num">{{ w.position or '—' }}</td>
         <td><strong>{{ w.first_name }} {{ w.last_name }}</strong>{% if w.party_size > 1 %} · party of {{ w.party_size }}{% endif %}{% if show_contact %}<br><span class="muted small">{{ w.email }}</span>{% endif %}</td>
         <td><span class="status {{ st[0] }}">{{ st[1] }}</span></td><td class="num small">{{ w.joined_at|office_time }}</td>
