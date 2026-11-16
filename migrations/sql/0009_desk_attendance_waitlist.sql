@@ -42,4 +42,5 @@ CREATE TRIGGER sessions_waitlist_rules BEFORE INSERT OR UPDATE OF one_instructor
 UPDATE sessions SET one_instructor_max = one_instructor_max;
 
 -- A waiting-list entry's offers are looked up by entry.
-CREATE INDEX waitlist_offers_entry_idx ON waitlist_offers (waitlist_entry_id);
+-- IF NOT EXISTS: Replit's publish-time sync can create this index before the app runs this migration.
+CREATE INDEX IF NOT EXISTS waitlist_offers_entry_idx ON waitlist_offers (waitlist_entry_id);
