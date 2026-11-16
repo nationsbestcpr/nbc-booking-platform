@@ -99,6 +99,8 @@ class FakePlatforms:
         self.ghl_contact_values: dict[str, dict] = {}       # contact id -> custom field id -> value
         self.ghl_contact_fields = ["nbc_invite_link", "nbc_booked_by"]
         self.ghl_extra_opportunity_fields: list[str] = []
+        self.ghl_created_fields: list[dict] = []           # fields made through the API
+        self.ghl_refuse_field_create = False
         self.stripe_refuse_refunds = False
         self.ghl_refuse_second_opportunity = False
 
@@ -186,15 +188,25 @@ class FakePlatforms:
         if path == "/opportunities/search":
             return Res(200, {"opportunities": [{"id": k, **v} for k, v in self.ghl_opps.items()
                                                if v["contactId"] == params.get("contact_id")]})
+        if re.fullmatch(r"/locations/[^/]+/customFields", path) and method == "POST":
+            if self.ghl_refuse_field_create:
+                return Res(403, {"message": "The token is not authorized for this scope."})
+            model, name = body["model"], body["name"]
+            key = f"{model}.{re.sub(r'[^a-z0-9]+', '_', name.lower()).strip('_')}"
+            field = {"id": f"cf-new-{len(self.ghl_created_fields)}", "fieldKey": key, "name": name,
+                     "dataType": body["dataType"], "model": model}
+            self.ghl_created_fields.append(field)
+            return Res(201, {"customField": field})
         if re.fullmatch(r"/locations/[^/]+/customFields", path):
+            made = [f for f in self.ghl_created_fields if f["model"] == params.get("model", "opportunity")]
             if params.get("model") == "contact":
                 return Res(200, {"customFields": [{"id": f"cf-contact-{k}", "fieldKey": f"contact.{k}", "name": k}
-                                                  for k in self.ghl_contact_fields]})
+                                                  for k in self.ghl_contact_fields] + made})
             return Res(200, {"customFields": [{"id": f"cf-{k}", "fieldKey": f"opportunity.{k}", "name": k}
                                               for k in ("class_id", "course", "course_date", "course_location",
                                                         "reg_type", "order_total", "shipping", "booked_by",
                                                         "booked_by_email", "booking_type", "addons",
-                                                        *self.ghl_extra_opportunity_fields)]})
+                                                        *self.ghl_extra_opportunity_fields)] + made})
         m = re.fullmatch(r"/contacts/(ct-\w+)/tags", path)
         if m:
             tags = self.ghl_tags.setdefault(m.group(1), [])

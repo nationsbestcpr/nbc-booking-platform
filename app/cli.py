@@ -13,6 +13,8 @@
     flask --app wsgi sync airtable [--record recXXXX]   # pull from Airtable now
     flask --app wsgi sync check-airtable # how the base's fields match the sync
     flask --app wsgi sync ghl-stages     # load the GHL pipeline's stage ids
+    flask --app wsgi sync ghl-create-fields [--dry-run]   # create the GHL custom fields the engine fills
+    flask --app wsgi db label            # mark this database as belonging to this APP_ENV
 """
 
 from __future__ import annotations
@@ -95,6 +97,35 @@ def repair() -> None:
     if after:
         click.echo("Still missing (needs the developer): " + ", ".join(after))
         raise SystemExit(1)
+
+
+@db_cli.command("label")
+@click.option("--auto", is_flag=True, help="Only label a database still marked 'local' (the seed's value) "
+                                           "for the test site. Used on every start.")
+@click.option("--yes", is_flag=True, help="Don't ask first.")
+def label(auto: bool, yes: bool) -> None:
+    """Mark this database as the one for this app's APP_ENV (app_settings 'environment').
+
+    /healthz says "degraded" while the label and APP_ENV differ: that's how a production app
+    pointed at a test database (or the other way round) shows up. --auto only fixes a test-site
+    database that was never labelled; it never relabels staging <-> production."""
+    from . import db as _db
+    app_env = current_app.config["APP_ENV"]
+    now = _db.fetch_value("SELECT value #>> '{}' FROM app_settings WHERE key = 'environment'")
+    if now == app_env:
+        click.echo(f"This database is already labelled {app_env}.")
+        return
+    if auto:
+        if not (now == "local" and app_env == "staging"):
+            click.echo(f"Database labelled {now!r}, app is {app_env!r}: leaving it (run `db label` to change it).")
+            return
+    elif not yes:
+        click.confirm(f"This database is labelled {now!r}. Label it {app_env!r}, the app's APP_ENV?", abort=True)
+    with _db.transaction() as conn:
+        from sqlalchemy import text as _text
+        conn.execute(_text("UPDATE app_settings SET value = to_jsonb(CAST(:v AS text)), updated_at = now() "
+                           "WHERE key = 'environment'"), {"v": app_env})
+    click.echo(f"Database labelled {app_env} (was {now}).")
 
 
 @db_cli.command("current")
@@ -333,6 +364,29 @@ def sync_check_airtable() -> None:
             click.echo(f"    {logical:16} MISSING (required)")
         for logical in m["missing_optional"]:
             click.echo(f"    {logical:16} not found (optional)")
+
+
+@sync_cli.command("ghl-create-fields")
+@click.option("--dry-run", is_flag=True, help="Only list what would be created.")
+def sync_ghl_create_fields(dry_run: bool) -> None:
+    """Create the GHL custom fields the engine fills, where the sub-account doesn't have them yet.
+    Only adds fields (never changes or removes one), so it's safe to run more than once."""
+    from .integrations import ghl
+    from .integrations.http import IntegrationError
+    try:
+        out = ghl.create_missing_fields(dry_run=dry_run)
+    except IntegrationError as exc:
+        raise click.ClickException(str(exc))
+    labels = {"created": "Would create" if dry_run else "Created", "existing": "Already there",
+              "renamed_by_ghl": "GHL gave a different key (rename the field in GHL or tell the developer)",
+              "skipped": "Skipped (a field with that name exists)", "failed": "Failed"}
+    for part, label in labels.items():
+        if out[part]:
+            click.echo(f"{label}:")
+            for line in out[part]:
+                click.echo(f"  - {line}")
+    if out["failed"]:
+        raise SystemExit(1)
 
 
 @sync_cli.command("ghl-stages")

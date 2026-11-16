@@ -78,6 +78,10 @@ say "checking the database has every table and column (putting back anything mis
 step 60 $PY -m flask --app wsgi db repair || say "WARNING: some parts couldn't be put back (listed above); tell the developer"
 step 60 $PY -m flask --app wsgi db verify --record >/dev/null 2>&1 || true   # result on the Integrations page
 
+# A test-site database still carrying the seed's "local" label is labelled
+# staging, so /healthz reports ok (never changes staging <-> production).
+step 30 $PY -m flask --app wsgi db label --auto || true
+
 # The preset admin account from the SUPERADMIN_EMAIL / SUPERADMIN_PASSWORD
 # secrets (does nothing when they aren't set).
 say "checking the preset admin account"

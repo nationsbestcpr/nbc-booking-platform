@@ -40,6 +40,7 @@
       {% elif c.key == 'ghl' and 'settings.manage' in can %}
         <form method="post" action="{{ url_for('admin.ghl_stages') }}">{{ csrf_input() }}<button class="btn-small" type="submit">{{ 'Reload' if c.stages else 'Load' }} pipeline stages</button></form>
         <form method="post" action="{{ url_for('admin.ghl_fields') }}">{{ csrf_input() }}<button class="btn-small" type="submit">Load custom fields</button></form>
+        <form method="post" action="{{ url_for('admin.ghl_create_fields') }}">{{ csrf_input() }}<button class="btn-small" type="submit" title="Adds only the fields this sub-account is missing">Create missing fields in GHL</button></form>
       {% endif %}
     </div>
     {% endif %}

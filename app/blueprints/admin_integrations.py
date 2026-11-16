@@ -123,6 +123,30 @@ def ghl_fields():
     return redirect(url_for("admin.integrations"))
 
 
+@bp.post("/integrations/ghl/create-fields")
+@auth.permission_required("settings.manage")
+def ghl_create_fields():
+    """Create the custom fields the engine fills that this GHL sub-account doesn't have (adds only)."""
+    try:
+        out = ghl.create_missing_fields()
+        with db.transaction() as conn:
+            audit.record(conn, "integration.ghl_create_fields", "app_setting", None, after=out)
+        parts = []
+        if out["created"]:
+            parts.append("Created in GHL: " + ", ".join(out["created"]))
+        if out["existing"]:
+            parts.append(f"{len(out['existing'])} already there")
+        for key, label in (("renamed_by_ghl", "GHL gave a different key"), ("skipped", "Skipped"),
+                           ("failed", "Failed")):
+            if out[key]:
+                parts.append(f"{label}: " + "; ".join(out[key]))
+        bad = out["renamed_by_ghl"] or out["skipped"] or out["failed"]
+        flash(". ".join(parts) + ".", "warn" if bad else "ok")
+    except IntegrationError as exc:
+        flash(str(exc), "error")
+    return redirect(url_for("admin.integrations"))
+
+
 @bp.post("/integrations/queue/run")
 @auth.permission_required("system.issue_resolve")
 def queue_run():

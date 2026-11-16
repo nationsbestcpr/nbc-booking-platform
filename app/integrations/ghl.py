@@ -216,6 +216,78 @@ def load_custom_fields() -> dict:
     return {"found": sorted(found), "missing": sorted(set(wanted) - set(found))}
 
 
+# Names that make GHL give each field the key the engine looks for
+# ("Booked By Email" -> opportunity.booked_by_email). Every field is Single Line text.
+FIELD_NAMES = {
+    "class_id": "Class ID", "course": "Course", "course_date": "Course Date", "course_location": "Course Location",
+    "hours": "Hours", "instructor": "Instructor", "reg_type": "Reg Type", "class_price": "Class Price",
+    "order_total": "Order Total", "delivery": "Delivery", "reg_date": "Reg Date", "booked_by": "Booked By",
+    "booked_by_email": "Booked By Email", "booking_type": "Booking Type", "addons": "Addons",
+    "contact_invite_link": "NBC Invite Link", "contact_booked_by": "NBC Booked By",
+}
+
+
+def create_missing_fields(*, dry_run: bool = False) -> dict:
+    """Create, in this GHL sub-account, the custom fields the engine fills that it doesn't have yet.
+
+    Only adds: a field that exists (by key, or by the same name) is left alone, so it is
+    safe to run again. Covers the opportunity and contact fields above and any booking
+    question copied to a GHL field. Needs the Private Integration scope
+    "Edit Custom Fields" (locations/customFields.write). Afterwards the field ids are loaded.
+    Returns {created, existing, renamed_by_ghl, skipped, failed}."""
+    wanted = [(name, key) for name, key in {**FIELD_KEYS, **CONTACT_FIELD_KEYS}.items()]
+    with db.engine().connect() as conn:
+        wanted += [(key, key) for key in conn.execute(text(
+            "SELECT DISTINCT ghl_field_key FROM booking_questions WHERE ghl_field_key IS NOT NULL")).scalars()]
+    have_keys: set[str] = set()
+    have_names: dict[str, str] = {}
+    for model in ("opportunity", "contact"):
+        try:
+            body = _call("GET", f"/locations/{location_id()}/customFields", params={"model": model})
+        except IntegrationError as exc:
+            if exc.status in (401, 403):
+                raise IntegrationError("GHL: the token can't read custom fields. In the Private Integration, add the "
+                                       "scopes “View Custom Fields” and “Edit Custom Fields”.", retry=False) from exc
+            raise
+        for f in body.get("customFields") or []:
+            have_keys.add(f.get("fieldKey") or "")
+            have_names[f"{model}:{(f.get('name') or '').strip().lower()}"] = f.get("fieldKey") or ""
+    out: dict[str, list] = {"created": [], "existing": [], "renamed_by_ghl": [], "skipped": [], "failed": []}
+    for name, key in wanted:
+        model, short = key.split(".", 1)
+        if key in have_keys:
+            out["existing"].append(key)
+            continue
+        label = FIELD_NAMES.get(name) or short.replace("_", " ").title()
+        clash = have_names.get(f"{model}:{label.lower()}")
+        if clash is not None:
+            out["skipped"].append(f"{key} (a field named “{label}” already exists with the key {clash or '?'})")
+            continue
+        if dry_run:
+            out["created"].append(f"{key} (would create “{label}”)")
+            continue
+        try:
+            made = _call("POST", f"/locations/{location_id()}/customFields",
+                         json_body={"name": label, "dataType": "TEXT", "model": model})
+        except IntegrationError as exc:
+            if exc.status in (401, 403):
+                raise IntegrationError("GHL: the token can't create custom fields. In the Private Integration, add "
+                                       "the scope “Edit Custom Fields” (locations/customFields.write), then try "
+                                       "again.", retry=False) from exc
+            out["failed"].append(f"{key}: {exc}")
+            continue
+        field = made.get("customField") or made
+        got = field.get("fieldKey") or ""
+        have_keys.add(got)
+        have_names[f"{model}:{label.lower()}"] = got
+        out["created"].append(key)
+        if got and got != key:
+            out["renamed_by_ghl"].append(f"{key} → GHL made {got}")
+    if not dry_run and out["created"]:
+        load_custom_fields()
+    return out
+
+
 def _field_ids() -> dict:
     with db.engine().connect() as conn:
         raw = conn.execute(text("SELECT value FROM app_settings WHERE key = 'ghl_custom_field_ids'")).scalar()

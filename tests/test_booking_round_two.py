@@ -398,3 +398,54 @@ def test_unknown_pages_and_kept_old_addresses(client, app):
                           "('/old-city-va/', '/richmond-va/', 'manual') ON CONFLICT DO NOTHING"))
     res = client.get("/old-city-va/")
     assert res.status_code == 301 and res.headers["Location"] == "/richmond-va/"
+
+
+# --- Creating the GHL fields a sub-account is missing; labelling the database -------------------
+
+def test_missing_ghl_fields_are_created_once(fake, app, client, sign_in, q):
+    fake.ghl_contact_fields = []                                 # a sub-account without the invite fields
+    fake.ghl_created_fields.append({"id": "cf-x", "fieldKey": "opportunity.hours_total", "name": "Hours",
+                                    "model": "opportunity"})   # a field already named "Hours", other key
+    with app.app_context():
+        from app.integrations import ghl
+        dry = ghl.create_missing_fields(dry_run=True)
+        assert "contact.nbc_invite_link (would create “NBC Invite Link”)" in dry["created"]
+        assert not fake.ghl_created_fields[1:]                  # a dry run creates nothing
+        out = ghl.create_missing_fields()
+    made = {f["fieldKey"]: f for f in fake.ghl_created_fields[1:]}
+    assert {"contact.nbc_invite_link", "contact.nbc_booked_by", "opportunity.class_price", "opportunity.delivery",
+            "opportunity.reg_date", "opportunity.instructor"} <= set(made)
+    assert made["contact.nbc_invite_link"]["dataType"] == "TEXT" and made["contact.nbc_invite_link"]["model"] == "contact"
+    assert "opportunity.class_id" in out["existing"] and not out["failed"] and not out["renamed_by_ghl"]
+    assert any(s.startswith("opportunity.hours (a field named “Hours”") for s in out["skipped"])
+    ids = q("SELECT value FROM app_settings WHERE key = 'ghl_custom_field_ids'")[0]["value"]
+    assert ids["contact_invite_link"] == made["contact.nbc_invite_link"]["id"]   # ids loaded right after
+    with app.app_context():
+        again = ghl.create_missing_fields()
+    assert again["created"] == []                               # safe to run twice
+
+    # From the Integrations page, and a token without the scope gets a clear message.
+    fake.ghl_contact_fields = []
+    fake.ghl_created_fields.clear()
+    fake.ghl_refuse_field_create = True
+    sign_in("admin@example.test")
+    res = client.post("/admin/integrations/ghl/create-fields",
+                      data={"csrf_token": csrf_from(client, "/admin/integrations")})
+    assert res.status_code == 302
+    assert "add the scope “Edit Custom Fields”" in text_of(client.get("/admin/integrations"))
+
+
+def test_db_label_auto_only_fixes_an_unlabelled_test_database(app, setting, q):
+    from app.cli import label
+    setting("environment", "local")
+    app.config["APP_ENV"] = "staging"
+    try:
+        out = app.test_cli_runner().invoke(label, ["--auto"])
+        assert "Database labelled staging (was local)" in out.output
+        assert q("SELECT value FROM app_settings WHERE key = 'environment'")[0]["value"] == "staging"
+        app.config["APP_ENV"] = "production"                   # never relabels staging -> production
+        out = app.test_cli_runner().invoke(label, ["--auto"])
+        assert "leaving it" in out.output
+        assert q("SELECT value FROM app_settings WHERE key = 'environment'")[0]["value"] == "staging"
+    finally:
+        app.config["APP_ENV"] = "local"
