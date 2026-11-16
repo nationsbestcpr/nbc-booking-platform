@@ -289,14 +289,14 @@ def log():
 LOCKED_SETTINGS = {"environment", "airtable_writeback_enabled"}
 # Settings that may be left empty (a decision not made yet).
 NULLABLE_SETTINGS = {"large_refund_threshold_cents", "bring_a_friend_discount_cents"}
-# Settings edited as a list of names -> ids (JSON object of text), with the names allowed.
-ID_MAP_SETTINGS = {"ghl_custom_field_ids": {"session_id", "registration_id", "site", "class_date", "class_time",
-                                            "product", "reg_type", "city", "class_id", "course", "course_date",
-                                            "course_location", "hours", "instructor", "class_price", "order_total",
-                                            "delivery", "reg_date", "booked_by", "booked_by_email",
-                                            "booking_type", "addons", "contact_invite_link", "contact_booked_by"},
-                   "ghl_tags": {"student", "booked_self", "booked_by_other", "booker", "bring_a_friend",
-                                "send_invite", "course_prefix", "city_prefix", "addon_prefix"}}
+# Settings edited as a list of names -> ids (JSON object of text), with the names allowed: the
+# names the GHL code itself uses, so a new field or tag can't be missing here.
+from ..integrations.ghl import CONTACT_FIELD_KEYS, DEFAULT_TAGS, FIELD_KEYS  # noqa: E402
+
+# (The older names some saved values still carry are kept.)
+ID_MAP_SETTINGS = {"ghl_custom_field_ids": set(FIELD_KEYS) | set(CONTACT_FIELD_KEYS) | {
+                       "session_id", "registration_id", "site", "class_date", "class_time", "product", "city"},
+                   "ghl_tags": set(DEFAULT_TAGS)}
 # Booking questions copied to a GHL field are saved in ghl_custom_field_ids under the field's key.
 ID_MAP_KEY_PATTERN = r"opportunity\.[a-z0-9_]+"
 

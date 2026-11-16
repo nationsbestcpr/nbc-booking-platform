@@ -456,6 +456,26 @@ def test_an_open_setting_can_be_set_and_cleared(sign_in, post_form, query):
     assert setting(query, "large_refund_threshold_cents") is None
 
 
+def test_ghl_tag_names_include_the_desk_and_waiting_list_tags(sign_in, post_form, query):
+    """The tags setting carries the new tag names from the seed, so saving it must accept them."""
+    import json
+    sign_in("admin@example.test")
+    before = setting(query, "ghl_tags")
+    assert {"payment_link", "class_moved", "waitlist", "waitlist_offer", "offer_expired",
+            "waitlist_no_seat"} <= set(before)
+    try:
+        changed = {**before, "waitlist_offer": "nbc-seat-offer"}
+        res = post_form("/admin/settings", {"key": "ghl_tags", "value": json.dumps(changed)}, follow_redirects=True)
+        assert "Nothing was changed" not in text_of(res)
+        assert setting(query, "ghl_tags")["waitlist_offer"] == "nbc-seat-offer"
+        res = post_form("/admin/settings", {"key": "ghl_tags", "value": json.dumps({**before, "made_up": "x"})},
+                        follow_redirects=True)
+        assert "Nothing was changed" in text_of(res)
+    finally:
+        post_form("/admin/settings", {"key": "ghl_tags", "value": json.dumps(before)})
+    assert setting(query, "ghl_tags") == before
+
+
 def test_bad_setting_values_are_refused(sign_in, post_form, query):
     sign_in("admin@example.test")
     before = setting(query, "waitlist_offer_hours")
