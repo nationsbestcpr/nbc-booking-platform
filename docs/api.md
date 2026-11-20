@@ -8,7 +8,7 @@ instructor portal and the student portal (with booking and checkout).
 |---|---|
 | NBC Ops Hub | Both ways, through this API. The Ops Hub keeps no copy of booking data. |
 | GHL | One way, engine → GHL, for messaging only. No instructor data. |
-| Airtable | Read only, Airtable → engine (the sync). Nothing is written back for now. |
+| Airtable | Read only, Airtable → engine (the sync). Nothing is written back for now. Instructor data (the Instructors table, Master Locations' and Class Schedule's instructor fields, Instructor Recruiting Needs) is synced in full since migration 0011. |
 
 The same list is on **Superadmin → API keys** (read from the code, so it is
 always current), and `GET /api/v1` answers without a key.
@@ -66,7 +66,7 @@ must have it.
 
 | Method | Path | Needs | What it does |
 |---|---|---|---|
-| GET | `/api/v1/classes` | class.view | Classes in the person's cities with live seats. Filters: `city`, `course`, `status`, `from`, `to` (YYYY-MM-DD; from defaults to today), `full=yes/no`, `limit`, `offset` |
+| GET | `/api/v1/classes` | class.view | Classes in the person's cities with live seats, the lead instructor (matched to Airtable's Instructors), Instructor Assigned, availability status and performance tier. Filters: `city`, `course`, `status`, `from`, `to` (YYYY-MM-DD; from defaults to today), `full=yes/no`, `limit`, `offset` |
 | GET | `/api/v1/classes/<class>` | class.view or student.view | One class: students with attendance, its waiting list, what may be done |
 | GET | `/api/v1/classes/<class>/class-list.csv` | class.roster_export | The class list for the Red Cross (CSV) |
 | POST | `/api/v1/classes/<class>/attendance` | booking.attendance | `{"seat": "<seat>", "mark": "checked_in" \| "complete" \| "no_show" \| "cleared"}` |
@@ -109,8 +109,10 @@ must have it.
 
 | Method | Path | Needs | What it does |
 |---|---|---|---|
-| GET | `/api/v1/instructors` | instructor.view | Instructors as the engine knows them (from Airtable): status, next certification expiry, upcoming classes |
-| GET | `/api/v1/locations` | class.view | Cities and their locations |
+| GET | `/api/v1/instructors` | instructor.view | Instructors from Airtable: contact, city areas, cert status, availability. Filters: `q`, `status`, `metro`, `page_type`, `cert_status` (Current, Expiring within 60 days, Expired, No r.25), `removed=yes` |
+| GET | `/api/v1/instructors/<instructor>` | instructor.view | Everything Airtable holds for one instructor: availability, outreach and removal, certifications, city areas, HUB team, pre-approved and taught-at locations, classes they lead |
+| GET | `/api/v1/recruiting-needs` | instructor.view or teaching.coverage_view | Instructor Recruiting Needs: locations, reasons, status, no-instructor cancellations. `status` |
+| GET | `/api/v1/locations` | class.view | Cities and their locations, each with how it's staffed: assignment type, primary and HUB instructors, instructor notes; extra pay only with pay.view_all |
 | GET | `/api/v1/log` | audit.view | The action log: `since` (ISO; default 7 days), `area` (refund, booking, user …) |
 
 Not in the API yet (fallback pages for the Superadmin): booking questions,

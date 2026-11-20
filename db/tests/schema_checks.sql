@@ -637,5 +637,23 @@ SELECT pg_temp.expect_error($q$UPDATE api_keys SET revoked_at = now(),
                                 WHERE prefix = 'abcd1234'$q$,
   '42501', 'only someone who may manage API keys can switch one off');
 
+-- 0011: instructor data from Airtable.
+SELECT pg_temp.check((SELECT count(*) = 3 FROM cert_type_course_families WHERE cert_type LIKE '%\_R25' ESCAPE '\'),
+  'the three r.25 instructor certifications say which course each qualifies for');
+INSERT INTO instructors (first_name, last_name, full_name) VALUES ('No', 'Email', 'No Email');
+SELECT pg_temp.check((SELECT cert_status = 'No r.25' FROM instructor_cert_status s JOIN instructors i ON i.id = s.instructor_id
+                       WHERE i.full_name = 'No Email'),
+  'an instructor with no email in Airtable is still kept, and shows No r.25 until a certification is synced');
+INSERT INTO instructor_certs (instructor_id, cert_type, expires_on)
+SELECT id, 'ARC_BLS_INSTRUCTOR_R25', current_date + 30 FROM instructors WHERE full_name = 'No Email';
+SELECT pg_temp.check((SELECT cert_status = 'Expiring within 60 days' FROM instructor_cert_status s
+                        JOIN instructors i ON i.id = s.instructor_id WHERE i.full_name = 'No Email'),
+  'cert status follows Airtable''s formula (expiring within 60 days)');
+SELECT pg_temp.expect_error($q$INSERT INTO instructor_locations (instructor_id, location_record_id, relation)
+                               SELECT id, 'recX', 'favourite' FROM instructors WHERE full_name = 'No Email'$q$,
+  '23514', 'an instructor-location relation is pre-approved, taught or taught (inactive location)');
+SELECT pg_temp.expect_error($q$INSERT INTO recruiting_needs (airtable_record_id) VALUES ('recNotSeen')$q$,
+  '23503', 'a recruiting need comes from an Airtable record the sync has seen');
+
 \echo 'All schema checks passed.'
 ROLLBACK;

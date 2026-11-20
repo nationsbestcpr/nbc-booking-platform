@@ -134,25 +134,62 @@ class FakePlatforms:
             return self._ghl(method, url[len(ghl.API):], params or {}, json or {})
         raise AssertionError(f"unexpected call {method} {url}")
 
+    def field_ids(self, table: str) -> list[tuple[str, str]]:
+        """(field id, name) for each field of a table, as Airtable's base schema gives them. Two fields may
+        share a name, as in the real base."""
+        return [("fld" + hashlib.md5(f"{table}|{i}".encode()).hexdigest()[:14], name)
+                for i, name in enumerate(self.schema[table])]
+
+    def field_id(self, table: str, name: str, nth: int = 0) -> str:
+        return [fid for fid, n in self.field_ids(table) if n == name][nth]
+
+    def _by_id(self, table: str, fields: dict, wanted: list[str] | None) -> dict:
+        """A record's fields keyed by field id. A value stored under a field id belongs to that field only;
+        one stored under a name belongs to the first field with that name."""
+        out, seen = {}, set()
+        for fid, name in self.field_ids(table):
+            first = name not in seen
+            seen.add(name)
+            if wanted is not None and fid not in wanted:
+                continue
+            if fid in fields:
+                out[fid] = fields[fid]
+            elif first and name in fields:
+                out[fid] = fields[name]
+        return out
+
     def _airtable(self, path, params):
         if path.startswith("meta/bases/"):
-            return Res(200, {"tables": [{"name": t, "fields": [{"name": f, "type": "singleLineText"} for f in fs]}
-                                        for t, fs in self.schema.items()]})
+            return Res(200, {"tables": [{"name": t, "fields": [{"id": fid, "name": f, "type": "singleLineText"}
+                                                               for fid, f in self.field_ids(t)]}
+                                        for t in self.schema]})
         _, table, *rest = path.split("/")
         table = unquote(table)
         if table not in self.tables:
             return Res(404, {"error": "NOT_FOUND"})
+        params = list(params or [])
+        by_id = ("returnFieldsByFieldId", "true") in params
         if rest:
             try:
-                return Res(200, self.record(rest[0]))
+                r = self.record(rest[0])
             except StopIteration:
                 return Res(404, {"error": "NOT_FOUND"})
+            return Res(200, {**r, "fields": self._by_id(table, r["fields"], None)} if by_id else r)
         wanted = [v for k, v in params if k == "fields[]"]
-        unknown = [f for f in wanted if f not in self.schema[table]]
+        known = {fid for fid, _ in self.field_ids(table)} | set(self.schema[table])
+        unknown = [f for f in wanted if f not in known]
         if unknown:
             return Res(422, {"error": {"type": "UNKNOWN_FIELD_NAME", "message": f"Unknown field name: {unknown[0]}"}})
-        rows = [{"id": r["id"], "createdTime": "2026-10-01T00:00:00.000Z",
-                 "fields": {k: v for k, v in r["fields"].items() if k in wanted}} for r in self.tables[table]]
+        shared = [f for f in wanted if self.schema[table].count(f) > 1]
+        if shared:   # what Airtable answers when a requested name belongs to two fields
+            return Res(422, {"error": {"type": "INVALID_REQUEST_UNKNOWN",
+                                       "message": f'There is more than one field named "{shared[0]}".'}})
+        if by_id:
+            rows = [{"id": r["id"], "createdTime": "2026-10-01T00:00:00.000Z",
+                     "fields": self._by_id(table, r["fields"], wanted)} for r in self.tables[table]]
+        else:
+            rows = [{"id": r["id"], "createdTime": "2026-10-01T00:00:00.000Z",
+                     "fields": {k: v for k, v in r["fields"].items() if k in wanted}} for r in self.tables[table]]
         return Res(200, {"records": rows})
 
     def _stripe(self, method, path, data):

@@ -19,7 +19,7 @@ DESK_PERMISSIONS = [
     "class.view", "class.roster_export", "student.view", "student.note", "payment.view",
     "booking.create_phone", "booking.create_invoice", "booking.transfer", "booking.transfer_bulk",
     "booking.cancel", "booking.attendance", "refund.issue", "refund.approve_large", "class.capacity_override",
-    "waitlist.view", "waitlist.manage", "instructor.view",
+    "waitlist.view", "waitlist.manage", "instructor.view", "teaching.coverage_view", "pay.view_all",
 ]
 
 

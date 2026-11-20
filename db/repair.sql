@@ -124,3 +124,39 @@ BEGIN
     UPDATE sessions SET one_instructor_max = one_instructor_max;
   END IF;
 END $$;
+
+-- 0011: Airtable's instructor fields on instructors (the new tables are made by the migration).
+ALTER TABLE instructors ALTER COLUMN email DROP NOT NULL;
+ALTER TABLE instructors
+  ADD COLUMN IF NOT EXISTS full_name                 text,
+  ADD COLUMN IF NOT EXISTS hub_key                   text,
+  ADD COLUMN IF NOT EXISTS city                      text,
+  ADD COLUMN IF NOT EXISTS state                     text,
+  ADD COLUMN IF NOT EXISTS postal_code               text,
+  ADD COLUMN IF NOT EXISTS active_in_enrollware      boolean,
+  ADD COLUMN IF NOT EXISTS is_hub_instructor         boolean NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS interested_in_leading_hub boolean NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS additional_certs          text,
+  ADD COLUMN IF NOT EXISTS certs_last_synced_on      date,
+  ADD COLUMN IF NOT EXISTS available_days            text[] NOT NULL DEFAULT '{}',
+  ADD COLUMN IF NOT EXISTS available_times           text[] NOT NULL DEFAULT '{}',
+  ADD COLUMN IF NOT EXISTS classes_per_month         integer CHECK (classes_per_month >= 0),
+  ADD COLUMN IF NOT EXISTS locations_to_avoid        text,
+  ADD COLUMN IF NOT EXISTS notice_needed             text,
+  ADD COLUMN IF NOT EXISTS availability_notes        text,
+  ADD COLUMN IF NOT EXISTS availability_updated_on   date,
+  ADD COLUMN IF NOT EXISTS availability_updated_by   text,
+  ADD COLUMN IF NOT EXISTS outreach_status           text,
+  ADD COLUMN IF NOT EXISTS last_contact_on           date,
+  ADD COLUMN IF NOT EXISTS next_follow_up_on         date,
+  ADD COLUMN IF NOT EXISTS outreach_notes            text,
+  ADD COLUMN IF NOT EXISTS removal_recommended_on    date,
+  ADD COLUMN IF NOT EXISTS removal_reason            text,
+  ADD COLUMN IF NOT EXISTS removal_status            text,
+  ADD COLUMN IF NOT EXISTS remove_from               text[] NOT NULL DEFAULT '{}',
+  ADD COLUMN IF NOT EXISTS associate                 boolean,
+  ADD COLUMN IF NOT EXISTS page_type                 text,
+  ADD COLUMN IF NOT EXISTS date_approval_url         text,
+  ADD COLUMN IF NOT EXISTS other_enrollware_accounts text,
+  ADD COLUMN IF NOT EXISTS source_synced_at          timestamptz,
+  ADD COLUMN IF NOT EXISTS source_deleted_at         timestamptz;

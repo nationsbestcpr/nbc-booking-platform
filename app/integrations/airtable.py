@@ -8,7 +8,9 @@ Field names live in FIELDS below and nowhere else. Each logical field lists
 the names it may have in the base (matched without regard to case or
 spaces); the first one the base actually has is used. Before every sync the
 base's own list of fields is read (schema.bases:read), so:
-  * only fields that exist are requested (Airtable refuses unknown names);
+  * only fields that exist are requested (Airtable refuses unknown names), and by field id, since
+    Airtable also refuses a name two fields share (Class Schedule has two "Instructor availability
+    status" fields; the one with a value is used);
   * a missing required field becomes one clear problem on the dashboard,
     instead of a failed sync with a cryptic error;
   * "Check Airtable fields" on the Integrations page shows the whole mapping.
@@ -32,7 +34,11 @@ TABLES = {
     "courses":   ("AIRTABLE_TABLE_COURSES", "Course Master"),
     "locations": ("AIRTABLE_TABLE_LOCATIONS", "Master Locations"),
     "schedule":  ("AIRTABLE_TABLE_SCHEDULE", "Class Schedule"),
+    "instructors": ("AIRTABLE_TABLE_INSTRUCTORS", "Instructors"),
+    "recruiting":  ("AIRTABLE_TABLE_RECRUITING", "Instructor Recruiting Needs"),
 }
+# Tables the classes don't depend on: if one is missing, the sync says so and carries on.
+OPTIONAL_TABLES = {"instructors", "recruiting"}
 
 # logical field -> names it may have in the base, most likely first
 FIELDS: dict[str, dict[str, list[str]]] = {
@@ -68,6 +74,15 @@ FIELDS: dict[str, dict[str, list[str]]] = {
         "poc_email":    ["POC Email"],
         "emergency":    ["Emergency Contact"],
         "status":       ["Status"],
+        # 0011: how the location is staffed (location_instructor_settings).
+        "assignment_types": ["Instructor Assignment Type"],
+        "primary_instructor": ["Primary Instructor"],
+        "hub_primary":      ["HUB Primary Instructor"],
+        "hub_secondary":    ["HUB Secondary Instructor"],
+        "it_location":      ["Instructor Training Location"],
+        "instructor_notes": ["Instructor Notes"],
+        "extra_pay":        ["Instructor Extra Pay per Class"],
+        "extra_pay_reason": ["Instructor Extra Pay Reason"],
     },
     "schedule": {
         "status":          ["Status"],
@@ -84,6 +99,69 @@ FIELDS: dict[str, dict[str, list[str]]] = {
         "companion_price": ["Class Companion Price"],
         "access_code":     ["Access Code"],
         "notes":           ["Instructor Notes"],
+        # 0011: the class's instructor planning fields (session_instructor_details).
+        "instructor_assigned": ["Instructor Assigned"],
+        "availability_status": ["Instructor availability status"],
+        "performance_tier":    ["Instructor performance tier"],
+    },
+    # 0011: Airtable is the source of instructor data (11/16); GHL holds none (11/20), so its GHL fields aren't read.
+    "instructors": {
+        "name":               ["Name"],
+        "hub_key":            ["Hub Key"],
+        "email":              ["Email"],
+        "phone":              ["Phone"],
+        "city":               ["City"],
+        "state":              ["State"],
+        "zip":                ["ZIP", "Zip"],
+        "active_in_enrollware": ["Active in Enrollware"],
+        "metros":             ["Metros"],
+        "hub_instructor":     ["HUB Instructor"],
+        "cert_fa":            ["FA/CPR/AED Instructor r.25 Expiration"],
+        "cert_bls":           ["BLS Instructor r.25 Expiration"],
+        "cert_it":            ["Instructor Trainer r.25 Expiration"],
+        "additional_certs":   ["Additional Certs"],
+        "certs_synced":       ["Certs Last Synced"],
+        "days":               ["Available Days"],
+        "times":              ["Times"],
+        "per_month":          ["Classes per Month"],
+        "travel":             ["Max Travel (miles)"],
+        "avoid":              ["Locations to Avoid"],
+        "notice":             ["Notice Needed"],
+        "lead_hub":           ["Interested in Leading a HUB"],
+        "avail_notes":        ["Availability Notes"],
+        "avail_updated":      ["Availability Updated"],
+        "avail_by":           ["Availability Updated By"],
+        "outreach_status":    ["Outreach Status"],
+        "last_contact":       ["Last Contact"],
+        "follow_up":          ["Next Follow-up"],
+        "outreach_notes":     ["Outreach Notes"],
+        "removal_recommended": ["Removal Recommended"],
+        "removal_reason":     ["Removal Reason"],
+        "remove_from":        ["Remove From"],
+        "removal_status":     ["Removal Status"],
+        "associate":          ["Associate"],
+        "pre_approved":       ["Locations - Pre-Approval"],
+        "taught":             ["Locations - Taught At"],
+        "taught_inactive":    ["Inactive Locations - Taught At"],
+        "hub_lead":           ["HUB Lead"],
+        "hub_members":        ["HUB Team Members"],
+        "approval_link":      ["Date Approval Link"],
+        "other_enrollware":   ["Other Enrollware Accounts"],
+        "page_type":          ["Instructor Page Type"],
+    },
+    "recruiting": {
+        "need":               ["Need"],
+        "location":           ["Location"],
+        "reasons":            ["Need Reason"],
+        "status":             ["Recruiting Status"],
+        "notes":              ["Recruiting Notes"],
+        "classes":            ["No-Instructor Cancelled Classes"],
+        "ew_cancels":         ["Enrollware No-Instructor Cancels (12 mo to Oct 2026)", "Enrollware No-Instructor Cancels"],
+        "cls_lost":           ["CLS Lost to No-Instructor Cancels (12 mo)", "CLS Lost to No-Instructor Cancels"],
+        "profit":             ["Profit While Running (last 12 mo)", "Profit While Running"],
+        "students_per_class": ["Students per Class (while running)", "Students per Class"],
+        "last_month":         ["Last Month Held"],
+        "date_added":         ["Date Added"],
     },
 }
 
@@ -92,6 +170,8 @@ REQUIRED: dict[str, list[str]] = {
     "courses":   ["name"],
     "locations": ["name", "address"],
     "schedule":  ["status", "location", "course", "date", "start_time"],
+    "instructors": ["name"],
+    "recruiting":  [],
 }
 
 PUBLISH_STATUS = "enrollware"     # Status includes "Enrollware" (decided Oct 13, 2026)
@@ -161,8 +241,17 @@ def read_schema() -> dict[str, dict[str, dict]]:
                 "“NBC Master Base”. The token must be made by an Airtable account that can open the base.",
                 status=exc.status, retry=False) from exc
         raise
-    return {t["name"]: {_norm(f["name"]): {"name": f["name"], "type": f.get("type")} for f in t.get("fields", [])}
-            for t in body.get("tables", [])}
+    out: dict[str, dict[str, dict]] = {}
+    for t in body.get("tables", []):
+        cols: dict[str, dict] = {}
+        for f in t.get("fields", []):
+            # Two fields may share a name (Class Schedule has two "Instructor availability status"):
+            # keep every id, so both can be read (see records()).
+            hit = cols.setdefault(_norm(f["name"]), {"name": f["name"], "type": f.get("type"), "ids": []})
+            if f.get("id"):
+                hit["ids"].append(f["id"])
+        out[t["name"]] = cols
+    return out
 
 
 def resolve(schema: dict[str, dict[str, dict]]) -> dict[str, dict]:
@@ -176,6 +265,7 @@ def resolve(schema: dict[str, dict[str, dict]]) -> dict[str, dict]:
         actual = by_norm.get(_norm(wanted))
         fields: dict[str, str] = {}
         types: dict[str, str] = {}
+        ids: dict[str, list[str]] = {}
         if actual:
             cols = schema[actual]
             for logical, names in FIELDS[key].items():
@@ -183,20 +273,26 @@ def resolve(schema: dict[str, dict[str, dict]]) -> dict[str, dict]:
                     hit = cols.get(_norm(candidate))
                     if hit:
                         fields[logical], types[logical] = hit["name"], hit["type"]
+                        ids[logical] = list(hit.get("ids") or [])
                         break
         missing_required = [req for req in REQUIRED[key]
                             if actual and not any(alt in fields for alt in req.split("|"))]
         missing_optional = [f for f in FIELDS[key] if actual and f not in fields
                             and not any(f in req.split("|") for req in REQUIRED[key])]
-        out[key] = {"table": actual, "wanted": wanted, "fields": fields, "types": types,
+        out[key] = {"table": actual, "wanted": wanted, "fields": fields, "types": types, "ids": ids,
+                    "shared_names": sorted(fields[lg] for lg, i in ids.items() if len(i) > 1),
                     "missing_required": missing_required, "missing_optional": missing_optional,
                     "known": FIELDS[key]}
     return out
 
 
-def list_records(table: str, fields: list[str], formula: str | None = None) -> Iterator[dict]:
-    """Every record in a table (100 per call), with only the given fields."""
+def list_records(table: str, fields: list[str], formula: str | None = None, *,
+                 by_id: bool = False) -> Iterator[dict]:
+    """Every record in a table (100 per call), with only the given fields (names, or field ids with by_id,
+    in which case the answer is keyed by field id too)."""
     params: list[tuple[str, str]] = [("pageSize", "100")] + [("fields[]", f) for f in fields]
+    if by_id:
+        params.append(("returnFieldsByFieldId", "true"))
     if formula:
         params.append(("filterByFormula", formula))
     offset = None
@@ -208,15 +304,52 @@ def list_records(table: str, fields: list[str], formula: str | None = None) -> I
             return
 
 
-def get_record(table: str, record_id: str) -> dict | None:
+def get_record(table: str, record_id: str, m: dict | None = None) -> dict | None:
+    """One record. With a resolved mapping m, its mapped fields keyed by name (as records() gives them)."""
     if not re.fullmatch(r"rec[A-Za-z0-9]{14}", record_id or ""):
         raise IntegrationError("Airtable: that isn't an Airtable record id.", retry=False)
+    by_id = m is not None and _has_ids(m)
     try:
-        return _get(f"{base_id()}/{_quote(table)}/{record_id}")
+        rec = _get(f"{base_id()}/{_quote(table)}/{record_id}",
+                   [("returnFieldsByFieldId", "true")] if by_id else None)
     except IntegrationError as exc:
         if exc.status == 404:
             return None
         raise
+    return _by_name(rec, m) if by_id and rec else rec
+
+
+def _has_ids(m: dict) -> bool:
+    ids = m.get("ids") or {}
+    return bool(m.get("fields")) and all(ids.get(logical) for logical in m["fields"])
+
+
+def _by_name(record: dict, m: dict) -> dict:
+    """A record answered by field id, keyed by field name again. A name two fields share takes the
+    first of them that has a value."""
+    got = record.get("fields") or {}
+    fields: dict[str, Any] = {}
+    for logical, name in m["fields"].items():
+        for fid in m["ids"][logical]:
+            value = got.get(fid)
+            if value not in (None, "", [], {}):
+                fields[name] = value
+                break
+    return {**record, "fields": fields}
+
+
+def records(m: dict, formula: str | None = None) -> Iterator[dict]:
+    """Every record of a resolved table (resolve()), with its mapped fields keyed by name.
+
+    Fields are asked for by id whenever the base gives ids: Airtable refuses a field *name* that two
+    fields share (422), which would stop the whole sync."""
+    names = list(m["fields"].values())
+    if not _has_ids(m):
+        yield from list_records(m["table"], names, formula)
+        return
+    wanted = list(dict.fromkeys(fid for logical in m["fields"] for fid in m["ids"][logical]))
+    for record in list_records(m["table"], wanted, formula, by_id=True):
+        yield _by_name(record, m)
 
 
 def _quote(table: str) -> str:

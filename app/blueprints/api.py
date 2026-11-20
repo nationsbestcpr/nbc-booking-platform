@@ -185,12 +185,19 @@ def classes():
         SELECT s.public_id, s.starts_at, s.ends_at, s.time_zone, s.local_date, s.status, s.is_published,
                s.delivery_mode, s.location_type, cf.code AS course_code, cf.name AS course_name,
                si.name AS site_name, m.slug AS city, m.name AS city_name,
-               av.sold_seats, av.held_seats, av.seat_limit, av.seats_left, av.waitlist_count
+               av.sold_seats, av.held_seats, av.seat_limit, av.seats_left, av.waitlist_count,
+               CASE WHEN li.id IS NOT NULL OR s.airtable_lead_instructor IS NOT NULL THEN
+                 json_build_object('id', li.public_id, 'name', coalesce(li.full_name, s.airtable_lead_instructor))
+               END AS lead_instructor,
+               sid.instructor_assigned, sid.availability_status AS instructor_availability_status,
+               sid.performance_tier AS instructor_performance_tier
           FROM sessions s
           JOIN metros m ON m.id = s.metro_id
           JOIN sites si ON si.id = s.site_id
           JOIN course_families cf ON cf.id = s.course_family_id
           JOIN session_availability av ON av.session_id = s.id
+          LEFT JOIN session_instructor_details sid ON sid.session_id = s.id
+          LEFT JOIN instructors li ON li.id = sid.lead_instructor_id
          WHERE user_has_permission(:uid, 'class.view', s.metro_id)
            AND (:city = '' OR m.slug = :city)
            AND (:course = '' OR cf.code = :course)
@@ -659,38 +666,157 @@ def waitlist_reoffer(entry_id: int):
 
 # --- Reference lists -----------------------------------------------------------------
 
+# Instructor data is Airtable's (synced read only, migration 0011); these calls are how the Ops Hub reads it.
+_INSTRUCTOR_SCOPE = """(user_has_permission(:uid, 'instructor.view', i.home_metro_id)
+                        OR user_has_permission(:uid, 'instructor.view', NULL))"""
+_INSTRUCTOR_LIST = """
+    SELECT i.public_id AS id, i.full_name AS name, i.first_name, i.last_name, i.email, i.phone_e164 AS phone,
+           i.status, i.city, i.state, i.postal_code, hm.slug AS home_city, i.page_type, i.is_hub_instructor,
+           i.active_in_enrollware, i.available_days, i.available_times, i.classes_per_month,
+           i.travel_radius_miles, i.notice_needed, cs.cert_status, cs.next_expiry AS next_cert_expiry,
+           coalesce((SELECT array_agg(im.metro_label ORDER BY im.metro_label) FROM instructor_metros im
+                      WHERE im.instructor_id = i.id), '{}') AS metros,
+           (SELECT count(*) FROM session_instructor_details d JOIN sessions s ON s.id = d.session_id
+             WHERE d.lead_instructor_id = i.id AND s.status = 'scheduled' AND s.starts_at > now()) AS upcoming_classes_led,
+           i.source_deleted_at IS NOT NULL AS removed_from_airtable
+      FROM instructors i
+      LEFT JOIN metros hm ON hm.id = i.home_metro_id
+      LEFT JOIN instructor_cert_status cs ON cs.instructor_id = i.id
+"""
+
+
 @bp.get("/instructors")
 @needs("instructor.view")
 def instructors():
-    """Instructors as the booking engine knows them (synced from Airtable, which owns them)."""
-    rows = db.fetch_all("""
-        SELECT i.id, i.first_name, i.last_name, i.email, i.phone_e164, i.status, hm.slug AS home_city,
-               (SELECT min(c.expires_on) FROM instructor_certs c
-                 WHERE c.instructor_id = i.id AND c.expires_on >= current_date) AS next_cert_expiry,
-               (SELECT count(*) FROM assignments a JOIN sessions s ON s.id = a.session_id
-                 WHERE a.instructor_id = i.id AND a.status = 'assigned' AND s.starts_at > now()) AS upcoming_classes
-          FROM instructors i LEFT JOIN metros hm ON hm.id = i.home_metro_id
-         WHERE user_has_permission(:uid, 'instructor.view', i.home_metro_id)
-            OR user_has_permission(:uid, 'instructor.view', NULL)
+    """Instructors from Airtable: contact, city areas, certification status and availability (filters: q, status,
+    metro, page_type, cert_status)."""
+    a = request.args
+    rows = db.fetch_all(_INSTRUCTOR_LIST + f"""
+         WHERE {_INSTRUCTOR_SCOPE}
+           AND (:q = '' OR i.full_name ILIKE '%' || :q || '%' OR i.email ILIKE '%' || :q || '%')
+           AND (:status = '' OR i.status = :status)
+           AND (:page_type = '' OR i.page_type = :page_type)
+           AND (:cert = '' OR cs.cert_status = :cert)
+           AND (:metro = '' OR EXISTS (SELECT 1 FROM instructor_metros im LEFT JOIN metros mm ON mm.id = im.metro_id
+                                        WHERE im.instructor_id = i.id AND (mm.slug = :metro OR im.metro_label = :metro)))
+           AND (i.source_deleted_at IS NULL OR :removed = 'yes')
          ORDER BY i.last_name, i.first_name
-    """, uid=auth.current_user().id)
+         LIMIT 1000
+    """, uid=auth.current_user().id, q=a.get("q", "").strip()[:80], status=a.get("status", ""),
+        page_type=a.get("page_type", ""), cert=a.get("cert_status", ""), metro=a.get("metro", ""),
+        removed=a.get("removed", ""))
+    return ok(rows, count=len(rows))
+
+
+@bp.get("/instructors/<public_id>")
+@needs("instructor.view")
+def instructor(public_id: str):
+    """One instructor, with everything Airtable holds: availability, outreach and removal, certifications, city
+    areas, HUB team, pre-approved and taught-at locations, and the classes they lead."""
+    if not re.fullmatch(r"[0-9a-fA-F-]{36}", public_id or ""):
+        abort(404)
+    uid = auth.current_user().id
+    row = db.fetch_one(f"""
+        SELECT i.*, hm.slug AS home_city, cs.cert_status, cs.next_expiry AS next_cert_expiry
+          FROM instructors i LEFT JOIN metros hm ON hm.id = i.home_metro_id
+          LEFT JOIN instructor_cert_status cs ON cs.instructor_id = i.id
+         WHERE i.public_id = CAST(:p AS uuid) AND {_INSTRUCTOR_SCOPE}
+    """, p=public_id, uid=uid)
+    if not row:
+        abort(404)
+    iid = row["id"]
+    out = {k: v for k, v in row.items() if k not in ("id", "user_account_id", "airtable_record_id", "qbo_vendor_id",
+                                                    "home_metro_id", "hub_metro_id", "reliability_score")}
+    out["id"] = out.pop("public_id")
+    out["phone"] = out.pop("phone_e164")
+    out["certifications"] = db.fetch_all("""SELECT cert_type, expires_on, issued_on, cert_number FROM instructor_certs
+                                             WHERE instructor_id = :i ORDER BY expires_on""", i=iid)
+    out["metros"] = db.fetch_all("""SELECT im.metro_label AS label, m.slug AS city FROM instructor_metros im
+                                     LEFT JOIN metros m ON m.id = im.metro_id WHERE im.instructor_id = :i
+                                     ORDER BY im.metro_label""", i=iid)
+    out["hub_team"] = db.fetch_all("""SELECT o.public_id AS id, o.full_name AS name, 'member' AS role
+                                        FROM instructor_hub_members h JOIN instructors o ON o.id = h.member_instructor_id
+                                       WHERE h.lead_instructor_id = :i
+                                      UNION ALL
+                                      SELECT o.public_id, o.full_name, 'lead'
+                                        FROM instructor_hub_members h JOIN instructors o ON o.id = h.lead_instructor_id
+                                       WHERE h.member_instructor_id = :i ORDER BY 3, 2""", i=iid)
+    out["locations"] = db.fetch_all("""SELECT l.relation, l.location_record_id, coalesce(si.name, lis.location_name) AS name,
+                                              m.slug AS city
+                                         FROM instructor_locations l
+                                         LEFT JOIN sites si ON si.id = l.site_id LEFT JOIN metros m ON m.id = si.metro_id
+                                         LEFT JOIN location_instructor_settings lis
+                                                ON lis.location_record_id = l.location_record_id
+                                        WHERE l.instructor_id = :i ORDER BY l.relation, 3""", i=iid)
+    out["upcoming_classes_led"] = db.fetch_all("""
+        SELECT s.public_id AS class, s.starts_at, s.time_zone, cf.name AS course_name, si.name AS site_name
+          FROM session_instructor_details d JOIN sessions s ON s.id = d.session_id
+          JOIN sites si ON si.id = s.site_id JOIN course_families cf ON cf.id = s.course_family_id
+         WHERE d.lead_instructor_id = :i AND s.status = 'scheduled' AND s.starts_at > now()
+         ORDER BY s.starts_at LIMIT 100""", i=iid)
+    return ok(out)
+
+
+@bp.get("/recruiting-needs")
+@needs("instructor.view", "teaching.coverage_view")
+def recruiting_needs():
+    """Instructor Recruiting Needs: locations that need an instructor, why, and the cancelled classes behind it."""
+    rows = db.fetch_all("""
+        SELECT n.airtable_record_id AS id, n.need, n.need_reasons, n.recruiting_status, n.recruiting_notes,
+               n.enrollware_no_instructor_cancels, n.cls_lost_cents, n.profit_while_running_cents,
+               n.students_per_class, n.last_month_held, n.airtable_created_at AS added_at,
+               coalesce((SELECT json_agg(json_build_object('location_record_id', l, 'name',
+                                  coalesce(si.name, lis.location_name), 'city', m.slug))
+                           FROM unnest(n.location_record_ids) AS l
+                           LEFT JOIN location_instructor_settings lis ON lis.location_record_id = l
+                           LEFT JOIN sites si ON si.airtable_record_id = l LEFT JOIN metros m ON m.id = si.metro_id),
+                        '[]') AS locations,
+               (SELECT count(*) FROM recruiting_need_classes c WHERE c.recruiting_need_id = n.id) AS cancelled_classes
+          FROM recruiting_needs n
+         WHERE n.source_deleted_at IS NULL AND (:status = '' OR n.recruiting_status = :status)
+         ORDER BY n.airtable_created_at DESC NULLS LAST
+    """, status=request.args.get("status", ""))
     return ok(rows, count=len(rows))
 
 
 @bp.get("/locations")
 @needs("class.view")
 def locations():
-    """Cities and their locations."""
-    uid = auth.current_user().id
+    """Cities and their locations, with how each is staffed (instructor assignment type, primary and HUB instructors,
+    instructor notes; extra pay with pay.view_all)."""
+    user = auth.current_user()
     rows = db.fetch_all("""
         SELECT m.slug AS city, m.name AS city_name, m.state_code, m.booking_system, m.time_zone,
                coalesce((SELECT json_agg(json_build_object('id', si.id, 'name', si.name, 'address', si.address_line1,
                                                            'city', si.city, 'state', si.state_code,
-                                                           'postal_code', si.postal_code, 'active', si.is_active)
+                                                           'postal_code', si.postal_code, 'active', si.is_active,
+                                                           'location_record_id', si.airtable_record_id,
+                                                           'instructors', CASE WHEN lis.location_record_id IS NOT NULL THEN
+                                                             json_build_object(
+                                                               'assignment_types', lis.assignment_types,
+                                                               'primary_instructor', lis.primary_instructor_name,
+                                                               'hub_primary_instructor', lis.hub_primary_instructor_name,
+                                                               'hub_primary_instructor_id', hp.public_id,
+                                                               'hub_secondary_instructor', lis.hub_secondary_instructor_name,
+                                                               'hub_secondary_instructor_id', hs.public_id,
+                                                               'instructor_training_location', lis.is_instructor_training_location,
+                                                               'instructor_notes', lis.instructor_notes,
+                                                               'extra_pay_cents', lis.extra_pay_cents,
+                                                               'extra_pay_reason', lis.extra_pay_reason) END)
                                          ORDER BY si.name)
-                           FROM sites si WHERE si.metro_id = m.id), '[]') AS sites
+                           FROM sites si
+                           LEFT JOIN location_instructor_settings lis ON lis.site_id = si.id
+                           LEFT JOIN instructors hp ON hp.id = lis.hub_primary_instructor_id
+                           LEFT JOIN instructors hs ON hs.id = lis.hub_secondary_instructor_id
+                          WHERE si.metro_id = m.id), '[]') AS sites
           FROM metros m WHERE user_has_permission(:uid, 'class.view', m.id) ORDER BY m.name
-    """, uid=uid)
+    """, uid=user.id)
+    if "pay.view_all" not in user.permissions:          # instructors' extra pay is for those who see pay
+        for city in rows:
+            for site in city["sites"]:
+                if site.get("instructors"):
+                    site["instructors"].pop("extra_pay_cents", None)
+                    site["instructors"].pop("extra_pay_reason", None)
     return ok(rows, count=len(rows))
 
 

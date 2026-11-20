@@ -1145,7 +1145,7 @@ CREATE TABLE instructors (
   first_name            text NOT NULL,
   last_name             text NOT NULL,
   user_account_id       bigint UNIQUE REFERENCES user_accounts (id),  -- set when invited to the portal
-  email                 citext NOT NULL UNIQUE,         -- contact address (sign-in lives on the account)
+  email                 citext UNIQUE,                  -- contact address (sign-in lives on the account); may be missing in Airtable
   phone_e164            text CHECK (phone_e164 ~ '^\+[1-9][0-9]{7,14}$'),
   status                text NOT NULL DEFAULT 'active'
                           CHECK (status IN ('onboarding', 'active', 'inactive', 'suspended')),
@@ -1161,9 +1161,42 @@ CREATE TABLE instructors (
   qbo_vendor_id         text,                           -- QuickBooks Online vendor reference
   created_at            timestamptz NOT NULL DEFAULT now(),
   updated_at            timestamptz NOT NULL DEFAULT now(),
+  -- 0011: Airtable's Instructors fields, as typed there.
+  full_name                 text,                       -- Name
+  hub_key                   text,
+  city                      text,
+  state                     text,
+  postal_code               text,
+  active_in_enrollware      boolean,
+  is_hub_instructor         boolean NOT NULL DEFAULT false,
+  interested_in_leading_hub boolean NOT NULL DEFAULT false,
+  additional_certs          text,
+  certs_last_synced_on      date,
+  available_days            text[] NOT NULL DEFAULT '{}',   -- Mon .. Sun
+  available_times           text[] NOT NULL DEFAULT '{}',   -- Morning, Afternoon, Evening
+  classes_per_month         integer CHECK (classes_per_month >= 0),
+  locations_to_avoid        text,
+  notice_needed             text,                       -- Same week / 1 week / 2+ weeks
+  availability_notes        text,
+  availability_updated_on   date,
+  availability_updated_by   text,
+  outreach_status           text,
+  last_contact_on           date,
+  next_follow_up_on         date,
+  outreach_notes            text,
+  removal_recommended_on    date,
+  removal_reason            text,
+  removal_status            text,                       -- Recommended / Approved / Removed / Kept
+  remove_from               text[] NOT NULL DEFAULT '{}',
+  associate                 boolean,
+  page_type                 text,                       -- Pre-Approval / HUB Lead / HUB Team Member / Open Bidding
+  date_approval_url         text,
+  other_enrollware_accounts text,                       -- matches Enrollware history to the instructor
+  source_synced_at          timestamptz,
+  source_deleted_at         timestamptz,
   CHECK ((hub_metro_id IS NULL) = (hub_priority IS NULL))
 );
-COMMENT ON TABLE instructors IS '[OWNED from portal launch; MIRROR: Airtable before] Teaching profile used for eligibility, ranking and pay. Linked to a user account (role "instructor") once invited to the portal. Lead vs helper is per class, in assignments.role.';
+COMMENT ON TABLE instructors IS '[MIRROR: Airtable Instructors] Teaching profile: contact, city areas, certifications, availability, outreach and removal, as Airtable has them. Linked to a user account (role "instructor") once invited to the portal. Lead vs helper is per class, in assignments.role.';
 
 CREATE TABLE instructor_certs (
   id                     bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -1228,6 +1261,117 @@ CREATE TABLE rate_card (
     EXCLUDE USING gist (course_family_id WITH =, role WITH =, effective WITH &&)
 );
 COMMENT ON TABLE rate_card IS '[OWNED] Set pay per class by course family and role. No rate bidding.';
+
+-- 0011: instructor data from Airtable (read only).
+-- The city areas an instructor covers ("Virginia - Richmond"), with the engine's
+-- city area when it has one by that name.
+CREATE TABLE instructor_metros (
+  instructor_id  bigint NOT NULL REFERENCES instructors (id) ON DELETE CASCADE,
+  metro_label    text NOT NULL,
+  metro_id       bigint REFERENCES metros (id),
+  PRIMARY KEY (instructor_id, metro_label)
+);
+COMMENT ON TABLE instructor_metros IS '[MIRROR: Airtable Instructors.Metros] The city areas each instructor covers.';
+
+-- HUB teams: who leads whom (Airtable's HUB Lead / HUB Team Members).
+CREATE TABLE instructor_hub_members (
+  lead_instructor_id    bigint NOT NULL REFERENCES instructors (id) ON DELETE CASCADE,
+  member_instructor_id  bigint NOT NULL REFERENCES instructors (id) ON DELETE CASCADE,
+  PRIMARY KEY (lead_instructor_id, member_instructor_id),
+  CHECK (lead_instructor_id <> member_instructor_id)
+);
+COMMENT ON TABLE instructor_hub_members IS '[MIRROR: Airtable Instructors.HUB Lead / HUB Team Members] HUB team membership.';
+
+-- Locations an instructor is pre-approved for, has taught at, or taught at
+-- before the location went inactive. Keyed by the Master Locations record, so
+-- locations with no class on sale (no site here) are kept too.
+CREATE TABLE instructor_locations (
+  instructor_id       bigint NOT NULL REFERENCES instructors (id) ON DELETE CASCADE,
+  location_record_id  text NOT NULL,
+  relation            text NOT NULL CHECK (relation IN ('pre_approved', 'taught', 'taught_inactive')),
+  site_id             bigint REFERENCES sites (id),
+  PRIMARY KEY (instructor_id, location_record_id, relation)
+);
+CREATE INDEX instructor_locations_site_idx ON instructor_locations (site_id, relation);
+COMMENT ON TABLE instructor_locations IS '[MIRROR: Airtable Instructors.Locations - Pre-Approval / Taught At] Instructor-location relations.';
+
+-- How each location is staffed (Master Locations' instructor fields). Staff
+-- only: it holds pay and private notes, so it is kept apart from sites, which
+-- public pages read.
+CREATE TABLE location_instructor_settings (
+  location_record_id             text PRIMARY KEY,
+  site_id                        bigint UNIQUE REFERENCES sites (id),
+  location_name                  text,
+  assignment_types               text[] NOT NULL DEFAULT '{}',
+  primary_instructor_name        text,
+  primary_instructor_id          bigint REFERENCES instructors (id),
+  hub_primary_instructor_name    text,
+  hub_primary_instructor_id      bigint REFERENCES instructors (id),
+  hub_secondary_instructor_name  text,
+  hub_secondary_instructor_id    bigint REFERENCES instructors (id),
+  is_instructor_training_location boolean,
+  instructor_notes               text,
+  extra_pay_cents                integer CHECK (extra_pay_cents >= 0),
+  extra_pay_reason               text,
+  updated_at                     timestamptz NOT NULL DEFAULT now()
+);
+COMMENT ON TABLE location_instructor_settings IS '[MIRROR: Airtable Master Locations] Instructor assignment type, primary and HUB instructors, instructor notes and extra pay per location. Staff only; never on public pages.';
+
+-- Per class: the lead named in Airtable matched to an instructor, and the
+-- class's instructor planning fields.
+CREATE TABLE session_instructor_details (
+  session_id           bigint PRIMARY KEY REFERENCES sessions (id) ON DELETE CASCADE,
+  lead_instructor_id   bigint REFERENCES instructors (id),
+  instructor_assigned  boolean NOT NULL DEFAULT false,
+  availability_status  text,
+  performance_tier     text,
+  updated_at           timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX session_instructor_details_lead_idx ON session_instructor_details (lead_instructor_id);
+COMMENT ON TABLE session_instructor_details IS '[MIRROR: Airtable Class Schedule] ASSIGN INSTRUCTOR matched to an instructor, Instructor Assigned, availability status and performance tier.';
+
+-- Instructor Recruiting Needs: locations that need an instructor, and why.
+CREATE TABLE recruiting_needs (
+  id                                bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  airtable_record_id                text NOT NULL UNIQUE REFERENCES airtable_records (record_id),
+  need                              text,
+  location_record_ids               text[] NOT NULL DEFAULT '{}',
+  need_reasons                      text[] NOT NULL DEFAULT '{}',
+  recruiting_status                 text,
+  recruiting_notes                  text,
+  enrollware_no_instructor_cancels  integer,
+  cls_lost_cents                    bigint,
+  profit_while_running_cents        bigint,
+  students_per_class                numeric(8,1),
+  last_month_held                   text,
+  airtable_created_at               timestamptz,
+  source_synced_at                  timestamptz,
+  source_deleted_at                 timestamptz
+);
+COMMENT ON TABLE recruiting_needs IS '[MIRROR: Airtable Instructor Recruiting Needs] Locations that need an instructor, with the no-instructor cancellations behind each.';
+
+CREATE TABLE recruiting_need_classes (
+  recruiting_need_id  bigint NOT NULL REFERENCES recruiting_needs (id) ON DELETE CASCADE,
+  class_record_id     text NOT NULL,
+  session_id          bigint REFERENCES sessions (id),
+  PRIMARY KEY (recruiting_need_id, class_record_id)
+);
+COMMENT ON TABLE recruiting_need_classes IS '[MIRROR: Airtable Instructor Recruiting Needs.No-Instructor Cancelled Classes] The cancelled classes behind a need.';
+
+-- Airtable's Cert Status, worked out from the r.25 certifications.
+CREATE VIEW instructor_cert_status AS
+SELECT i.id AS instructor_id,
+       CASE WHEN NOT EXISTS (SELECT 1 FROM instructor_certs c WHERE c.instructor_id = i.id
+                               AND c.cert_type LIKE '%\_R25' ESCAPE '\') THEN 'No r.25'
+            WHEN EXISTS (SELECT 1 FROM instructor_certs c WHERE c.instructor_id = i.id
+                           AND c.cert_type LIKE '%\_R25' ESCAPE '\' AND c.expires_on < current_date) THEN 'Expired'
+            WHEN EXISTS (SELECT 1 FROM instructor_certs c WHERE c.instructor_id = i.id
+                           AND c.cert_type LIKE '%\_R25' ESCAPE '\' AND c.expires_on < current_date + 60)
+              THEN 'Expiring within 60 days'
+            ELSE 'Current' END AS cert_status,
+       (SELECT min(c.expires_on) FROM instructor_certs c WHERE c.instructor_id = i.id
+           AND c.expires_on >= current_date) AS next_expiry
+  FROM instructors i;
 
 CREATE TABLE class_offers (
   id                    bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

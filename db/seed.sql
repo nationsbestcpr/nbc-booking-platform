@@ -183,3 +183,10 @@ INSERT INTO role_permissions (role_code, permission_code)
 SELECT 'instructor', code FROM permissions WHERE code LIKE 'own.%';
 
 COMMIT;
+
+-- Airtable's three r.25 instructor certifications, and what each lets someone teach (0011).
+INSERT INTO cert_type_course_families (cert_type, course_family_id)
+SELECT c.cert_type, f.id FROM (VALUES ('ARC_FA_CPR_AED_INSTRUCTOR_R25', 'FA_CPR_AED'),
+                                      ('ARC_BLS_INSTRUCTOR_R25', 'BLS'),
+                                      ('ARC_INSTRUCTOR_TRAINER_R25', 'IT')) AS c (cert_type, family)
+  JOIN course_families f ON f.code = c.family;

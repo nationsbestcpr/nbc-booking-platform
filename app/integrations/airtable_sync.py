@@ -1,4 +1,4 @@
-"""Airtable -> engine sync: courses, locations, then the class schedule.
+"""Airtable -> engine sync: courses, locations, instructors, the class schedule, recruiting needs.
 
 Runs every few minutes from the worker, from "Sync now" on the Integrations
 page, and for one class from the Airtable button (/admin/sync?record=rec…).
@@ -9,6 +9,8 @@ What it does (docs/source-of-truth.md, "Airtable"):
   * Master Locations-> cities (metros), sites, a room, private site details.
                        New cities start on Enrollware: nothing sells until an
                        admin switches the city on the Locations page.
+  * Instructors     -> instructors, their certifications, city areas, HUB teams and locations
+                       (app/integrations/airtable_instructors.py); full syncs only.
   * Class Schedule  -> classes (sessions) with their prices. A class is on sale
                        when its Status includes "Enrollware"; "Cancelled" in
                        Status cancels it. Two rows at the same site, course
@@ -38,6 +40,9 @@ from . import airtable, runs
 from .http import IntegrationError
 
 SOURCE = "airtable"
+# Class Schedule fields saved by airtable_instructors.sync_class_instructors, not with the class itself:
+# a change to them never re-saves the class.
+CLASS_INSTRUCTOR_FIELDS = {"instructor_assigned", "availability_status", "performance_tier"}
 
 
 class SkipQuietly(Exception):
@@ -295,8 +300,20 @@ def _run(trigger: str, user_id: int | None, record_id: str | None) -> dict:
         products = _sync_courses(mapping["courses"], run_id, stats)
         needed = _locations_in_use(schedule, mapping["schedule"])
         runs.progress(run_id, "Reading locations", 0, len(needed), force=True)
-        sites, virtual, broken = _sync_locations(mapping["locations"], run_id, stats, needed)
+        location_records: list[dict] = []
+        sites, virtual, broken = _sync_locations(mapping["locations"], run_id, stats, needed, location_records)
+        full = record_id is None
+        from . import airtable_instructors as instr
+        if full and instr.usable(mapping["instructors"]):
+            runs.progress(run_id, "Reading instructors", force=True)
+            instr.sync_instructors(mapping["instructors"], run_id, stats)
+        if full:
+            instr.sync_location_settings(mapping["locations"], location_records, stats)
         seen = _sync_schedule(mapping["schedule"], schedule, products, sites, virtual, broken, run_id, stats)
+        instr.sync_class_instructors(mapping["schedule"], schedule, run_id, stats)
+        if full and instr.usable(mapping["recruiting"]):
+            runs.progress(run_id, "Reading instructor recruiting needs", force=True)
+            instr.sync_recruiting(mapping["recruiting"], run_id, stats)
         if record_id is None:
             runs.progress(run_id, "Taking classes that left the schedule off sale", force=True)
             _mark_removed(seen, run_id, stats)
@@ -348,6 +365,13 @@ def _check_mapping(mapping: dict, run_id: int) -> bool:
     with db.transaction() as conn:
         for key, m in mapping.items():
             ref = f"table:{m['wanted']}"
+            if key in airtable.OPTIONAL_TABLES and (not m["table"] or m["missing_required"]):
+                # Instructors and recruiting needs: listed, and those steps are skipped; classes still sync.
+                runs.issue(conn, source=SOURCE, code="MISSING_TABLE" if not m["table"] else "MISSING_FIELD",
+                           severity="warning", run_id=run_id, external_ref=ref,
+                           message=f"Airtable has no table called “{m['wanted']}”, so it isn't synced."
+                           if not m["table"] else f"{m['table']}: no “Name” field, so instructors aren't synced.")
+                continue
             if not m["table"]:
                 runs.issue(conn, source=SOURCE, code="MISSING_TABLE", severity="error", run_id=run_id,
                            external_ref=ref, message=f"Airtable has no table called “{m['wanted']}”. "
@@ -447,7 +471,7 @@ def _sync_courses(m: dict, run_id: int, stats: dict) -> dict[str, list[dict]]:
     class defaults for that course. Inactive rows are skipped."""
     families = {r["code"]: r for r in db.fetch_all("SELECT id, code FROM course_families")}
     out: dict[str, list[dict]] = {}
-    for record in airtable.list_records(m["table"], list(m["fields"].values())):
+    for record in airtable.records(m):
         v = _values(record, m)
         try:
             name = _text(v.get("name"))
@@ -559,7 +583,8 @@ def parse_metro(raw: str | None) -> tuple[str, str | None] | None:
     return raw.strip(), None
 
 
-def _sync_locations(m: dict, run_id: int, stats: dict, needed: set[str] | None) -> tuple[dict[str, dict], set[str], set[str]]:
+def _sync_locations(m: dict, run_id: int, stats: dict, needed: set[str] | None,
+                    collect: list | None = None) -> tuple[dict[str, dict], set[str], set[str]]:
     """Sync the locations the classes use (needed=None: all).
     Returns ({location record id: site}, {virtual (online) location ids}, {ids of locations with a
     problem, listed once for the location instead of once per class})."""
@@ -567,7 +592,9 @@ def _sync_locations(m: dict, run_id: int, stats: dict, needed: set[str] | None) 
     virtual: set[str] = set()
     broken: set[str] = set()
     run_id_for_progress = run_id
-    for record in airtable.list_records(m["table"], list(m["fields"].values())):
+    for record in airtable.records(m):
+        if collect is not None:
+            collect.append(record)          # every location's instructor fields (location_instructor_settings)
         if needed is not None and record["id"] not in needed:
             continue
         runs.progress(run_id_for_progress, "Saving locations", len(out) + len(broken), len(needed or ()))
@@ -708,7 +735,7 @@ def _room(conn: Connection, site: dict, room_name: str | None, family_max: int) 
 def _fetch_schedule(m: dict, record_id: str | None, run_id: int, stats: dict) -> list[dict]:
     """Class Schedule rows from the day before yesterday on (or one row and the other rows of its class)."""
     if record_id:
-        rec = airtable.get_record(m["table"], record_id)
+        rec = airtable.get_record(m["table"], record_id, m)
         if rec is None:
             _unpublish_record(record_id, "The class was deleted in Airtable.", run_id, stats)
             return []
@@ -718,14 +745,14 @@ def _fetch_schedule(m: dict, record_id: str | None, run_id: int, stats: dict) ->
                   JOIN session_airtable_records o ON o.session_id = me.session_id
                  WHERE me.airtable_record_id = :r AND o.airtable_record_id <> :r
             """), {"r": record_id}).scalars().all()
-        return [rec] + [r for r in (airtable.get_record(m["table"], sid) for sid in siblings) if r]
+        return [rec] + [r for r in (airtable.get_record(m["table"], sid, m) for sid in siblings) if r]
     when = airtable.formula_field(m["fields"]["date"])
     status = airtable.formula_field(m["fields"]["status"])
     # Only rows marked Enrollware or CANCELLED, from the day before yesterday on: about a
     # dozen calls per sync. A row that loses Enrollware isn't fetched and comes off sale.
     formula = (f"AND(OR({when} = BLANK(), IS_AFTER({when}, DATEADD(TODAY(), -2, 'days'))), "
                f"OR(FIND('Enrollware', ARRAYJOIN({status}, ',')), FIND('CANCELLED', ARRAYJOIN({status}, ','))))")
-    return list(airtable.list_records(m["table"], list(m["fields"].values()), formula))
+    return list(airtable.records(m, formula))
 
 
 def _locations_in_use(records: list[dict], m: dict) -> set[str]:
@@ -915,7 +942,7 @@ def _parse_class(record: dict, v: dict, products: dict, sites: dict, virtual: se
         offers.append((course_rows[1], companion_price if companion_price is not None and companion_price >= 0
                        else course_rows[1]["price"]))
     lead = None if _is_record_ids(v.get("lead_instructor")) else _text(v.get("lead_instructor"))
-    digest = _hash({"v": v, "site": [site["site_id"], site["time_zone"], site["room_max"], site["slug"]],
+    digest = _hash({"v": {k: x for k, x in v.items() if k not in CLASS_INSTRUCTOR_FIELDS}, "site": [site["site_id"], site["time_zone"], site["room_max"], site["slug"]],
                     "offers": [[p["id"], c, p["family_id"], p["delivery"]] for p, c in offers],
                     "one_max": one_max, "starts": starts.isoformat(), "ends": ends.isoformat(),
                     "rules": 2})
