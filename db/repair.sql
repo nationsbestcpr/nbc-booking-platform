@@ -160,3 +160,7 @@ ALTER TABLE instructors
   ADD COLUMN IF NOT EXISTS other_enrollware_accounts text,
   ADD COLUMN IF NOT EXISTS source_synced_at          timestamptz,
   ADD COLUMN IF NOT EXISTS source_deleted_at         timestamptz;
+
+-- 0012: instructors confirm their classes.
+ALTER TABLE assignments ADD COLUMN IF NOT EXISTS confirmed_at timestamptz;
+ALTER TABLE assignments ADD COLUMN IF NOT EXISTS confirmed_by_user_id bigint REFERENCES user_accounts (id);

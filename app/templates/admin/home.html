@@ -3,6 +3,12 @@
 {% block heading %}Hi, {{ current_user.first_name }} <span class="accent">User Management</span>{% endblock %}
 {% block subhead %}<p>Who can sign in, what each role allows, and which tools may call the booking engine. The desk itself is in the NBC Ops Hub.</p>{% endblock %}
 {% block panel %}
+{% if cutover and (cutover.retired is not sameas true or cutover.on_enrollware) %}
+<p class="notice warn">Enrollware still takes bookings{% if cutover.on_enrollware %} in {{ cutover.on_enrollware }} cit{{ 'y' if cutover.on_enrollware == 1 else 'ies' }}{% endif %}. <a href="{{ url_for('admin.cutover') }}">Cutover and import</a> moves every city here and brings its upcoming registrations across.</p>
+{% endif %}
+{% if waiting_instructors %}
+<p class="notice warn">{{ waiting_instructors }} account{{ 's' if waiting_instructors != 1 }} waiting for the instructor role. <a href="{{ url_for('admin.instructor_accounts_page') }}">Instructor accounts</a></p>
+{% endif %}
 <div class="stats">
   <div class="stat"><strong class="num">{{ stats.active }}</strong><span>Active accounts</span></div>
   <div class="stat"><strong class="num">{{ stats.not_signed_in }}</strong><span>Added, not signed in yet</span></div>

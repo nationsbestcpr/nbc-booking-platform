@@ -17,6 +17,25 @@
   {% set expiring = certs|selectattr('days_left', 'lt', 60)|list %}
   <div class="stat{{ ' alert-stat' if expiring }}"><strong class="num">{{ expiring|length }}</strong><span>Certifications expiring within 60 days</span></div>
 </div>
+{% if to_confirm %}
+<section class="panel" aria-labelledby="confirm-title">
+  <h2 id="confirm-title">Please confirm</h2>
+  <p class="small muted">Classes in the next {{ window }} days. Confirm you'll be there, or tell NBC now if you can't.</p>
+  <ul class="list">
+    {% for c in to_confirm %}
+    <li><span><strong><a href="{{ url_for('teach.class_day', public_id=c.public_id) }}">{{ c.course_name }}</a></strong><br>
+      <span class="meta num">{{ class_date(c.starts_at, c.time_zone) }} · {{ class_time(c.starts_at, c.ends_at, c.time_zone) }}</span><br>
+      <span class="meta">{{ c.site_name }}, {{ c.city_name }}</span></span>
+      <span class="row-actions wrap" style="justify-content:flex-end">
+        <form method="post" action="{{ url_for('teach.class_confirm', public_id=c.public_id) }}">{{ csrf_input() }}
+          <input type="hidden" name="back" value="{{ url_for('teach.home') }}">
+          <button class="btn-small primary" type="submit">I'll be there</button></form>
+        <a class="btn-small" href="{{ url_for('teach.class_cant_teach', public_id=c.public_id) }}">I can't teach it</a>
+      </span></li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
 <div class="cols">
   <section class="panel" aria-labelledby="cls-title">
     <h2 id="cls-title">Upcoming classes</h2>
@@ -27,7 +46,11 @@
         <span><strong><a href="{{ url_for('teach.class_day', public_id=c.public_id) }}">{{ c.course_name }}</a></strong>{% if c.today %} <span class="status ok">Today: take attendance</span>{% endif %}<br>
           <span class="meta num">{{ class_date(c.starts_at, c.time_zone) }} · {{ class_time(c.starts_at, c.ends_at, c.time_zone) }}</span><br>
           <span class="meta">{{ c.site_name }}, {{ c.city_name }} · <span class="num">{{ c.sold_seats }} of {{ c.seat_limit }} seats sold</span>{% if c.waitlist_count %} · <span class="num">{{ c.waitlist_count }}</span> waiting{% endif %}</span></span>
-        <span class="status {{ 'ok' if c.role == 'lead' else 'wait' }}">{{ 'Lead instructor' if c.role == 'lead' else 'Helper instructor' }}</span>
+        <span class="stack" style="align-items:flex-end;gap:4px">
+          <span class="status {{ 'ok' if c.role == 'lead' else 'wait' }}">{{ 'Lead instructor' if c.role == 'lead' else 'Helper instructor' }}</span>
+          {% if c.notice %}<span class="status bad">You told NBC you can't</span>
+          {% elif c.confirmed_at %}<span class="status ok">Confirmed</span>{% endif %}
+        </span>
       </li>
       {% endfor %}
     </ul>
@@ -48,6 +71,23 @@
     {% endif %}
   </section>
   <section class="panel" aria-labelledby="cert-title">
+    {% set open_requests = requests|selectattr('status', 'equalto', 'open')|list %}
+    {% if requests %}
+    <h2 id="req-title">What you've asked NBC</h2>
+    <ul class="list">
+      {% for r in requests %}
+      <li><span>{% if r.kind == 'cant_teach' %}<strong>Can't teach</strong> {{ r.course_name }}<br><span class="meta num">{{ class_date(r.starts_at, r.time_zone) }} · {{ r.site_name }}</span>
+                {% else %}<strong>Availability change</strong><br><span class="meta">{{ (r.details.available_days or [])|join(', ') }} · {{ (r.details.available_times or [])|join(', ') }}{% if r.details.away_from %} · away {{ r.details.away_from }}{% if r.details.away_to and r.details.away_to != r.details.away_from %} to {{ r.details.away_to }}{% endif %}{% endif %}</span>{% endif %}
+          <br><span class="meta num">Sent {{ r.created_at|office_time }}{% if r.handled_note %} · NBC: {{ r.handled_note }}{% endif %}</span></span>
+        <span class="stack" style="align-items:flex-end;gap:4px">
+          <span class="status {{ {'open': 'wait', 'done': 'ok', 'dismissed': 'off', 'withdrawn': 'off'}[r.status] }}">{{ {'open': 'With NBC', 'done': 'Done', 'dismissed': 'Not changed', 'withdrawn': 'Withdrawn'}[r.status] }}</span>
+          {% if r.status == 'open' and not r.availability_request_id %}<form method="post" action="{{ url_for('teach.request_withdraw', request_id=r.id) }}">{{ csrf_input() }}
+            <button class="btn-small plain" type="submit">Withdraw</button></form>{% endif %}
+        </span></li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    <p class="small"><a href="{{ url_for('teach.availability') }}">Your availability</a>: see what NBC has and ask for a change.</p>
     <h2 id="cert-title">Certifications</h2>
     {% if certs %}
     <ul class="list">

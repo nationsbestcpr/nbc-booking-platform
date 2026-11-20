@@ -6,7 +6,9 @@ Profile and Settings are shared by all areas and show that area's tabs.
 
 from __future__ import annotations
 
-from flask import Blueprint, abort, flash, redirect, render_template, request, url_for
+from datetime import datetime, timezone
+
+from flask import Blueprint, Response, abort, flash, redirect, render_template, request, url_for
 from sqlalchemy import text
 
 from .. import areas, auth, booking_setup, classes, db, invites
@@ -77,6 +79,53 @@ def resend_invite(reg_public_id: str):
                     entity_type="registration", entity_id=reg["id"], payload={"registration_id": reg["id"]})
         flash(f"We're sending {reg['attendee_first_name']}'s invite again to {reg['attendee_email']}.", "ok")
     return redirect(url_for("me.home") + "#people")
+
+
+@bp.get("/my/bookings/<public_id>")
+@auth.login_required
+def booking(public_id: str):
+    """One booked seat: when and where, what to bring and do before, the result after class, and the receipt."""
+    user = auth.current_user()
+    seat = classes.seat(user.id, user.email, user.email_verified, public_id)
+    if seat is None:
+        abort(404)
+    seat["mine"] = (seat["attendee_email"] or "").lower() == user.email.lower()
+    return render_template("me/booking.html", r=seat, tabs=areas.tabs_for(user))
+
+
+@bp.get("/my/bookings/<public_id>/class.ics")
+@auth.login_required
+def booking_ics(public_id: str):
+    """The class as a calendar event (Apple, Google and Outlook calendars open .ics files)."""
+    user = auth.current_user()
+    seat = classes.seat(user.id, user.email, user.email_verified, public_id)
+    if seat is None:
+        abort(404)
+    def esc(v: str) -> str:
+        return (v or "").replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
+    def stamp(d) -> str:
+        return d.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    where = ", ".join(x for x in (seat["site_name"], seat["address_line1"], seat["site_city"],
+                                  f"{seat['site_state']} {seat['postal_code']}") if x)
+    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Nation's Best CPR//Booking//EN", "BEGIN:VEVENT",
+             f"UID:{seat['public_id']}@nationsbestcpr.com", f"DTSTAMP:{stamp(datetime.now(timezone.utc))}",
+             f"DTSTART:{stamp(seat['starts_at'])}", f"DTEND:{stamp(seat['ends_at'])}",
+             f"SUMMARY:{esc(seat['course_name'] + ' (Nation’s Best CPR)')}", f"LOCATION:{esc(where)}",
+             f"DESCRIPTION:{esc('Seat for ' + seat['attendee_first_name'] + ' ' + seat['attendee_last_name'] + '. Bring a photo ID.' + (' Finish the online part before class.' if seat['delivery_mode'] == 'blended' else ''))}",
+             "END:VEVENT", "END:VCALENDAR"]
+    return Response("\r\n".join(lines) + "\r\n", mimetype="text/calendar",
+                    headers={"Content-Disposition": 'attachment; filename="nbc-class.ics"'})
+
+
+@bp.get("/my/orders/<public_id>/receipt")
+@auth.login_required
+def receipt(public_id: str):
+    """A booking's receipt: seats, add-ons, payments and refunds. Prints or saves as PDF."""
+    user = auth.current_user()
+    order = classes.order_receipt(user.id, user.email, user.email_verified, public_id)
+    if order is None:
+        abort(404)
+    return render_template("me/receipt.html", o=order)
 
 
 def classes_is_uuid(value: str) -> bool:

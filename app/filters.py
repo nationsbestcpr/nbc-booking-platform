@@ -78,7 +78,7 @@ def setting_label(key: str) -> str:
 
 
 _CERT_WORDS = {"ARC": "Red Cross", "BLS": "BLS", "FA": "First Aid", "CPR": "CPR", "AED": "AED",
-               "INSTRUCTOR": "instructor", "TRAINER": "trainer"}
+               "INSTRUCTOR": "instructor", "TRAINER": "trainer", "R25": "(r.25)"}
 
 
 def cert_label(cert_type: str) -> str:

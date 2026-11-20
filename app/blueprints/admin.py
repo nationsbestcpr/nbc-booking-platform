@@ -19,7 +19,7 @@ from flask import Blueprint, abort, current_app, flash, redirect, render_templat
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
-from .. import areas, audit, auth, db
+from .. import areas, audit, auth, db, instructor_accounts
 
 bp = Blueprint("admin", __name__, url_prefix="/admin")
 
@@ -142,8 +142,14 @@ def home():
     live = current_app.config["APP_ENV"] == "production"
     fallback = [(label, [(e, l) for e, l in items if not (live and e in areas.TEST_SITE_ONLY)])
                 for label, items in areas.FALLBACK] if areas.fallback_open(user) else []
+    with db.engine().connect() as conn:
+        waiting_instructors = len(instructor_accounts.candidates(conn)) if user.has_permission("user.manage") else 0
+    cutover = db.fetch_one("""
+        SELECT (SELECT value FROM app_settings WHERE key = 'enrollware_retired') AS retired,
+               (SELECT count(*) FROM metros WHERE is_active AND booking_system <> 'engine') AS on_enrollware
+    """) if user.has_permission("system.cutover") else None
     return render_template("admin/home.html", by_role=by_role, stats=stats, recent=recent, fallback=fallback,
-                           tabs=areas.tabs_for(user))
+                           waiting_instructors=waiting_instructors, cutover=cutover, tabs=areas.tabs_for(user))
 
 
 # --- Users ---------------------------------------------------------------------------
@@ -217,6 +223,8 @@ def users_new():
                     """), {"u": uid, "r": role["code"], "c": form["city_id"] or None, "by": auth.current_user().id})
                     audit.record(conn, "user.create", "user_account", uid,
                                  after={"email": email, "role": role["code"], "city_id": form["city_id"] or None})
+                    if role["code"] == "instructor":
+                        instructor_accounts.link(conn, uid)
             except DBAPIError as exc:
                 message = _refusal_message(exc)
                 if message is None:
@@ -281,9 +289,93 @@ def users_detail(uid: int):
     me = auth.current_user()
     can_view_as = ("user.impersonate" in me.permissions and uid != me.id and account["status"] == "active"
                    and not any(g["grants_all"] for g in grants))
+    instructor = db.fetch_one("""
+        SELECT i.id, i.full_name, i.status, i.removal_status, i.user_account_id, cs.cert_status,
+               (SELECT count(*) FROM assignments a JOIN sessions s ON s.id = a.session_id
+                 WHERE a.instructor_id = i.id AND a.status = 'assigned' AND s.starts_at > now()) AS upcoming
+          FROM instructors i LEFT JOIN instructor_cert_status cs ON cs.instructor_id = i.id
+         WHERE (i.user_account_id = :id OR (i.user_account_id IS NULL AND i.email = :e))
+           AND i.source_deleted_at IS NULL
+         ORDER BY (i.user_account_id IS NULL) LIMIT 1
+    """, id=uid, e=account["email"])
     return render_template("admin/user_detail.html", account=account, grants=grants, grantable=grantable,
                            cities=cities, history=history, removed=removed, is_self=uid == me.id,
-                           can_view_as=can_view_as, tabs=areas.tabs_for(me))
+                           can_view_as=can_view_as, instructor=instructor, is_instructor="instructor" in held,
+                           tabs=areas.tabs_for(me))
+
+
+# --- Instructor accounts ----------------------------------------------------------------------
+
+@bp.get("/instructor-accounts")
+@auth.permission_required("user.manage")
+def instructor_accounts_page():
+    """Who can use the instructor portal: Airtable's instructors, which of them have an account with the
+    instructor role, and accounts waiting for it (signed up as instructors, or matching an instructor by email)."""
+    with db.engine().connect() as conn:
+        waiting = instructor_accounts.candidates(conn)
+    counts = db.fetch_one("""
+        SELECT count(*) FILTER (WHERE airtable_record_id IS NOT NULL AND source_deleted_at IS NULL) AS in_airtable,
+               count(*) FILTER (WHERE user_account_id IS NOT NULL AND source_deleted_at IS NULL) AS with_portal,
+               count(*) FILTER (WHERE airtable_record_id IS NOT NULL AND source_deleted_at IS NULL AND email IS NULL)
+                 AS no_email,
+               count(*) FILTER (WHERE status = 'inactive' AND source_deleted_at IS NULL) AS inactive
+          FROM instructors
+    """)
+    q = request.args.get("q", "").strip()
+    rows = db.fetch_all("""
+        SELECT i.id, i.full_name, i.first_name, i.last_name, i.email, i.status, i.removal_status, i.page_type,
+               a.id AS account_id, a.last_sign_in_at, cs.cert_status,
+               (SELECT count(*) FROM assignments x JOIN sessions s ON s.id = x.session_id
+                 WHERE x.instructor_id = i.id AND x.status = 'assigned' AND s.starts_at > now()) AS upcoming,
+               (SELECT string_agg(m.metro_label, ', ' ORDER BY m.metro_label) FROM instructor_metros m
+                 WHERE m.instructor_id = i.id) AS areas
+          FROM instructors i
+          LEFT JOIN user_accounts a ON a.id = i.user_account_id
+          LEFT JOIN instructor_cert_status cs ON cs.instructor_id = i.id
+         WHERE i.source_deleted_at IS NULL
+           AND (:q = '' OR coalesce(i.full_name, i.first_name || ' ' || i.last_name) ILIKE '%' || :q || '%'
+                OR i.email ILIKE '%' || :q || '%')
+         ORDER BY (a.id IS NULL), coalesce(i.full_name, i.first_name || ' ' || i.last_name)
+         LIMIT 200
+    """, q=q)
+    return render_template("admin/instructor_accounts.html", waiting=waiting, counts=counts, rows=rows, q=q,
+                           tabs=areas.tabs_for(auth.current_user()))
+
+
+@bp.post("/instructor-accounts/grant")
+@auth.permission_required("user.manage")
+def instructor_accounts_grant():
+    """Give the instructor role to accounts waiting for it: one (uid), or every one that matches an instructor
+    in Airtable who isn't removed (all=1)."""
+    me = auth.current_user()
+    with db.engine().connect() as conn:
+        waiting = instructor_accounts.candidates(conn)
+    if request.form.get("all") == "1":
+        chosen = [w for w in waiting if w["instructor_id"] and w["instructor_status"] != "inactive"]
+    else:
+        uid = request.form.get("uid", type=int)
+        chosen = [w for w in waiting if w["id"] == uid]
+        if not chosen:
+            flash("That account isn't waiting for the instructor role any more.", "error")
+            return redirect(url_for("admin.instructor_accounts_page"))
+    given = linked = 0
+    with db.transaction() as conn:
+        for w in chosen:
+            gid = conn.execute(text("""
+                INSERT INTO user_roles (user_account_id, role_code, granted_by_user_id)
+                VALUES (:u, 'instructor', :by) RETURNING id
+            """), {"u": w["id"], "by": me.id}).scalar_one()
+            audit.record(conn, "user.role_grant", "user_account", w["id"],
+                         after={"role": "instructor", "city_id": None, "grant_id": gid})
+            linked += instructor_accounts.link(conn, w["id"])
+            given += 1
+    if given:
+        flash(f"Gave the instructor role to {given} account(s); {linked} linked to their Airtable record, so their "
+              "classes show in the portal.", "ok")
+    else:
+        flash("Nobody to give the role to.", "error")
+    return redirect(url_for("admin.instructor_accounts_page"))
+
 
 
 @bp.post("/users/<int:uid>/roles")
@@ -307,13 +399,17 @@ def users_grant(uid: int):
             """), {"uid": uid, "role": role["code"], "city": city_id, "by": auth.current_user().id}).scalar_one()
             audit.record(conn, "user.role_grant", "user_account", uid,
                          after={"role": role["code"], "city_id": city_id, "grant_id": gid})
+            linked = instructor_accounts.link(conn, uid) if role["code"] == "instructor" else 0
     except DBAPIError as exc:
         message = _refusal_message(exc)
         if message is None:
             raise
         flash(message, "error")
         return redirect(url_for("admin.users_detail", uid=uid))
-    flash(f"{account['display_name']} now has the {role['name']} role.", "ok")
+    flash(f"{account['display_name']} now has the {role['name']} role." + (
+        " Their instructor record from Airtable is linked, so the portal shows their classes." if linked else
+        " No instructor record in Airtable has this email yet; it links on the next sync once one does."
+        if role["code"] == "instructor" else ""), "ok")
     return redirect(url_for("admin.users_detail", uid=uid))
 
 

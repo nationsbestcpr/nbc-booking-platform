@@ -13,6 +13,8 @@ contacts or payment details, which live in *_private_details tables).
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Mapping
@@ -233,3 +235,74 @@ def next_booked(user_id: int, email: str, email_verified: bool, limit: int = 3) 
            AND r.status IN ('awaiting_payment', 'confirmed') AND s.starts_at > now() AND s.status = 'scheduled'
          ORDER BY s.starts_at, s.id LIMIT :limit
     """, limit=limit, **params)
+
+
+def seat(user_id: int, email: str, email_verified: bool, public_id: str) -> dict | None:
+    """One seat this account booked or holds (the same rule as booked()), with its class, place and order."""
+    if not re.fullmatch(r"[0-9a-fA-F-]{36}", public_id or ""):
+        return None
+    mine, params = _mine(user_id, email, email_verified)
+    return db.fetch_one(f"""
+        SELECT r.id, r.public_id, r.status, r.attendee_first_name, r.attendee_last_name, r.attendee_email,
+               r.is_bring_a_friend, r.unit_price_cents, r.discount_cents, r.amount_paid_cents, r.amount_refunded_cents,
+               r.checked_in_at, r.completed_at, r.cancelled_at, r.cancel_reason_code, r.prerequisites_done_at,
+               o.id AS order_id, o.public_id AS order_public_id, o.status AS order_status, o.channel,
+               o.buyer_user_id = :uid AS bought_here, o.buyer_first_name, o.buyer_last_name, o.buyer_email,
+               o.total_cents, o.amount_paid_cents AS order_paid_cents, o.amount_refunded_cents AS order_refunded_cents,
+               o.invoice_due_on, o.created_at AS ordered_at,
+               s.public_id AS session_public_id, s.starts_at, s.ends_at, s.time_zone, s.status AS class_status,
+               s.delivery_mode, s.cancel_reason AS class_cancel_reason, cf.name AS course_name, cf.code AS course_code,
+               p.name AS product_name, p.requires_prerequisites,
+               si.name AS site_name, si.address_line1, si.address_line2, si.city AS site_city,
+               si.state_code AS site_state, si.postal_code, si.parking_notes_public, si.directions_public,
+               m.name AS city_name,
+               (SELECT rs.signed_at FROM roster_signatures rs WHERE rs.registration_id = r.id) AS signed_at
+          FROM registrations r
+          JOIN orders o ON o.id = r.order_id
+          JOIN sessions s ON s.id = r.session_id
+          JOIN products p ON p.id = r.product_id
+          JOIN sites si ON si.id = s.site_id
+          JOIN metros m ON m.id = s.metro_id
+          JOIN course_families cf ON cf.id = s.course_family_id
+         WHERE {mine} AND r.public_id = CAST(:p AS uuid) AND r.status NOT IN ('pending', 'expired')
+    """, p=public_id, **params)
+
+
+def order_receipt(user_id: int, email: str, email_verified: bool, order_public_id: str) -> dict | None:
+    """An order this account can see (it bought it, or holds a seat in it), with its seats, add-ons,
+    payments and refunds: the receipt."""
+    if not re.fullmatch(r"[0-9a-fA-F-]{36}", order_public_id or ""):
+        return None
+    mine, params = _mine(user_id, email, email_verified)
+    order = db.fetch_one(f"""
+        SELECT DISTINCT o.id, o.public_id, o.status, o.channel, o.buyer_first_name, o.buyer_last_name, o.buyer_email,
+               o.buyer_company, o.po_number, o.subtotal_cents, o.discount_cents, o.tax_cents, o.total_cents,
+               o.amount_paid_cents, o.amount_refunded_cents, o.promotion_code, o.created_at, o.paid_at,
+               o.invoice_due_on
+          FROM orders o JOIN registrations r ON r.order_id = o.id
+         WHERE {mine} AND o.public_id = CAST(:p AS uuid) AND o.status NOT IN ('open', 'expired')
+    """, p=order_public_id, **params)
+    if not order:
+        return None
+    order["seats"] = db.fetch_all("""
+        SELECT r.public_id, r.attendee_first_name, r.attendee_last_name, r.status, r.unit_price_cents,
+               r.discount_cents, p.name AS product_name, s.starts_at, s.time_zone, si.name AS site_name
+          FROM registrations r JOIN products p ON p.id = r.product_id
+          JOIN sessions s ON s.id = r.session_id JOIN sites si ON si.id = s.site_id
+         WHERE r.order_id = :o AND r.status NOT IN ('pending', 'expired') ORDER BY r.id
+    """, o=order["id"])
+    order["addons"] = db.fetch_all("""
+        SELECT name, unit_price_cents, quantity, discount_cents, status FROM order_addons
+         WHERE order_id = :o AND status IN ('paid', 'pending', 'refunded') ORDER BY id
+    """, o=order["id"])
+    order["payments"] = db.fetch_all("""
+        SELECT method, status, amount_cents, coalesce(received_at, created_at) AS at FROM payments
+         WHERE order_id = :o AND status IN ('succeeded', 'disputed') ORDER BY coalesce(received_at, created_at)
+    """, o=order["id"])
+    order["refunds"] = db.fetch_all("""
+        SELECT amount_cents, status, coalesce(processed_at, created_at) AS at FROM refunds
+         WHERE order_id = :o AND status IN ('succeeded', 'processing', 'approved') ORDER BY created_at
+    """, o=order["id"])
+    order["balance_cents"] = max(order["total_cents"] - order["amount_paid_cents"], 0) \
+        if order["status"] == "awaiting_payment" else 0
+    return order

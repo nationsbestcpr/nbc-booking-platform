@@ -190,3 +190,15 @@ SELECT c.cert_type, f.id FROM (VALUES ('ARC_FA_CPR_AED_INSTRUCTOR_R25', 'FA_CPR_
                                       ('ARC_BLS_INSTRUCTOR_R25', 'BLS'),
                                       ('ARC_INSTRUCTOR_TRAINER_R25', 'IT')) AS c (cert_type, family)
   JOIN course_families f ON f.code = c.family;
+
+-- Running without Enrollware (0012).
+INSERT INTO app_settings (key, value, description) VALUES
+  ('enrollware_retired', 'false',
+   'Enrollware no longer takes bookings: every city books here, and new cities from Airtable start here too (Superadmin → Enrollware cutover).'),
+  ('confirm_days_before', '5',
+   'Instructors confirm a class in the portal from this many days before it.');
+INSERT INTO permissions (code, area, description, own_records_only) VALUES
+  ('system.cutover',      'Admin',    'Move every city off Enrollware and import Enrollware''s registrations', false),
+  ('instructor.requests', 'Teaching', 'See and close instructors'' availability changes and "can''t teach" notices', false);
+INSERT INTO role_permissions (role_code, permission_code)
+SELECT DISTINCT role_code, 'instructor.requests' FROM role_permissions WHERE permission_code = 'instructor.manage';

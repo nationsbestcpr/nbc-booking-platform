@@ -1,0 +1,63 @@
+{% extends "dash/layout.html" %}
+{% block title %}Sign-in sheet · {{ s.course_name }}{% endblock %}
+{% block heading %}Sign <span class="accent">In</span>{% endblock %}
+{% block subhead %}<p>{{ s.course_name }} · <span class="num">{{ class_date(s.starts_at, s.time_zone) }} · {{ class_time(s.starts_at, s.ends_at, s.time_zone) }}</span> · {{ s.site_name }}</p>{% endblock %}
+{% block panel %}
+<p class="small"><a href="{{ url_for('teach.class_day', public_id=s.public_id) }}">← Back to the class</a></p>
+{% if not can.class_day %}
+<section class="panel"><p class="muted">The sign-in sheet opens on class day ({{ s.local_date.strftime('%a %b %-d') }}).</p></section>
+{% elif not can.can_mark %}
+<section class="panel"><p class="muted">The roster is closed for this class.</p></section>
+{% else %}
+<section class="panel" aria-labelledby="who-title">
+  <h2 id="who-title">Tap your name</h2>
+  <div class="sign-names">
+    {% for r in students %}{% set done = signed.get(r.id) %}
+    <button type="button" class="sign-name{{ ' done' if done }}" data-seat="{{ r.public_id }}" data-name="{{ r.attendee_first_name }} {{ r.attendee_last_name }}">
+      {{ r.attendee_first_name }} {{ r.attendee_last_name[:1] }}.{% if done %} <span class="status ok">Signed</span>{% endif %}</button>
+    {% else %}<p class="muted">No students booked.</p>{% endfor %}
+  </div>
+</section>
+
+<section class="panel" id="pad" hidden aria-labelledby="pad-title">
+  <h2 id="pad-title">Sign the roster</h2>
+  <form method="post" action="{{ url_for('teach.class_sign', public_id=s.public_id) }}" class="stack" id="sign-form">{{ csrf_input() }}
+    <input type="hidden" name="seat" id="seat">
+    <input type="hidden" name="signature" id="signature">
+    <div class="field"><label for="signed_name">Type your full name</label><input type="text" id="signed_name" name="signed_name" autocomplete="off" required minlength="2"></div>
+    <p class="small">By signing, I confirm I attended this class. <span class="muted">Sign in the box below.</span></p>
+    <canvas id="canvas" width="600" height="200" aria-label="Signature box" style="width:100%;max-width:600px;height:200px;border:2px dashed var(--navy);border-radius:12px;touch-action:none;background:#fff"></canvas>
+    <p class="field"><span class="error" id="sign-error" role="alert" hidden>Sign in the box first.</span></p>
+    <div class="row-actions wrap">
+      <button class="pill red" type="submit">Done <span class="arrow" aria-hidden="true">→</span></button>
+      <button class="btn-small" type="button" id="clear">Clear</button>
+      <button class="btn-small plain" type="button" id="cancel">Not me</button>
+    </div>
+  </form>
+</section>
+<script>
+(function () {
+  var pad = document.getElementById("pad"), canvas = document.getElementById("canvas"), ctx = canvas.getContext("2d");
+  var path = [], drawing = false, strokes = 0;
+  ctx.lineWidth = 3; ctx.lineCap = "round"; ctx.strokeStyle = "#0b1f4b";
+  function point(e) { var r = canvas.getBoundingClientRect();
+    return [Math.round((e.clientX - r.left) * canvas.width / r.width), Math.round((e.clientY - r.top) * canvas.height / r.height)]; }
+  canvas.addEventListener("pointerdown", function (e) { drawing = true; canvas.setPointerCapture(e.pointerId);
+    var p = point(e); path.push("M" + p[0] + " " + p[1]); ctx.beginPath(); ctx.moveTo(p[0], p[1]); });
+  canvas.addEventListener("pointermove", function (e) { if (!drawing) return; var p = point(e);
+    path.push("L" + p[0] + " " + p[1]); strokes++; ctx.lineTo(p[0], p[1]); ctx.stroke(); });
+  ["pointerup", "pointercancel", "pointerleave"].forEach(function (t) { canvas.addEventListener(t, function () { drawing = false; }); });
+  function reset() { path = []; strokes = 0; ctx.clearRect(0, 0, canvas.width, canvas.height); }
+  document.getElementById("clear").addEventListener("click", reset);
+  document.getElementById("cancel").addEventListener("click", function () { reset(); pad.hidden = true; });
+  document.querySelectorAll(".sign-name").forEach(function (b) { b.addEventListener("click", function () {
+    reset(); document.getElementById("seat").value = b.dataset.seat;
+    document.getElementById("signed_name").value = ""; document.getElementById("signed_name").placeholder = b.dataset.name;
+    pad.hidden = false; pad.scrollIntoView({behavior: "smooth"}); document.getElementById("signed_name").focus(); }); });
+  document.getElementById("sign-form").addEventListener("submit", function (e) {
+    if (strokes < 3) { e.preventDefault(); document.getElementById("sign-error").hidden = false; return; }
+    document.getElementById("signature").value = path.join(" "); });
+})();
+</script>
+{% endif %}
+{% endblock %}

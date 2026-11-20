@@ -66,8 +66,8 @@ must have it.
 
 | Method | Path | Needs | What it does |
 |---|---|---|---|
-| GET | `/api/v1/classes` | class.view | Classes in the person's cities with live seats, the lead instructor (matched to Airtable's Instructors), Instructor Assigned, availability status and performance tier. Filters: `city`, `course`, `status`, `from`, `to` (YYYY-MM-DD; from defaults to today), `full=yes/no`, `limit`, `offset` |
-| GET | `/api/v1/classes/<class>` | class.view or student.view | One class: students with attendance, its waiting list, what may be done |
+| GET | `/api/v1/classes` | class.view | Classes in the person's cities with live seats, the lead instructor (matched to Airtable's Instructors), Instructor Assigned, availability status and performance tier; `instructors` (who's assigned, whether they confirmed, any open "can't teach" notice) and `signed` (roster signatures). Filters: `city`, `course`, `status`, `from`, `to` (YYYY-MM-DD; from defaults to today), `full=yes/no`, `limit`, `offset` |
+| GET | `/api/v1/classes/<class>` | class.view or student.view | One class: students with attendance and roster signature, its waiting list, what may be done |
 | GET | `/api/v1/classes/<class>/class-list.csv` | class.roster_export | The class list for the Red Cross (CSV) |
 | POST | `/api/v1/classes/<class>/attendance` | booking.attendance | `{"seat": "<seat>", "mark": "checked_in" \| "complete" \| "no_show" \| "cleared"}` |
 | POST | `/api/v1/classes/<class>/finish` | booking.attendance | Finish the class: grades final, instructor pay records made |
@@ -113,6 +113,8 @@ must have it.
 | GET | `/api/v1/instructors/<instructor>` | instructor.view | Everything Airtable holds for one instructor: availability, outreach and removal, certifications, city areas, HUB team, pre-approved and taught-at locations, classes they lead |
 | GET | `/api/v1/recruiting-needs` | instructor.view or teaching.coverage_view | Instructor Recruiting Needs: locations, reasons, status, no-instructor cancellations. `status` |
 | GET | `/api/v1/locations` | class.view | Cities and their locations, each with how it's staffed: assignment type, primary and HUB instructors, instructor notes; extra pay only with pay.view_all |
+| GET | `/api/v1/instructor-requests` | instructor.requests | Instructors' availability changes and "can't teach" notices from the portal: the instructor, the class, the reason, the change asked for (days, times, classes per month, notice, dates away, and for each assigned class it rules out whether they'll still teach it). `status` = open (default), done, dismissed, withdrawn, all; `kind` = availability, cant_teach. Includes `open` counts |
+| POST | `/api/v1/instructor-requests/<id>/close` | instructor.requests | Once handled in Airtable: `{"outcome": "done" \| "dismissed", "note": "…"}` (a note is needed to dismiss; the instructor sees it) |
 | GET | `/api/v1/log` | audit.view | The action log: `since` (ISO; default 7 days), `area` (refund, booking, user …) |
 
 Not in the API yet (fallback pages for the Superadmin): booking questions,

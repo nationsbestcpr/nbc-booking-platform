@@ -499,3 +499,22 @@ button[disabled].pill { opacity: 0.5; cursor: not-allowed; }
 .waitlist-terms { display: flex; flex-direction: column; gap: 6px; }
 .waitlist-terms p { margin: 0; }
 @media (max-width: 640px) { .mark-row { justify-content: flex-start; } .pick { flex-wrap: wrap; } }
+
+/* Instructor sign-in sheet (0012): big name buttons students tap on the instructor's phone or tablet. */
+.sign-names { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); }
+.sign-name { font: 600 1.0625rem var(--font); text-align: left; padding: 16px 18px; border-radius: 14px;
+  border: 2px solid var(--navy); background: var(--white); color: var(--navy); cursor: pointer; min-height: 56px; }
+.sign-name:hover { background: var(--mist); }
+.sign-name.done { border-color: var(--line); color: var(--muted); }
+.row-actions.wrap { flex-wrap: wrap; justify-content: flex-start; }
+.date-input { font: 400 1rem var(--font); padding: 8px 12px; border-radius: 12px; border: 1.5px solid var(--line); background: var(--white); color: var(--ink); }
+
+/* The class list on a phone (class day): each student is a card, with the attendance buttons underneath. */
+@media (max-width: 640px) {
+  .table.roster thead { display: none; }
+  .table.roster, .table.roster tbody, .table.roster tr, .table.roster td { display: block; width: 100%; }
+  .table.roster tr { padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .table.roster td { border: 0; padding: 4px 0; }
+  .table.roster .mark-row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .table.roster .mark-row .btn-small { padding: 10px 16px; }
+}

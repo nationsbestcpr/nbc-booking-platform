@@ -1,0 +1,65 @@
+{% extends "dash/layout.html" %}
+{% block title %}{{ r.course_name }} · {{ class_date(r.starts_at, r.time_zone) }}{% endblock %}
+{% block heading %}{{ r.course_name }} <span class="accent">{{ class_date(r.starts_at, r.time_zone) }}</span>{% endblock %}
+{% block subhead %}<p>{% if r.mine %}Your seat{% else %}Seat for {{ r.attendee_first_name }} {{ r.attendee_last_name }}{% endif %} · {{ r.product_name }}</p>{% endblock %}
+{% block panel %}
+{% set upcoming = r.class_status == 'scheduled' and r.status in ('confirmed', 'awaiting_payment', 'displaced') %}
+<p class="small"><a href="{{ url_for('me.home') }}">← My classes</a></p>
+<div class="cols">
+<section class="panel" aria-labelledby="when-title">
+  <h2 id="when-title">When and where</h2>
+  {% if r.class_status == 'cancelled' or r.status == 'displaced' %}
+    <p class="notice error">This class was cancelled{% if r.class_cancel_reason %} ({{ r.class_cancel_reason }}){% endif %}. We'll contact you to move you to another date or refund you.</p>
+  {% elif r.status in ('cancelled', 'forfeited') %}
+    <p class="notice warn">This booking was cancelled{% if r.cancelled_at %} on {{ r.cancelled_at|office_time }}{% endif %}.</p>
+  {% endif %}
+  <dl class="kv">
+    <dt>Date</dt><dd class="num">{{ class_date(r.starts_at, r.time_zone) }}</dd>
+    <dt>Time</dt><dd class="num">{{ class_time(r.starts_at, r.ends_at, r.time_zone) }}</dd>
+    <dt>Place</dt><dd>{{ r.site_name }}<br>{{ r.address_line1 }}{% if r.address_line2 %}, {{ r.address_line2 }}{% endif %}<br>{{ r.site_city }}, {{ r.site_state }} {{ r.postal_code }}</dd>
+    {% if r.directions_public %}<dt>Finding us</dt><dd>{{ r.directions_public }}</dd>{% endif %}
+    {% if r.parking_notes_public %}<dt>Parking</dt><dd>{{ r.parking_notes_public }}</dd>{% endif %}
+  </dl>
+  {% if upcoming %}
+  <div class="row-actions wrap">
+    <a class="btn-small primary" href="{{ url_for('me.booking_ics', public_id=r.public_id) }}">Add to my calendar</a>
+    <a class="btn-small" href="https://www.google.com/maps/search/?api=1&query={{ (r.address_line1 ~ ', ' ~ r.site_city ~ ', ' ~ r.site_state ~ ' ' ~ r.postal_code)|urlencode }}" target="_blank" rel="noopener">Directions</a>
+  </div>
+  {% endif %}
+</section>
+
+<section class="panel" aria-labelledby="status-title">
+  <h2 id="status-title">{% if upcoming %}Before class{% else %}Your result{% endif %}</h2>
+  {% if r.status == 'completed' %}
+    <p><span class="status ok">Completed</span> {% if r.completed_at %}<span class="small muted">{{ r.completed_at|office_time }}</span>{% endif %}</p>
+    <p class="small">Your Red Cross digital certificate comes by email from the American Red Cross, usually within a few days. Can't find it? Email <a href="mailto:info@nationsbestcpr.com">info@nationsbestcpr.com</a>.</p>
+  {% elif r.status == 'no_show' %}
+    <p><span class="status bad">No show</span></p>
+    <p class="small">Missed it? Email <a href="mailto:info@nationsbestcpr.com">info@nationsbestcpr.com</a> about booking another date.</p>
+  {% elif upcoming %}
+    <ul class="list small">
+      {% if r.status == 'awaiting_payment' %}<li><span><strong>Payment due.</strong> {{ (r.total_cents - r.order_paid_cents)|money }} is still owed{% if r.invoice_due_on %}, due {{ r.invoice_due_on.strftime('%b %-d, %Y') }}{% endif %}. We'll send a payment link, or call us to pay.</span></li>{% endif %}
+      {% if r.delivery_mode == 'blended' %}<li><span><strong>Finish the online part first.</strong> The link is in your confirmation email; bring proof you finished it.</span></li>{% endif %}
+      {% if r.requires_prerequisites %}<li><span><strong>Prerequisites:</strong> {% if r.prerequisites_done_at %}received, thank you.{% else %}send your current certificate to info@nationsbestcpr.com before class.{% endif %}</span></li>{% endif %}
+      <li><span>Bring a photo ID and arrive 10 minutes early. On the day, you'll sign the class roster on your instructor's tablet.</span></li>
+      <li><span>Need to change or cancel? Email <a href="mailto:info@nationsbestcpr.com">info@nationsbestcpr.com</a>.</span></li>
+    </ul>
+    {% if r.signed_at %}<p class="small"><span class="status ok">Signed in</span> {{ r.signed_at|office_time }}</p>{% endif %}
+  {% else %}
+    <p class="muted small">Nothing more to do for this booking.</p>
+  {% endif %}
+</section>
+</div>
+
+<section class="panel" aria-labelledby="money-title">
+  <h2 id="money-title">Booking</h2>
+  <dl class="kv">
+    <dt>Booked by</dt><dd>{{ r.buyer_first_name }} {{ r.buyer_last_name }}{% if r.bought_here %} (you){% endif %}</dd>
+    <dt>Booked on</dt><dd class="num">{{ r.ordered_at|office_time }}</dd>
+    {% if r.bought_here %}
+    <dt>Total</dt><dd class="num">{{ r.total_cents|money }}{% if r.order_refunded_cents %} · {{ r.order_refunded_cents|money }} refunded{% endif %}</dd>
+    {% endif %}
+  </dl>
+  {% if r.bought_here %}<p class="small"><a href="{{ url_for('me.receipt', public_id=r.order_public_id) }}">Receipt</a> (print or save as PDF)</p>{% endif %}
+</section>
+{% endblock %}

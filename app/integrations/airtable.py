@@ -174,7 +174,9 @@ REQUIRED: dict[str, list[str]] = {
     "recruiting":  [],
 }
 
-PUBLISH_STATUS = "enrollware"     # Status includes "Enrollware" (decided Oct 13, 2026)
+# A class is on sale when its Status includes one of these (decided Oct 13, 2026: "Enrollware"; from 11/20
+# "Booking App" too, so the status can be renamed in Airtable once Enrollware is gone).
+PUBLISH_STATUSES = ("enrollware", "booking app")
 CANCELLED_PREFIX = "cancelled"    # "CANCELLED - Weather", "CANCELLED - NBC", ... (not "Send POC Cancellation")
 
 
@@ -359,3 +361,8 @@ def _quote(table: str) -> str:
 
 def formula_field(name: str) -> str:
     return "{" + name.replace("}", "\\}") + "}"
+
+
+def on_sale(statuses) -> bool:
+    """Does a Class Schedule row's Status put the class on sale?"""
+    return any(str(st).strip().lower() in PUBLISH_STATUSES for st in statuses or [])

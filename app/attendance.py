@@ -207,7 +207,10 @@ def export_csv(s: dict) -> str:
 def recent_for_instructor(instructor_id: int) -> list[dict]:
     """This instructor's classes from a week ago onwards, with whether attendance is open."""
     rows = db.fetch_all("""
-        SELECT a.role, s.public_id, s.starts_at, s.ends_at, s.time_zone, s.local_date, s.status, cf.name AS course_name,
+        SELECT a.role, a.status AS assignment_status, a.confirmed_at,
+               (SELECT r.id FROM instructor_requests r WHERE r.assignment_id = a.id AND r.kind = 'cant_teach'
+                   AND r.status = 'open' LIMIT 1) AS notice,
+               s.public_id, s.starts_at, s.ends_at, s.time_zone, s.local_date, s.status, cf.name AS course_name,
                si.name AS site_name, m.name AS city_name, av.sold_seats, av.seat_limit, av.waitlist_count,
                (SELECT count(*) FROM registrations r WHERE r.session_id = s.id
                    AND r.status IN ('confirmed', 'awaiting_payment')) AS unmarked
@@ -225,4 +228,5 @@ def recent_for_instructor(instructor_id: int) -> list[dict]:
         today = datetime.now(ZoneInfo(r["time_zone"])).date()
         r["today"] = r["local_date"] == today
         r["past"] = r["local_date"] < today
+        r["days_away"] = (r["local_date"] - today).days
     return rows

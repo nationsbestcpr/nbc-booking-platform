@@ -21,8 +21,9 @@ from __future__ import annotations
 import re
 
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 
-from .. import db
+from .. import db, instructor_accounts
 from . import airtable, runs
 from .airtable_sync import (SOURCE, RowProblem, _cents, _hash, _is_record_ids, _number, _problem, _register,
                             _text, _truthy, _values, parse_day, parse_metro, slugify)
@@ -147,6 +148,7 @@ def sync_instructors(m: dict, run_id: int, stats: dict) -> None:
         conn.execute(text("UPDATE instructors SET source_deleted_at = NULL WHERE airtable_record_id = ANY(:seen)"),
                      {"seen": seen})
         _links(conn, records, m, ids)
+        stats["instructor_accounts_linked"] = instructor_accounts.link(conn)   # accounts given the role earlier
         # A city area that came into the engine after an instructor was saved ("Ohio - Akron" once a class there
         # is on sale): link it now, even if the instructor hasn't changed in Airtable.
         for label in conn.execute(text("SELECT DISTINCT metro_label FROM instructor_metros WHERE metro_id IS NULL")).scalars():
@@ -382,6 +384,53 @@ def sync_class_instructors(m: dict, records: list[dict], run_id: int, stats: dic
             runs.resolve(conn, source=SOURCE, external_ref="lead-names")
     stats["classes_lead_matched"] = sum(1 for r in rows.values() if r["lead"])
     stats["lead_names_unmatched"] = len(unmatched)
+    _sync_assignments(rows, run_id, stats)
+
+
+def _sync_assignments(rows: dict[int, dict], run_id: int, stats: dict) -> None:
+    """Who teaches each class, from Airtable's ASSIGN INSTRUCTOR: the matched instructor gets the class in their
+    portal (a lead assignment); when Airtable names someone else, or nobody, the earlier lead's assignment is
+    removed. A completed class is left as it was. Two classes at the same time for one instructor can't both
+    be assigned (the database refuses it): the second is listed as a problem."""
+    made = removed = 0
+    clashes: list[int] = []
+    with db.transaction() as conn:
+        live = set(conn.execute(text("SELECT id FROM sessions WHERE id = ANY(:ids) AND status = 'scheduled'"),
+                                {"ids": list(rows)}).scalars())
+        for sid, row in rows.items():
+            current = conn.execute(text("""SELECT id, instructor_id FROM assignments
+                                            WHERE session_id = :s AND role = 'lead' AND status = 'assigned'"""),
+                                   {"s": sid}).mappings().all()
+            for a in current:
+                if a["instructor_id"] != row["lead"]:
+                    conn.execute(text("""UPDATE assignments SET status = 'removed', released_at = now(), released_by = 'ops',
+                                                release_reason = 'The lead instructor changed in Airtable.'
+                                          WHERE id = :id"""), {"id": a["id"]})
+                    removed += 1
+            if not row["lead"] or sid not in live or any(a["instructor_id"] == row["lead"] for a in current):
+                continue
+            if conn.execute(text("""SELECT 1 FROM assignments WHERE session_id = :s AND instructor_id = :i
+                                       AND status IN ('assigned', 'completed')"""),
+                            {"s": sid, "i": row["lead"]}).first():
+                continue
+            try:
+                with conn.begin_nested():
+                    conn.execute(text("""INSERT INTO assignments (session_id, instructor_id, role, source)
+                                         VALUES (:s, :i, 'lead', 'airtable')"""), {"s": sid, "i": row["lead"]})
+                made += 1
+            except DBAPIError as exc:
+                if "assignments_no_instructor_clash" not in str(exc.orig):
+                    raise
+                clashes.append(sid)
+        if clashes:
+            runs.issue(conn, source=SOURCE, code="INSTRUCTOR_DOUBLE_BOOKED", severity="warning", run_id=run_id,
+                       external_ref="double-booked", message=f"{len(clashes)} class(es) name a lead instructor who "
+                       "already teaches another class at that time, so they aren't in that instructor's portal. "
+                       "Fix ASSIGN INSTRUCTOR in Airtable.", details={"session_ids": clashes[:50]})
+        else:
+            runs.resolve(conn, source=SOURCE, external_ref="double-booked")
+    stats["assignments_made"] = made
+    stats["assignments_removed"] = removed
 
 
 # --- Instructor Recruiting Needs -----------------------------------------------------------

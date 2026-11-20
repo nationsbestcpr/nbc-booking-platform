@@ -19,7 +19,7 @@
         <td>{% if link_bookings %}<a href="{{ url_for('console.find_booking', public_id=r.public_id) }}">{{ r.attendee_last_name }}, {{ r.attendee_first_name }}</a>{% else %}<strong>{{ r.attendee_last_name }}, {{ r.attendee_first_name }}</strong>{% endif %}
           {% if show_contacts %}<br><span class="small muted">{{ r.attendee_email }}{% if r.attendee_phone_e164 %} · <span class="num">{{ r.attendee_phone_e164 }}</span>{% endif %}</span>{% endif %}</td>
         <td>{{ r.product_name }}</td>
-        <td><span class="status {{ st[0] }}">{{ st[1] }}</span>{% if r.checked_in_at %} <span class="status ok">Checked in</span>{% endif %}
+        <td><span class="status {{ st[0] }}">{{ st[1] }}</span>{% if r.checked_in_at %} <span class="status ok">Checked in</span>{% endif %}{% if r.signed %} <span class="status ok" title="Signed {{ r.signed.signed_at|office_time }}">Signed</span>{% endif %}
           {% if r.last_mark %}<br><span class="small muted">{{ r.last_mark.mark|replace('_', ' ')|capitalize }} by {{ r.last_mark.by or 'staff' }}</span>{% endif %}</td>
         {% if can.can_mark %}
         <td>{% if r.status != 'displaced' %}

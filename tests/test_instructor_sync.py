@@ -247,3 +247,41 @@ def test_the_ops_hub_reads_instructors_their_locations_and_recruiting(base, run_
     locs = client.get("/api/v1/locations", headers=h).json["data"]
     site = next(s for c in locs for s in c["sites"] if s["name"] == base.site_name)
     assert "extra_pay_cents" not in (site["instructors"] or {})
+
+
+def test_airtable_assigns_the_lead_and_booking_app_puts_a_class_on_sale(base, run_sync, q, app):
+    """With Enrollware gone, "Booking App" puts a class on sale like "Enrollware" did, and ASSIGN INSTRUCTOR gives
+    the matched instructor the class in their portal; naming someone else moves it."""
+    rid = base.add_class(status=("Booking App",))
+    base.record(rid)["fields"]["ASSIGN INSTRUCTOR (Name)"] = base.lead_name
+    stats = run_sync()
+    assert stats["status"] in ("succeeded", "partial") and stats["assignments_made"] >= 1
+    sid = q("SELECT session_id FROM session_airtable_records WHERE airtable_record_id = :r", r=rid)[0]["session_id"]
+    assert q("SELECT is_published FROM sessions WHERE id = :s", s=sid)[0]["is_published"]
+    lead = q("SELECT id FROM instructors WHERE airtable_record_id = :r", r=base.lead)[0]["id"]
+    member = q("SELECT id FROM instructors WHERE airtable_record_id = :r", r=base.member)[0]["id"]
+    a = q("SELECT instructor_id, role, source, status FROM assignments WHERE session_id = :s", s=sid)
+    assert a == [{"instructor_id": lead, "role": "lead", "source": "airtable", "status": "assigned"}]
+    base.record(rid)["fields"]["ASSIGN INSTRUCTOR (Name)"] = base.tables["Instructors"][1]["fields"]["Name"]
+    run_sync()
+    rows = {r["instructor_id"]: r["status"] for r in q("SELECT instructor_id, status FROM assignments WHERE session_id = :s",
+                                                       s=sid)}
+    assert rows == {lead: "removed", member: "assigned"}
+    formula = next(dict(c[2]["params"])["filterByFormula"] for c in base.calls if "Class%20Schedule" in c[1]
+                   and "filterByFormula" in dict(c[2]["params"] or []))
+    assert "FIND('Booking App'" in formula
+
+
+def test_an_instructor_account_links_when_airtable_has_its_email(base, run_sync, q, app):
+    """An account given the instructor role before Airtable had the instructor links on the next sync."""
+    from sqlalchemy import text as sql
+    from app import db
+    email = base.tables["Instructors"][1]["fields"]["Email"]
+    with app.app_context(), db.transaction() as conn:
+        uid = conn.execute(sql("INSERT INTO user_accounts (email, display_name, status) VALUES (:e, 'Mo', 'active') "
+                               "RETURNING id"), {"e": email}).scalar_one()
+        conn.execute(sql("INSERT INTO user_roles (user_account_id, role_code) VALUES (:u, 'user'), (:u, 'instructor')"),
+                     {"u": uid})
+    stats = run_sync()
+    assert stats["instructor_accounts_linked"] >= 1
+    assert q("SELECT user_account_id FROM instructors WHERE airtable_record_id = :r", r=base.member)[0]["user_account_id"] == uid

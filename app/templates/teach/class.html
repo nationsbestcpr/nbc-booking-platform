@@ -14,6 +14,40 @@
   <div class="stat"><strong class="num">{{ s.waitlist_count }}</strong><span>Waiting</span></div>
 </div>
 
+{% if mine and mine.status == 'assigned' and s.status == 'scheduled' and days_away >= 0 %}
+<section class="panel" aria-labelledby="you-title">
+  <h2 id="you-title">You and this class</h2>
+  {% if mine.notice %}
+    <p><span class="status bad">You told NBC you can't teach it</span> <span class="small muted">“{{ mine.notice.reason }}”. It stays on your list until NBC finds someone and updates it.</span></p>
+    <form method="post" action="{{ url_for('teach.request_withdraw', request_id=mine.notice.id) }}">{{ csrf_input() }}
+      <input type="hidden" name="back" value="{{ url_for('teach.class_day', public_id=s.public_id) }}">
+      <button class="btn-small" type="submit">I can teach it after all</button></form>
+  {% elif mine.confirmed_at %}
+    <p><span class="status ok">Confirmed</span> <span class="small muted num">{{ mine.confirmed_at|office_time }}</span></p>
+    <p class="small"><a href="{{ url_for('teach.class_cant_teach', public_id=s.public_id) }}">Something came up? Tell NBC you can't teach it.</a></p>
+  {% else %}
+    <p class="small">{% if days_away <= window %}Please confirm you'll be there.{% else %}You can confirm now, or when NBC asks {{ window }} days before.{% endif %}</p>
+    <div class="row-actions wrap">
+      <form method="post" action="{{ url_for('teach.class_confirm', public_id=s.public_id) }}">{{ csrf_input() }}
+        <button class="btn-small primary" type="submit">I'll be there</button></form>
+      <a class="btn-small" href="{{ url_for('teach.class_cant_teach', public_id=s.public_id) }}">I can't teach it</a>
+    </div>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if can.class_day and s.status != 'cancelled' and students %}
+{% set signed_count = students|selectattr('signed')|list|length %}
+<section class="panel" aria-labelledby="sign-title">
+  <h2 id="sign-title">Sign-in sheet</h2>
+  <p class="small"><span class="num">{{ signed_count }} of {{ students|selectattr('status', 'in', ['confirmed', 'awaiting_payment', 'completed'])|list|length }}</span> students have signed. Hand your phone or tablet round: each student taps their name and signs. Signing checks them in.</p>
+  <div class="row-actions wrap">
+    {% if can.can_mark %}<a class="pill red" href="{{ url_for('teach.class_sign_sheet', public_id=s.public_id) }}">Open the sign-in sheet <span class="arrow" aria-hidden="true">→</span></a>{% endif %}
+    {% if signed_count %}<a class="btn-small" href="{{ url_for('teach.class_signed_roster', public_id=s.public_id) }}">Signed roster (print or save as PDF)</a>{% endif %}
+  </div>
+</section>
+{% endif %}
+
 {{ rl.roster(s, students, can, 'teach.class_mark') }}
 
 <section class="panel" aria-labelledby="fin-title">

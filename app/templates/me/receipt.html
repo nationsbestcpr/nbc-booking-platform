@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Receipt · Nation's Best CPR</title>
+<style>
+  body { font: 15px/1.5 system-ui, sans-serif; color: #0b1f4b; max-width: 720px; margin: 24px auto; padding: 0 16px; background: #fff; }
+  h1 { font-size: 22px; margin: 0 0 4px; } h2 { font-size: 16px; margin: 24px 0 8px; } p { margin: 0 0 8px; }
+  table { width: 100%; border-collapse: collapse; } th, td { padding: 6px 0; border-bottom: 1px solid #dde3ef; text-align: left; }
+  td.amt, th.amt { text-align: right; white-space: nowrap; } .muted { color: #5a6785; } .total td { font-weight: 700; border-bottom: 0; }
+  @media print { .no-print { display: none; } }
+</style></head>
+<body>
+<p class="no-print"><a href="{{ url_for('me.home') }}">← My classes</a> · <a href="#" onclick="window.print();return false">Print or save as PDF</a></p>
+<h1>Nation's Best CPR: receipt</h1>
+<p class="muted">Booking {{ o.public_id|string|truncate(8, true, '') }} · {{ o.created_at|office_time }}</p>
+<p>{{ o.buyer_first_name }} {{ o.buyer_last_name }} · {{ o.buyer_email }}{% if o.buyer_company %}<br>{{ o.buyer_company }}{% endif %}{% if o.po_number %} · PO {{ o.po_number }}{% endif %}</p>
+<h2>Seats</h2>
+<table><tbody>
+  {% for s in o.seats %}<tr><td>{{ s.product_name }}<br><span class="muted">{{ s.attendee_first_name }} {{ s.attendee_last_name }} · {{ class_date(s.starts_at, s.time_zone) }} · {{ s.site_name }}{% if s.status in ('cancelled', 'forfeited') %} · cancelled{% endif %}</span></td>
+    <td class="amt">{{ s.unit_price_cents|money }}{% if s.discount_cents %}<br><span class="muted">−{{ s.discount_cents|money }}</span>{% endif %}</td></tr>{% endfor %}
+  {% for a in o.addons %}<tr><td>{{ a.name }}{% if a.quantity > 1 %} × {{ a.quantity }}{% endif %}</td><td class="amt">{{ (a.unit_price_cents * a.quantity - a.discount_cents)|money }}</td></tr>{% endfor %}
+  {% if o.discount_cents %}<tr><td>Discount{% if o.promotion_code %} ({{ o.promotion_code }}){% endif %}</td><td class="amt">−{{ o.discount_cents|money }}</td></tr>{% endif %}
+  {% if o.tax_cents %}<tr><td>Tax</td><td class="amt">{{ o.tax_cents|money }}</td></tr>{% endif %}
+  <tr class="total"><td>Total</td><td class="amt">{{ o.total_cents|money }}</td></tr>
+</tbody></table>
+<h2>Payments</h2>
+<table><tbody>
+  {% for p in o.payments %}<tr><td>{{ {'card': 'Card', 'invoice': 'Invoice', 'manual': 'Paid'}[p.method] }} · {{ p.at|office_time }}</td><td class="amt">{{ p.amount_cents|money }}</td></tr>
+  {% else %}<tr><td class="muted">No payments yet.</td><td></td></tr>{% endfor %}
+  {% for f in o.refunds %}<tr><td>Refund{% if f.status != 'succeeded' %} (on its way){% endif %} · {{ f.at|office_time }}</td><td class="amt">−{{ f.amount_cents|money }}</td></tr>{% endfor %}
+  {% if o.balance_cents %}<tr class="total"><td>Still due{% if o.invoice_due_on %} by {{ o.invoice_due_on.strftime('%b %-d, %Y') }}{% endif %}</td><td class="amt">{{ o.balance_cents|money }}</td></tr>{% endif %}
+</tbody></table>
+<p class="muted" style="margin-top:24px">Nation's Best CPR · info@nationsbestcpr.com</p>
+</body></html>

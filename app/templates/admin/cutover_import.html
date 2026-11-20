@@ -1,0 +1,34 @@
+{% extends "dash/layout.html" %}
+{% block title %}Enrollware import{% endblock %}
+{% block heading %}Enrollware <span class="accent">Import</span>{% endblock %}
+{% block subhead %}<p>{{ imp.file_name }} · {{ imp.created_at|office_time }} · {{ imp.by_name }}</p>{% endblock %}
+{% block panel %}
+<p><a href="{{ url_for('admin.cutover') }}" style="color:var(--navy);font-weight:600">← Cutover and import</a></p>
+{% set c = summary.get('counts', {}) %}
+<div class="stats">
+  <div class="stat"><strong class="num">{{ c.get('imported', 0) }}</strong><span>Seats imported</span></div>
+  <div class="stat"><strong class="num">{{ c.get('waitlisted', 0) }}</strong><span>Waiting-list places</span></div>
+  <div class="stat"><strong class="num">{{ summary.get('classes', 0) }}</strong><span>Classes</span></div>
+  <div class="stat"><strong class="num">{{ c.get('unmatched', 0) + c.get('refused', 0) }}</strong><span>Need a look</span></div>
+  <div class="stat"><strong class="num">{{ c.get('skipped', 0) + c.get('already_imported', 0) }}</strong><span>Skipped</span></div>
+</div>
+<section class="panel">
+  <form class="toolbar" method="get">
+    <div class="field"><label for="outcome">Show</label>
+      <select id="outcome" name="outcome" onchange="this.form.submit()"><option value="">Every row</option>
+        {% for k, l in [('imported', 'Imported'), ('waitlisted', 'Waiting list'), ('unmatched', 'No class found'), ('refused', 'Refused'), ('skipped', 'Skipped'), ('already_imported', 'Already imported')] %}
+        <option value="{{ k }}"{{ ' selected' if k == outcome }}>{{ l }}</option>{% endfor %}</select></div>
+    <noscript><button class="pill plain" type="submit">Show</button></noscript>
+  </form>
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>Row</th><th>Outcome</th><th>Student</th><th>Class</th><th>Note</th></tr></thead>
+    <tbody>{% for r in rows %}
+      <tr><td class="num">{{ r.row_number }}</td>
+        <td><span class="status {{ {'imported': 'ok', 'waitlisted': 'ok', 'unmatched': 'bad', 'refused': 'bad'}.get(r.outcome, 'off') }}">{{ {'imported': 'Imported', 'waitlisted': 'Waiting list', 'unmatched': 'No class found', 'refused': 'Refused', 'skipped': 'Skipped', 'already_imported': 'Already imported'}[r.outcome] }}</span></td>
+        <td>{{ r.name or '—' }}</td>
+        <td class="small">{% if r.class_id %}{{ r.course_name }} · {{ r.site_name }}<br><span class="num">{{ class_date(r.starts_at, r.time_zone) }} · {{ local_dt(r.starts_at, r.time_zone).strftime('%-I:%M %p') }}</span>{% else %}{{ r.enrollware_class_ref or '—' }}{% endif %}</td>
+        <td class="small">{{ r.reason or '' }}</td></tr>
+    {% else %}<tr><td colspan="5" class="muted">No rows.</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+{% endblock %}

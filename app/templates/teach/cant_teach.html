@@ -1,0 +1,20 @@
+{% extends "dash/layout.html" %}
+{% block title %}Can't teach {{ s.course_name }}{% endblock %}
+{% block heading %}Can't teach <span class="accent">this class?</span>{% endblock %}
+{% block subhead %}<p>{{ s.course_name }} · <span class="num">{{ class_date(s.starts_at, s.time_zone) }} · {{ class_time(s.starts_at, s.ends_at, s.time_zone) }}</span> · {{ s.site_name }}</p>{% endblock %}
+{% block panel %}
+<p class="small"><a href="{{ url_for('teach.class_day', public_id=s.public_id) }}">← Back to the class</a></p>
+<section class="panel">
+  {% if mine and mine.notice %}
+  <p>NBC already has your notice for this class.</p>
+  {% else %}
+  <p class="small">NBC finds another instructor and updates the schedule. Until they do, the class stays on your list and you're still its instructor, so tell them as early as you can. For a class in the next two days, please also call the operations team.</p>
+  <form method="post" class="stack">{{ csrf_input() }}
+    <div class="field"><label for="reason">Why can't you teach it?</label>
+      <textarea id="reason" name="reason" rows="3" required minlength="3" maxlength="2000" placeholder="e.g. Family emergency; I'm away that weekend">{{ reason }}</textarea>
+      {% if error %}<span class="error" role="alert">{{ error }}</span>{% endif %}</div>
+    <button class="pill red" type="submit" style="align-self:flex-start">Tell NBC <span class="arrow" aria-hidden="true">→</span></button>
+  </form>
+  {% endif %}
+</section>
+{% endblock %}

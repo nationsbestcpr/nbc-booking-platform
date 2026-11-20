@@ -1,0 +1,69 @@
+{% extends "dash/layout.html" %}
+{% block title %}Availability{% endblock %}
+{% block heading %}Your <span class="accent">Availability</span>{% endblock %}
+{% block subhead %}<p>When you can teach, as NBC has it. Ask for a change here; the operations team updates it, usually within a working day.</p>{% endblock %}
+{% block panel %}
+{% if not me %}
+<section class="panel"><p class="muted">Your account isn't linked to an instructor record yet. Ask the operations team to link it.</p></section>
+{% else %}
+<section class="panel" aria-labelledby="now-title">
+  <h2 id="now-title">What NBC has now</h2>
+  <dl class="kv">
+    <dt>Days</dt><dd>{{ (me.available_days or [])|join(', ') or 'Not given' }}</dd>
+    <dt>Times</dt><dd>{{ (me.available_times or [])|join(', ') or 'Not given' }}</dd>
+    <dt>Classes per month</dt><dd class="num">{{ me.classes_per_month or '—' }}</dd>
+    <dt>Notice needed</dt><dd>{{ me.notice_needed or '—' }}</dd>
+    <dt>Travel</dt><dd>{{ (me.travel_radius_miles ~ ' miles') if me.travel_radius_miles else '—' }}</dd>
+    <dt>Locations to avoid</dt><dd>{{ me.locations_to_avoid or '—' }}</dd>
+    <dt>Updated</dt><dd class="num">{{ me.availability_updated_on.strftime('%b %-d, %Y') if me.availability_updated_on else '—' }}</dd>
+  </dl>
+  {% set open_requests = requests|selectattr('status', 'equalto', 'open')|list %}
+  {% if open_requests %}
+  <p class="notice warn">You have a change waiting with NBC (sent {{ open_requests[0].created_at|office_time }}). Sending another replaces nothing: NBC sees both.</p>
+  {% endif %}
+  {% for r in requests if r.status != 'open' %}{% if loop.first %}<h3>Earlier changes</h3><ul class="list">{% endif %}
+    <li><span class="small">{{ (r.details.available_days or [])|join(', ') }} · {{ (r.details.available_times or [])|join(', ') }}<br><span class="meta num">Sent {{ r.created_at|office_time }}{% if r.handled_note %} · NBC: {{ r.handled_note }}{% endif %}</span></span>
+      <span class="status {{ {'done': 'ok', 'dismissed': 'off', 'withdrawn': 'off'}[r.status] }}">{{ {'done': 'Done', 'dismissed': 'Not changed', 'withdrawn': 'Withdrawn'}[r.status] }}</span></li>
+  {% if loop.last %}</ul>{% endif %}{% endfor %}
+</section>
+
+<section class="panel" aria-labelledby="change-title">
+  <h2 id="change-title">Ask for a change</h2>
+  {% if error %}<p class="notice error" role="alert">{{ error }}</p>{% endif %}
+  <form method="post" class="stack">{{ csrf_input() }}
+    <fieldset class="field"><legend>Days you can teach</legend>
+      <div class="check-row">{% for d in days %}<label><input type="checkbox" name="days" value="{{ d }}"{{ ' checked' if d in form.days }}> {{ d }}</label>{% endfor %}</div></fieldset>
+    <fieldset class="field"><legend>Times of day</legend>
+      <div class="check-row">{% for t in times %}<label><input type="checkbox" name="times" value="{{ t }}"{{ ' checked' if t in form.times }}> {{ t }}</label>{% endfor %}</div>
+      <span class="small muted">Morning: starts before noon · Afternoon: noon to 5 pm · Evening: after 5 pm</span></fieldset>
+    <div class="field"><label for="classes_per_month">Classes per month</label><input type="text" id="classes_per_month" name="classes_per_month" inputmode="numeric" pattern="[0-9]{1,2}" value="{{ form.classes_per_month }}"></div>
+    <div class="field"><label for="notice_needed">Notice you need</label>
+      <select id="notice_needed" name="notice_needed"><option value="">—</option>{% for n in notice %}<option{{ ' selected' if n == form.notice_needed }}>{{ n }}</option>{% endfor %}</select></div>
+    <div class="field"><label for="locations_to_avoid">Locations to avoid</label><input type="text" id="locations_to_avoid" name="locations_to_avoid" value="{{ form.locations_to_avoid }}"></div>
+    <fieldset class="field"><legend>Away (optional)</legend>
+      <div class="check-row"><label>From <input type="date" class="date-input" name="away_from" value="{{ form.away_from }}"></label><label>to <input type="date" class="date-input" name="away_to" value="{{ form.away_to }}"></label></div></fieldset>
+    <div class="field"><label for="note">Anything else NBC should know</label><textarea id="note" name="note" rows="2">{{ form.note }}</textarea></div>
+
+    {% if clashing %}
+    <div class="panel" style="border:2px solid var(--red)">
+      <h3>Classes you're assigned to that this rules out</h3>
+      <p class="small">A change can't take a class off you by itself. For each one, say whether you'll still teach it. If you can't, NBC is told and finds someone else; the class stays yours until they do.</p>
+      <ul class="list">
+      {% for c in clashing %}{% set k = c.assignment_id|string %}
+        <li style="display:block"><strong>{{ c.course_name }}</strong> · {{ c.site_name }}<br>
+          <span class="meta num">{{ class_date(c.starts_at, c.time_zone) }} · {{ class_time(c.starts_at, c.ends_at, c.time_zone) }}</span> <span class="small muted">({{ c.why_text }})</span>
+          <div class="check-row" style="margin-top:6px">
+            <label><input type="radio" name="class_{{ k }}" value="keep" required{{ ' checked' if decisions.get(k) == 'keep' }}> I'll still teach it</label>
+            <label><input type="radio" name="class_{{ k }}" value="cant_teach"{{ ' checked' if decisions.get(k) == 'cant_teach' }}> I can't teach it</label>
+          </div>
+          <div class="field"><label for="reason_{{ k }}" class="small">If you can't, why?</label><input type="text" id="reason_{{ k }}" name="reason_{{ k }}" value="{{ reasons.get(k, '') }}"></div>
+        </li>
+      {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+    <button class="pill red" type="submit" style="align-self:flex-start">Send to NBC <span class="arrow" aria-hidden="true">→</span></button>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

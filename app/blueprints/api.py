@@ -31,7 +31,7 @@ from flask import Blueprint, Response, abort, g, jsonify, request
 from sqlalchemy import text
 from werkzeug.exceptions import HTTPException
 
-from .. import apikeys, attendance, audit, auth, db, desk, refunds, waitlist
+from .. import apikeys, attendance, audit, auth, db, desk, instructor_portal, refunds, waitlist
 from . import console
 
 bp = Blueprint("api", __name__, url_prefix="/api/v1")
@@ -190,7 +190,18 @@ def classes():
                  json_build_object('id', li.public_id, 'name', coalesce(li.full_name, s.airtable_lead_instructor))
                END AS lead_instructor,
                sid.instructor_assigned, sid.availability_status AS instructor_availability_status,
-               sid.performance_tier AS instructor_performance_tier
+               sid.performance_tier AS instructor_performance_tier,
+               (SELECT json_agg(json_build_object(
+                         'id', ai.public_id, 'name', coalesce(ai.full_name, ai.first_name || ' ' || ai.last_name),
+                         'role', CASE a.role WHEN 'co' THEN 'helper' ELSE a.role END,
+                         'confirmed_at', a.confirmed_at,
+                         'cant_teach', (SELECT json_build_object('request_id', r.id, 'reason', r.reason, 'sent_at', r.created_at)
+                                          FROM instructor_requests r WHERE r.assignment_id = a.id
+                                           AND r.kind = 'cant_teach' AND r.status = 'open' LIMIT 1))
+                         ORDER BY a.role DESC)
+                  FROM assignments a JOIN instructors ai ON ai.id = a.instructor_id
+                 WHERE a.session_id = s.id AND a.status IN ('assigned', 'completed')) AS instructors,
+               (SELECT count(*) FROM roster_signatures rs WHERE rs.session_id = s.id) AS signed
           FROM sessions s
           JOIN metros m ON m.id = s.metro_id
           JOIN sites si ON si.id = s.site_id
@@ -230,7 +241,11 @@ def class_detail(public_id: str):
         for st in students:
             st.pop("attendee_email", None)
             st.pop("attendee_phone_e164", None)
+    signed = instructor_portal.signatures(s["id"])
     for st in students:
+        sg = signed.get(st["id"])
+        st["signed_at"] = sg["signed_at"] if sg else None
+        st["signed_name"] = sg["signed_name"] if sg else None
         st.pop("id", None)
     waiting = db.fetch_all("""
         SELECT q.id, q.first_name, q.last_name, q.party_size, q.status, q.position, q.joined_at
@@ -818,6 +833,80 @@ def locations():
                     site["instructors"].pop("extra_pay_cents", None)
                     site["instructors"].pop("extra_pay_reason", None)
     return ok(rows, count=len(rows))
+
+
+# --- Instructors' requests from the portal --------------------------------------------------------
+
+@bp.get("/instructor-requests")
+@needs("instructor.requests")
+def instructor_requests():
+    """Instructors' availability changes and "can't teach" notices (status: open (default), done, dismissed,
+    withdrawn, all; kind: availability, cant_teach)."""
+    a = request.args
+    status = a.get("status", "open")
+    if status not in ("open", "done", "dismissed", "withdrawn", "all"):
+        return refuse(400, "status is open, done, dismissed, withdrawn or all.")
+    kind = a.get("kind", "")
+    if kind not in ("", "availability", "cant_teach"):
+        return refuse(400, "kind is availability or cant_teach.")
+    rows = db.fetch_all("""
+        SELECT r.id, r.kind, r.status, r.reason, r.details, r.created_at, r.handled_at, r.handled_note,
+               r.availability_request_id,
+               json_build_object('id', i.public_id, 'name', coalesce(i.full_name, i.first_name || ' ' || i.last_name),
+                                 'email', i.email, 'phone', i.phone_e164) AS instructor,
+               CASE WHEN s.id IS NOT NULL THEN json_build_object(
+                 'id', s.public_id, 'course', cf.name, 'site', si.name, 'city', m.name, 'starts_at', s.starts_at,
+                 'time_zone', s.time_zone, 'role', CASE a.role WHEN 'co' THEN 'helper' ELSE a.role END,
+                 'seats_sold', av.sold_seats) END AS class,
+               h.display_name AS handled_by
+          FROM instructor_requests r
+          JOIN instructors i ON i.id = r.instructor_id
+          LEFT JOIN assignments a ON a.id = r.assignment_id
+          LEFT JOIN sessions s ON s.id = a.session_id
+          LEFT JOIN course_families cf ON cf.id = s.course_family_id
+          LEFT JOIN sites si ON si.id = s.site_id
+          LEFT JOIN metros m ON m.id = s.metro_id
+          LEFT JOIN session_availability av ON av.session_id = s.id
+          LEFT JOIN user_accounts h ON h.id = r.handled_by_user_id
+         WHERE (:st = 'all' OR r.status = :st) AND (:k = '' OR r.kind = :k)
+           AND (s.id IS NULL OR user_has_permission(:uid, 'instructor.requests', s.metro_id))
+         ORDER BY (r.kind <> 'cant_teach'), coalesce(s.starts_at, r.created_at), r.id
+         LIMIT 500
+    """, st=status, k=kind, uid=auth.current_user().id)
+    counts = {r["kind"]: r["n"] for r in db.fetch_all(
+        "SELECT kind, count(*) AS n FROM instructor_requests WHERE status = 'open' GROUP BY kind")}
+    return ok(rows, count=len(rows), open={"availability": counts.get("availability", 0),
+                                           "cant_teach": counts.get("cant_teach", 0)})
+
+
+@bp.post("/instructor-requests/<int:request_id>/close")
+@needs("instructor.requests")
+def instructor_request_close(request_id: int):
+    """Close a request once it's handled in Airtable: {"outcome": "done" | "dismissed", "note": "…"}.
+    The note is shown to the instructor."""
+    b = body()
+    outcome = b.get("outcome")
+    if outcome not in ("done", "dismissed"):
+        return refuse(400, 'outcome is "done" (changed in Airtable) or "dismissed" (not changed).')
+    note = (b.get("note") or "").strip()[:1000] or None
+    if outcome == "dismissed" and not note:
+        return refuse(400, "Say why it isn't changed (the instructor sees the note).")
+    with db.transaction() as conn:
+        row = conn.execute(text("""
+            SELECT r.id, r.status, r.kind, s.metro_id FROM instructor_requests r
+              LEFT JOIN assignments a ON a.id = r.assignment_id LEFT JOIN sessions s ON s.id = a.session_id
+             WHERE r.id = :r FOR NO KEY UPDATE OF r
+        """), {"r": request_id}).mappings().first()
+        if row is None or (row["metro_id"] and not auth.current_user().can("instructor.requests", row["metro_id"])):
+            return refuse(404, "No such request.")
+        if row["status"] != "open":
+            return refuse(400, f"This request is already {row['status']}.")
+        conn.execute(text("""
+            UPDATE instructor_requests SET status = :o, handled_by_user_id = :u, handled_at = now(), handled_note = :n
+             WHERE id = :r
+        """), {"o": outcome, "u": auth.current_user().id, "n": note, "r": request_id})
+        audit.record(conn, f"instructor_request.{outcome}", "instructor_request", request_id, after={"note": note})
+    return ok({"id": request_id, "status": outcome})
 
 
 @bp.get("/log")

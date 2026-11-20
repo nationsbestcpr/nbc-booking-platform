@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from flask import Blueprint, Response, abort, flash, redirect, render_template, request, url_for
 
-from .. import areas, attendance, auth, db
+from .. import areas, attendance, auth, db, instructor_portal as portal
 
 bp = Blueprint("teach", __name__, url_prefix="/teach")
 
@@ -25,17 +25,22 @@ def home():
           FROM instructors i LEFT JOIN metros hm ON hm.id = i.hub_metro_id
          WHERE i.user_account_id = :id
     """, id=user.id)
-    classes, certs, recent = [], [], []
+    classes, certs, recent, requests_ = [], [], [], []
+    window = portal.confirm_days()
     if instructor:
-        classes = [c for c in attendance.recent_for_instructor(instructor["id"])
-                   if not c["past"] and c["status"] == "scheduled"]
-        recent = [c for c in attendance.recent_for_instructor(instructor["id"]) if c["past"]]
+        everything = attendance.recent_for_instructor(instructor["id"])
+        classes = [c for c in everything if not c["past"] and c["status"] == "scheduled"]
+        recent = [c for c in everything if c["past"]]
         certs = db.fetch_all("""
             SELECT cert_type, expires_on, (expires_on - current_date) AS days_left, verified_at
               FROM instructor_certs WHERE instructor_id = :iid ORDER BY expires_on
         """, iid=instructor["id"])
+        requests_ = portal.my_requests(instructor["id"])
+    to_confirm = [c for c in classes if c["assignment_status"] == "assigned" and not c["confirmed_at"]
+                  and not c["notice"] and c["days_away"] <= window]
     return render_template("teach/home.html", instructor=instructor, classes=classes, certs=certs,
-                           recent=recent, tabs=areas.tabs_for(user))
+                           recent=recent, to_confirm=to_confirm, requests=requests_, window=window,
+                           tabs=areas.tabs_for(user))
 
 
 def _my_instructor_id() -> int | None:
@@ -94,8 +99,126 @@ def _my_class(public_id: str) -> tuple[dict, dict]:
 @auth.permission_required("own.classes_view")
 def class_day(public_id: str):
     s, can = _my_class(public_id)
-    return render_template("teach/class.html", s=s, can=can, students=attendance.roster(s["id"]),
-                           marks=attendance.MARKS, tabs=areas.tabs_for(auth.current_user()))
+    students = attendance.roster(s["id"])
+    signed = portal.signatures(s["id"])
+    for r in students:
+        r["signed"] = signed.get(r["id"])
+    return render_template("teach/class.html", s=s, can=can, students=students, marks=attendance.MARKS,
+                           mine=portal.assignment_for(s), window=portal.confirm_days(),
+                           days_away=(s["local_date"] - portal.today_in(s["time_zone"])).days,
+                           tabs=areas.tabs_for(auth.current_user()))
+
+
+@bp.post("/classes/<public_id>/confirm")
+@auth.permission_required("own.classes_view")
+def class_confirm(public_id: str):
+    s, _ = _my_class(public_id)
+    try:
+        portal.confirm(s)
+        flash("Confirmed: NBC knows you'll be there. Thank you!", "ok")
+    except portal.PortalError as exc:
+        flash(str(exc), "error")
+    return redirect(request.form.get("back") or url_for("teach.class_day", public_id=public_id))
+
+
+@bp.route("/classes/<public_id>/cant-teach", methods=["GET", "POST"])
+@auth.permission_required("own.class_release")
+def class_cant_teach(public_id: str):
+    """Tell NBC you can't teach a class. It stays yours until NBC finds someone and changes it in Airtable."""
+    s, _ = _my_class(public_id)
+    error = None
+    if request.method == "POST":
+        try:
+            portal.cant_teach(s, request.form.get("reason", ""))
+            flash("Sent. NBC will find another instructor and let you know; the class stays on your list until "
+                  "they do.", "ok")
+            return redirect(url_for("teach.class_day", public_id=public_id))
+        except portal.PortalError as exc:
+            error = str(exc)
+    return render_template("teach/cant_teach.html", s=s, mine=portal.assignment_for(s), error=error,
+                           reason=request.form.get("reason", ""), tabs=areas.tabs_for(auth.current_user())), \
+        (400 if error else 200)
+
+
+@bp.post("/requests/<int:request_id>/withdraw")
+@auth.permission_required("own.classes_view")
+def request_withdraw(request_id: int):
+    try:
+        portal.withdraw(request_id)
+        flash("Withdrawn.", "ok")
+    except portal.PortalError as exc:
+        flash(str(exc), "error")
+    return redirect(request.form.get("back") or url_for("teach.home"))
+
+
+@bp.route("/availability", methods=["GET", "POST"])
+@auth.permission_required("own.availability_manage")
+def availability():
+    """What Airtable has for this instructor, and a form to ask NBC for a change. A change that rules out a class
+    they're assigned to asks, for each one, whether they'll still teach it or can't (then NBC is told)."""
+    me = portal.my_instructor()
+    if not me:
+        return render_template("teach/availability.html", me=None, tabs=areas.tabs_for(auth.current_user()))
+    form = {"days": me["available_days"] or [], "times": me["available_times"] or [],
+            "classes_per_month": me["classes_per_month"] or "", "notice_needed": me["notice_needed"] or "",
+            "locations_to_avoid": me["locations_to_avoid"] or "", "away_from": "", "away_to": "", "note": ""}
+    clashing, error, decisions, reasons = [], None, {}, {}
+    if request.method == "POST":
+        form = {"days": request.form.getlist("days"), "times": request.form.getlist("times"),
+                **{k: request.form.get(k, "") for k in ("classes_per_month", "notice_needed", "locations_to_avoid",
+                                                        "away_from", "away_to", "note")}}
+        decisions = {k[len("class_"):]: v for k, v in request.form.items() if k.startswith("class_")}
+        reasons = {k[len("reason_"):]: v for k, v in request.form.items() if k.startswith("reason_")}
+        try:
+            rid, clashing = portal.request_availability(me["id"], form, decisions, reasons)
+            if rid:
+                flash("Sent to NBC. Your availability changes once the operations team updates it; you'll see it "
+                      "here.", "ok")
+                return redirect(url_for("teach.availability"))
+            error = (f"This change clashes with {len(clashing)} class{'es' if len(clashing) != 1 else ''} you're "
+                     "assigned to. For each one, say whether you'll still teach it, or that you can't (NBC is told "
+                     "and finds someone else).")
+        except portal.PortalError as exc:
+            error = str(exc)
+    requests_ = [r for r in portal.my_requests(me["id"]) if r["kind"] == "availability"]
+    return render_template("teach/availability.html", me=me, form=form, clashing=clashing, error=error,
+                           decisions=decisions, reasons=reasons, requests=requests_, days=portal.DAYS,
+                           times=portal.TIMES, notice=portal.NOTICE, tabs=areas.tabs_for(auth.current_user())), \
+        (400 if error else 200)
+
+
+@bp.get("/classes/<public_id>/sign")
+@auth.permission_required("own.attendance")
+def class_sign_sheet(public_id: str):
+    """The sign-in sheet: students tap their name and sign on the instructor's phone or tablet."""
+    s, can = _my_class(public_id)
+    students = [r for r in attendance.roster(s["id"]) if r["status"] in ("confirmed", "awaiting_payment", "completed")]
+    signed = portal.signatures(s["id"])
+    return render_template("teach/sign.html", s=s, can=can, students=students, signed=signed,
+                           tabs=areas.tabs_for(auth.current_user()))
+
+
+@bp.post("/classes/<public_id>/sign")
+@auth.permission_required("own.attendance")
+def class_sign(public_id: str):
+    s, _ = _my_class(public_id)
+    try:
+        portal.sign(s, request.form.get("seat", ""), request.form.get("signed_name", ""),
+                    request.form.get("signature", ""), request.remote_addr, request.user_agent.string)
+        flash(f"Thank you, {request.form.get('signed_name', '').split(' ')[0]}! You're signed in.", "ok")
+    except portal.PortalError as exc:
+        flash(str(exc), "error")
+    return redirect(url_for("teach.class_sign_sheet", public_id=public_id))
+
+
+@bp.get("/classes/<public_id>/signed-roster")
+@auth.permission_required("own.classes_view")
+def class_signed_roster(public_id: str):
+    """The signed roster, ready to print or save as PDF."""
+    s, can = _my_class(public_id)
+    students = attendance.roster(s["id"])
+    signed = portal.signatures(s["id"])
+    return render_template("teach/signed_roster.html", s=s, students=students, signed=signed)
 
 
 @bp.post("/classes/<public_id>/attendance")

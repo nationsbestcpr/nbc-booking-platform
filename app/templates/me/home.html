@@ -18,7 +18,7 @@
         <span class="bc-month">{{ local_dt(r.starts_at, r.time_zone).strftime('%b %Y') }}</span>
       </div>
       <div class="bc-body">
-        <span><strong>{{ r.course_name }}</strong>{% if r.product_name %} <span class="muted small">· {{ r.product_name }}</span>{% endif %}</span>
+        <span><strong><a href="{{ url_for('me.booking', public_id=r.public_id) }}">{{ r.course_name }}</a></strong>{% if r.product_name %} <span class="muted small">· {{ r.product_name }}</span>{% endif %}</span>
         <span class="meta num">{{ class_date(r.starts_at, r.time_zone) }} · {{ class_time(r.starts_at, r.ends_at, r.time_zone) }}</span>
         <span class="meta">{{ r.site_name }} · {{ r.address_line1 }}, {{ r.site_city }}, {{ r.site_state }} {{ r.postal_code }}</span>
         <span class="meta">{% if r.mine %}You're attending{% if r.is_bring_a_friend %} as a friend{% endif %}{% else %}For {{ r.attendee_first_name }} {{ r.attendee_last_name }}{% if r.is_bring_a_friend %} (your friend){% endif %}{% endif %}{% if r.delivery_mode == 'blended' %} · Online part to finish before class day{% endif %}</span>
@@ -29,6 +29,8 @@
         {% if r.status == 'awaiting_payment' %}<span class="status wait">Payment due</span>
         {% elif r.status == 'displaced' %}<span class="status bad">Class cancelled: we'll contact you</span>
         {% else %}<span class="status ok">Booked</span>{% endif %}
+        <a class="small" href="{{ url_for('me.booking', public_id=r.public_id) }}">Details</a>
+        <a class="small" href="{{ url_for('me.booking_ics', public_id=r.public_id) }}">Add to calendar</a>
         <a class="small" href="https://www.google.com/maps/search/?api=1&query={{ (r.address_line1 ~ ', ' ~ r.site_city ~ ', ' ~ r.site_state ~ ' ' ~ r.postal_code)|urlencode }}" target="_blank" rel="noopener">Directions</a>
         {% if r.mine and r.bought_here and friend.enabled and r.can_add_seat %}<a class="small" href="{{ url_for('book.friend', public_id=r.session_public_id, order=r.order_public_id, product=r.product_id) }}">Bring a friend</a>{% endif %}
       </div>
@@ -98,7 +100,7 @@
     {% set labels = {'completed': ('ok', 'Completed'), 'no_show': ('bad', 'No show'), 'cancelled': ('off', 'Cancelled'), 'forfeited': ('off', 'Fee forfeited'), 'confirmed': ('off', 'Booked'), 'awaiting_payment': ('wait', 'Payment due'), 'displaced': ('bad', 'Class cancelled')} %}
     {% for r in past %}
       {% set l = labels.get(r.status, ('off', r.status|replace('_', ' ')|capitalize)) %}
-      <tr><td class="num">{{ class_date(r.starts_at, r.time_zone) }}</td><td>{{ r.course_name }}</td>
+      <tr><td class="num">{{ class_date(r.starts_at, r.time_zone) }}</td><td><a href="{{ url_for('me.booking', public_id=r.public_id) }}">{{ r.course_name }}</a></td>
         <td>{{ 'You' if r.attendee_email|lower == current_user.email|lower else r.attendee_first_name ~ ' ' ~ r.attendee_last_name }}</td>
         <td>{{ r.site_name }}, {{ r.city_name }}</td><td><span class="status {{ l[0] }}">{{ l[1] }}</span></td></tr>
     {% endfor %}

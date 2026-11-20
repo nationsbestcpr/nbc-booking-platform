@@ -655,5 +655,78 @@ SELECT pg_temp.expect_error($q$INSERT INTO instructor_locations (instructor_id, 
 SELECT pg_temp.expect_error($q$INSERT INTO recruiting_needs (airtable_record_id) VALUES ('recNotSeen')$q$,
   '23503', 'a recruiting need comes from an Airtable record the sync has seen');
 
+-- 0012: running without Enrollware.
+SELECT pg_temp.check((SELECT count(*) = 2 FROM app_settings WHERE key IN ('enrollware_retired', 'confirm_days_before')),
+  'the cutover and class-confirmation settings exist');
+SELECT pg_temp.check(NOT EXISTS (SELECT 1 FROM role_permissions a WHERE a.permission_code = 'instructor.manage'
+                                   AND NOT EXISTS (SELECT 1 FROM role_permissions b WHERE b.role_code = a.role_code
+                                                     AND b.permission_code = 'instructor.requests')),
+  'whoever manages instructors also handles their availability changes and "can''t teach" notices');
+CREATE TEMP TABLE c12 AS
+SELECT s.id AS sid, s.local_date AS day, to_char(timezone(s.time_zone, s.starts_at), 'Dy') AS weekday,
+       (SELECT min(r.id) FROM registrations r WHERE r.session_id = s.id AND r.status = 'confirmed') AS reg,
+       (SELECT o.id FROM sessions o WHERE o.id <> s.id AND o.status = 'scheduled' ORDER BY o.id LIMIT 1) AS other
+  FROM sessions s
+ WHERE s.status = 'scheduled' AND s.starts_at > now()
+   AND EXISTS (SELECT 1 FROM registrations r WHERE r.session_id = s.id AND r.status = 'confirmed')
+ ORDER BY s.id LIMIT 1;
+INSERT INTO assignments (session_id, instructor_id, role, source)
+SELECT sid, i.id, 'lead', 'airtable' FROM c12, instructors i WHERE i.full_name = 'No Email';
+SELECT pg_temp.check((SELECT count(*) = 1 FROM c12, instructors i,
+                        instructor_availability_conflicts(i.id, ARRAY[CASE WHEN weekday = 'Mon' THEN 'Tue' ELSE 'Mon' END],
+                                                          NULL, NULL, NULL) c
+                       WHERE i.full_name = 'No Email' AND c.why = 'day'),
+  'an availability change dropping the class''s weekday clashes with the assigned class');
+SELECT pg_temp.check((SELECT count(*) = 1 FROM c12, instructors i,
+                        instructor_availability_conflicts(i.id, NULL, NULL, day - 1, day + 1) c
+                       WHERE i.full_name = 'No Email' AND c.why = 'away'),
+  'being away on the class day clashes with the assigned class');
+SELECT pg_temp.check((SELECT count(*) = 0 FROM c12, instructors i,
+                        instructor_availability_conflicts(i.id, ARRAY[weekday], ARRAY['Morning', 'Afternoon', 'Evening'],
+                                                          day + 1, day + 3) c
+                       WHERE i.full_name = 'No Email'),
+  'a change that still covers the class doesn''t clash');
+SELECT pg_temp.expect_error($q$INSERT INTO instructor_requests (instructor_id, kind, details, created_by_user_id)
+                               SELECT i.id, 'availability',
+                                      jsonb_build_object('available_days', jsonb_build_array(CASE WHEN weekday = 'Mon' THEN 'Tue' ELSE 'Mon' END)),
+                                      cs FROM instructors i, ids, c12 WHERE i.full_name = 'No Email'$q$,
+  '23514', 'an availability change can''t be sent without a word on each assigned class it rules out');
+INSERT INTO instructor_requests (instructor_id, kind, details, created_by_user_id)
+SELECT i.id, 'availability',
+       jsonb_build_object('available_days', jsonb_build_array(CASE WHEN weekday = 'Mon' THEN 'Tue' ELSE 'Mon' END),
+                          'classes', jsonb_build_object(a.id::text, 'keep')), cs
+  FROM instructors i JOIN assignments a ON a.instructor_id = i.id, ids, c12 WHERE i.full_name = 'No Email';
+INSERT INTO instructor_requests (instructor_id, kind, assignment_id, reason, created_by_user_id)
+SELECT i.id, 'cant_teach', a.id, 'Away that weekend', cs
+  FROM instructors i JOIN assignments a ON a.instructor_id = i.id, ids WHERE i.full_name = 'No Email';
+SELECT pg_temp.expect_error($q$INSERT INTO instructor_requests (instructor_id, kind, assignment_id, reason, created_by_user_id)
+                               SELECT i.id, 'cant_teach', a.id, 'Again', cs FROM instructors i
+                                 JOIN assignments a ON a.instructor_id = i.id, ids WHERE i.full_name = 'No Email'$q$,
+  '23505', 'one open "can''t teach" notice per class');
+INSERT INTO instructors (first_name, last_name, full_name) VALUES ('Other', 'Teacher', 'Other Teacher');
+SELECT pg_temp.expect_error($q$INSERT INTO instructor_requests (instructor_id, kind, assignment_id, reason, created_by_user_id)
+                               SELECT o.id, 'cant_teach', a.id, 'Not mine', cs FROM instructors o, instructors i
+                                 JOIN assignments a ON a.instructor_id = i.id, ids
+                                WHERE o.full_name = 'Other Teacher' AND i.full_name = 'No Email'$q$,
+  '23514', 'a "can''t teach" notice is only for a class the instructor is assigned to');
+INSERT INTO roster_signatures (registration_id, session_id, signed_name, signature_path, collected_by_user_id)
+SELECT reg, sid, 'Student One', 'M1 1 L5 5 L9 2 L12 8', cs FROM ids, c12;
+SELECT pg_temp.expect_error($q$INSERT INTO roster_signatures (registration_id, session_id, signed_name, signature_path,
+                                                             collected_by_user_id)
+                               SELECT reg, other, 'Student One', 'M1 1 L5 5 L9 2', cs FROM ids, c12
+                                ON CONFLICT (registration_id) DO UPDATE SET session_id = EXCLUDED.session_id$q$,
+  '23514', 'only a student booked in a class can sign its roster');
+SELECT pg_temp.expect_error($q$UPDATE roster_signatures SET signature_path = '<script>'
+                                WHERE registration_id = (SELECT reg FROM c12)$q$,
+  '23514', 'a signature is only pen strokes (SVG path data)');
+INSERT INTO enrollware_imports (file_name, rows_total, imported_by_user_id) SELECT 'export.xlsx', 2, cs FROM ids;
+INSERT INTO enrollware_import_rows (import_id, row_number, row_key, outcome, registration_id)
+SELECT (SELECT max(id) FROM enrollware_imports), 2, 'cls-1|ann@example.test|ann|lee', 'imported',
+       (SELECT min(id) FROM registrations);
+SELECT pg_temp.expect_error($q$INSERT INTO enrollware_import_rows (import_id, row_number, row_key, outcome, registration_id)
+                               SELECT (SELECT max(id) FROM enrollware_imports), 3, 'cls-1|ann@example.test|ann|lee',
+                                      'imported', (SELECT max(id) FROM registrations)$q$,
+  '23505', 'an Enrollware student is imported once, however many exports are loaded');
+
 \echo 'All schema checks passed.'
 ROLLBACK;

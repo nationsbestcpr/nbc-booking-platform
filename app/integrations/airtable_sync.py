@@ -347,6 +347,13 @@ def test_site() -> bool:
     return current_app.config["APP_ENV"] == "staging"
 
 
+def enrollware_retired(conn=None) -> bool:
+    """Has Enrollware stopped taking bookings (Superadmin → Enrollware cutover)? Then new cities book here."""
+    sql = text("SELECT value FROM app_settings WHERE key = 'enrollware_retired'")
+    value = conn.execute(sql).scalar() if conn is not None else db.fetch_value(sql.text)
+    return value is True or str(value).lower() == "true"
+
+
 def open_test_cities() -> int:
     """On the test app, cities that were never switched (still on Enrollware, no
     cutover time) start booking here. A city an admin switches back to Enrollware
@@ -650,7 +657,7 @@ def _location(record: dict, m: dict, v: dict) -> dict | None:
             market = re.sub(r"[^A-Z]", "", metro_name.upper())[:12] or metro_slug.upper()
             if conn.execute(text("SELECT 1 FROM metros WHERE market_code = :c"), {"c": market}).first():
                 market = f"{market}-{metro_state}"
-            open_now = test_site()
+            open_now = test_site() or enrollware_retired(conn)
             metro_id = conn.execute(text("""
                 INSERT INTO metros (slug, name, state_code, market_code, time_zone, booking_system, cutover_at)
                 VALUES (:s, :n, :st, :mc, :tz, CASE WHEN :open THEN 'engine' ELSE 'enrollware' END,
@@ -748,10 +755,11 @@ def _fetch_schedule(m: dict, record_id: str | None, run_id: int, stats: dict) ->
         return [rec] + [r for r in (airtable.get_record(m["table"], sid, m) for sid in siblings) if r]
     when = airtable.formula_field(m["fields"]["date"])
     status = airtable.formula_field(m["fields"]["status"])
-    # Only rows marked Enrollware or CANCELLED, from the day before yesterday on: about a
-    # dozen calls per sync. A row that loses Enrollware isn't fetched and comes off sale.
+    # Only rows on sale (Enrollware or Booking App) or CANCELLED, from the day before yesterday on: about a
+    # dozen calls per sync. A row that loses its on-sale status isn't fetched and comes off sale.
     formula = (f"AND(OR({when} = BLANK(), IS_AFTER({when}, DATEADD(TODAY(), -2, 'days'))), "
-               f"OR(FIND('Enrollware', ARRAYJOIN({status}, ',')), FIND('CANCELLED', ARRAYJOIN({status}, ','))))")
+               f"OR(FIND('Enrollware', ARRAYJOIN({status}, ',')), FIND('Booking App', ARRAYJOIN({status}, ',')), "
+               f"FIND('CANCELLED', ARRAYJOIN({status}, ','))))")
     return list(airtable.records(m, formula))
 
 
@@ -763,7 +771,7 @@ def _locations_in_use(records: list[dict], m: dict) -> set[str]:
     out: set[str] = set()
     for r in records:
         v = _values(r, m)
-        on_sale = any(st.lower() == airtable.PUBLISH_STATUS for st in _statuses(v.get("status")))
+        on_sale = airtable.on_sale(_statuses(v.get("status")))
         if (on_sale or r["id"] in mapped) and _is_record_ids(v.get("location")):
             out.update(v["location"])
     return out
@@ -890,7 +898,7 @@ def _parse_class(record: dict, v: dict, products: dict, sites: dict, virtual: se
     """Read one row. None for a row that's none of the engine's business: a planning row
     that was never on sale, or an online (virtual) class."""
     statuses = _statuses(v.get("status"))
-    published = any(s.lower() == airtable.PUBLISH_STATUS for s in statuses)
+    published = airtable.on_sale(statuses)
     cancelled = any(s.lower().startswith(airtable.CANCELLED_PREFIX) for s in statuses)
     if _is_record_ids(v.get("location")) and v["location"][0] in virtual:
         return None                  # an online class: not sold here

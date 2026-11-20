@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Signed roster · {{ s.course_name }} · {{ class_date(s.starts_at, s.time_zone) }}</title>
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; color: #0b1f4b; margin: 24px; background: #fff; }
+  h1 { font-size: 20px; margin: 0 0 4px; } p { margin: 0 0 12px; }
+  table { width: 100%; border-collapse: collapse; } th, td { border: 1px solid #c9d1e3; padding: 6px 8px; text-align: left; vertical-align: middle; }
+  th { background: #f2f5fb; } svg { width: 180px; height: 60px; display: block; }
+  .muted { color: #5a6785; } @media print { .no-print { display: none; } body { margin: 0; } }
+</style></head>
+<body>
+<p class="no-print"><a href="{{ url_for('teach.class_day', public_id=s.public_id) }}">← Back</a> · <a href="#" onclick="window.print();return false">Print or save as PDF</a></p>
+<h1>{{ s.course_name }}: signed roster</h1>
+<p>{{ class_date(s.starts_at, s.time_zone) }} · {{ class_time(s.starts_at, s.ends_at, s.time_zone) }} · {{ s.site_name }}, {{ s.address_line1 }}, {{ s.site_city }}, {{ s.site_state }}</p>
+<table>
+  <thead><tr><th>#</th><th>Student</th><th>Course</th><th>Signed as</th><th>Signature</th><th>Signed at</th></tr></thead>
+  <tbody>{% for r in students %}{% set sg = signed.get(r.id) %}
+    <tr><td>{{ loop.index }}</td><td>{{ r.attendee_last_name }}, {{ r.attendee_first_name }}</td><td>{{ r.product_name }}</td>
+      <td>{{ sg.signed_name if sg else '' }}</td>
+      <td>{% if sg %}<svg viewBox="0 0 600 200" role="img" aria-label="Signature of {{ sg.signed_name }}"><path d="{{ sg.signature_path }}" fill="none" stroke="#0b1f4b" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>{% else %}<span class="muted">Not signed</span>{% endif %}</td>
+      <td>{{ local_dt(sg.signed_at, s.time_zone).strftime('%-I:%M %p') if sg else '' }}</td></tr>
+  {% endfor %}</tbody>
+</table>
+</body></html>

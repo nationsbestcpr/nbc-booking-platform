@@ -72,6 +72,23 @@
         <button class="btn-small" type="submit">Reactivate</button></form>
     {% endif %}
 
+    {% if instructor or is_instructor %}
+    <h3>Instructor record</h3>
+    {% if instructor and instructor.user_account_id == account.id %}
+      <dl class="kv">
+        <dt>In Airtable as</dt><dd>{{ instructor.full_name }}</dd>
+        <dt>Teaching status</dt><dd>{{ instructor.status|capitalize }}{% if instructor.removal_status %} · Removal: {{ instructor.removal_status }}{% endif %}</dd>
+        <dt>Certifications</dt><dd>{{ instructor.cert_status or '—' }}</dd>
+        <dt>Upcoming classes</dt><dd class="num">{{ instructor.upcoming }}</dd>
+      </dl>
+      <p class="muted small">Linked: the instructor portal shows this record's classes, certifications and pay.</p>
+    {% elif instructor %}
+      <p class="small">Matches {{ instructor.full_name }} in Airtable by email. {% if is_instructor %}It links on the next sync.{% else %}Give the Instructor role to link it.{% endif %}</p>
+    {% else %}
+      <p class="small muted">No instructor in Airtable has {{ account.email }}. The portal stays empty until Airtable's Instructors table has this email; it links on the next sync.</p>
+    {% endif %}
+    {% endif %}
+
     <h3>History</h3>
     {% if history %}
     <ul class="list">{% for h in history %}<li><span>{{ h.text }}<br><span class="meta num">{{ h.actor or 'System' }} · {{ h.occurred_at|office_time }}</span></span></li>{% endfor %}</ul>

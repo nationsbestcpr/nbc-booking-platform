@@ -428,7 +428,42 @@ def testdata_remove() -> None:
     click.echo(f"Removed {r['classes']} test classes ({r['how']}).")
 
 
+enrollware_cli = AppGroup("enrollware", help="Leaving Enrollware.")
+
+
+@enrollware_cli.command("import")
+@click.argument("path", type=click.Path(exists=True, dir_okay=False))
+@click.option("--as", "as_email", required=True, help="The Superadmin the import is recorded under.")
+@click.option("--commit", is_flag=True, help="Import for real (without it, only show what would happen).")
+@click.option("--add-seats", is_flag=True, help="Add an extra seat to a full class for each Enrollware student.")
+@click.option("--send-to-ghl", is_flag=True, help="Also send the imported seats to GHL.")
+def enrollware_import_cmd(path: str, as_email: str, commit: bool, add_seats: bool, send_to_ghl: bool) -> None:
+    """Import Enrollware's upcoming registrations from its export (.xlsx or .csv)."""
+    from flask import g
+    from . import auth, db, enrollware_import
+    uid = db.fetch_value("SELECT id FROM user_accounts WHERE email = :e", e=as_email.strip().lower())
+    if not uid:
+        raise click.ClickException(f"No account has {as_email}.")
+    g.current_user = auth.load_user(uid)
+    if not g.current_user or not g.current_user.has_permission("system.cutover"):
+        raise click.ClickException(f"{as_email} may not import (needs the Superadmin role).")
+    try:
+        rows = enrollware_import.read_file(path, Path(path).read_bytes())
+    except enrollware_import.ImportFileError as exc:
+        raise click.ClickException(str(exc)) from exc
+    r = enrollware_import.run(rows, file_name=Path(path).name, user_id=uid, commit=commit, add_seats=add_seats,
+                              send_to_ghl=send_to_ghl)
+    click.echo(("Imported" if commit else "Checked (nothing changed)") + f": {r.rows_total} rows.")
+    for k in ("imported", "waitlisted", "already_imported", "skipped", "unmatched", "refused"):
+        click.echo(f"  {k.replace('_', ' '):18} {r.counts.get(k, 0)}")
+    click.echo(f"  classes            {r.classes}")
+    for row in r.rows:
+        if row["outcome"] in ("unmatched", "refused"):
+            click.echo(f"  row {row['row']}: {row['outcome']}: {row['reason']}")
+
+
 def init_app(app: Flask) -> None:
+    app.cli.add_command(enrollware_cli)
     app.cli.add_command(testdata_cli)
     app.cli.add_command(db_cli)
     app.cli.add_command(users_cli)

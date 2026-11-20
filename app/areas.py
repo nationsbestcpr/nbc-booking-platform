@@ -41,8 +41,12 @@ AREAS: dict[str, tuple[str, str, list[tuple[str, list[Item]]]]] = {
             ("admin.home", "Overview", ()),
             ("admin.users", "Users", ("user.manage",)),
             ("admin.users_new", "Add a person", ("user.manage",)),
+            ("admin.instructor_accounts_page", "Instructor accounts", ("user.manage",)),
             ("admin.roles", "Roles & permissions", ("user.manage", "role.manage")),
             ("admin.api_keys", "API keys", ("api_key.manage",)),
+        ]),
+        ("Leaving Enrollware", [
+            ("admin.cutover", "Cutover and import", ("system.cutover",)),
         ]),
         _MY_ACCOUNT,
     ]),
@@ -55,6 +59,7 @@ AREAS: dict[str, tuple[str, str, list[tuple[str, list[Item]]]]] = {
     "instructor": ("Instructor", "teach.home", [
         ("Teaching", [
             ("teach.home", "Dashboard", ()),
+            ("teach.availability", "Availability", ("own.availability_manage",)),
             ("teach.certifications", "Certifications", ("own.certs_view",)),
             ("teach.pay", "Pay", ("own.pay_view",)),
         ]),
@@ -74,6 +79,8 @@ KEPT = {
     "admin.home", "admin.users", "admin.users_detail", "admin.users_grant", "admin.users_revoke",
     "admin.users_status", "admin.users_new", "admin.view_as", "admin.view_as_stop", "admin.roles",
     "admin.roles_detail", "admin.api_keys", "admin.api_keys_revoke", "console.home",
+    "admin.instructor_accounts_page", "admin.instructor_accounts_grant",
+    "admin.cutover", "admin.cutover_retire", "admin.cutover_import", "admin.cutover_import_detail",
 }
 
 # The fallback pages (until the Ops Hub's screens are live), as the Superadmin's overview lists them.

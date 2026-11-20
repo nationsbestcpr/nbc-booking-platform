@@ -1,0 +1,94 @@
+{% extends "dash/layout.html" %}
+{% block title %}Cutover and import{% endblock %}
+{% block heading %}Leaving <span class="accent">Enrollware</span>{% endblock %}
+{% block subhead %}<p>Two steps: every city books in the booking app, and Enrollware's upcoming registrations come across. Students already booked aren't messaged again.</p>{% endblock %}
+{% block panel %}
+<section class="panel" aria-labelledby="cities-title">
+  <h2 id="cities-title">1. Every city books here</h2>
+  {% if retired and not on_enrollware %}
+    <p><span class="status ok">Done</span> Enrollware is retired: all {{ cities|length }} cities book in the booking app, and new cities from Airtable start here.</p>
+  {% else %}
+    <p>{{ cities|length - on_enrollware|length }} of {{ cities|length }} cities book here.{% if on_enrollware %} Still on Enrollware: {{ on_enrollware|map(attribute='name')|join(', ') }}.{% endif %}</p>
+    <form method="post" action="{{ url_for('admin.cutover_retire') }}">{{ csrf_input() }}
+      <label class="check"><input type="checkbox" name="confirm" value="yes" required> Enrollware no longer takes bookings</label>
+      <button class="pill plain" type="submit">Move every city to the booking app</button>
+    </form>
+    <p class="muted small">Classes on sale in Airtable (Status includes “Enrollware” or “Booking App”) go on sale here at once, and seats sold in Enrollware stop counting separately once they're imported.</p>
+  {% endif %}
+  {% if cities %}
+  <details><summary class="small">Cities</summary>
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>City</th><th>Books</th><th>Upcoming classes on sale</th><th>Seats counted from Enrollware</th></tr></thead>
+    <tbody>{% for c in cities %}
+      <tr><td>{{ c.name }}, {{ c.state_code }}</td>
+        <td>{% if c.booking_system == 'engine' %}<span class="status ok">Here</span>{% else %}<span class="status wait">Enrollware</span>{% endif %}</td>
+        <td class="num">{{ c.upcoming }}</td><td class="num">{{ c.enrollware_seats }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  </details>
+  {% endif %}
+</section>
+
+<section class="panel" aria-labelledby="import-title">
+  <h2 id="import-title">2. Import Enrollware's upcoming registrations</h2>
+  <p class="small">In Enrollware, export registrations (Reports → Registrations, as Excel) for classes from today on. Pending students get their seat, paid as in Enrollware (or awaiting payment when Enrollware shows a balance due); waitlisted students keep their place in line. Past classes, cancellations and online courses are skipped. Loading a newer export later adds only what's new.</p>
+  {% if report %}
+    {% set c = report.counts %}
+    <div class="notice">
+      <p><strong>Checked {{ report.file_name }}</strong>: {{ report.rows_total }} row(s). Nothing has been imported yet.</p>
+      <div class="stats">
+        <div class="stat"><strong class="num">{{ c.get('imported', 0) }}</strong><span>Seats to import</span></div>
+        <div class="stat"><strong class="num">{{ c.get('waitlisted', 0) }}</strong><span>Waiting-list places</span></div>
+        <div class="stat"><strong class="num">{{ report.classes }}</strong><span>Classes</span></div>
+        <div class="stat"><strong class="num">{{ c.get('unmatched', 0) + c.get('refused', 0) }}</strong><span>Need a look</span></div>
+        <div class="stat"><strong class="num">{{ c.get('skipped', 0) + c.get('already_imported', 0) }}</strong><span>Skipped</span></div>
+      </div>
+      <p class="small num">Paid in Enrollware: {{ report.money_cents|money }} · balance due: {{ report.balance_due_cents|money }}{% if report.extra_seats %} · {{ report.extra_seats }} extra seat(s) added to full classes{% endif %}</p>
+      <form method="post" action="{{ url_for('admin.cutover_import') }}">{{ csrf_input() }}
+        <input type="hidden" name="token" value="{{ token }}">
+        <input type="hidden" name="action" value="import">
+        {% if add_seats %}<input type="hidden" name="add_seats" value="1">{% endif %}
+        {% if send_to_ghl %}<input type="hidden" name="send_to_ghl" value="1">{% endif %}
+        <button class="pill" type="submit"{{ ' disabled' if not (c.get('imported') or c.get('waitlisted')) }}>Import {{ c.get('imported', 0) }} seat(s) and {{ c.get('waitlisted', 0) }} waiting-list place(s)</button>
+      </form>
+    </div>
+    {% set attention = report.rows|selectattr('outcome', 'in', ['unmatched', 'refused'])|list %}
+    {% if attention %}
+    <h3>Rows that need a look</h3>
+    <div class="scroll-x"><table class="table">
+      <thead><tr><th>Row</th><th>Student</th><th>Class</th><th>Why</th></tr></thead>
+      <tbody>{% for r in attention %}
+        <tr><td class="num">{{ r.row }}</td><td>{{ r.name }}<br><span class="small muted">{{ r.email }}</span></td>
+          <td class="small">{{ r.course }}<br>{{ r.location }}<br><span class="num">{{ r.when }}</span> · {{ r.class_ref }}</td>
+          <td class="small">{{ r.reason }}</td></tr>
+      {% endfor %}</tbody>
+    </table></div>
+    {% endif %}
+    <details><summary class="small">Skipped rows ({{ c.get('skipped', 0) + c.get('already_imported', 0) }})</summary>
+      <ul class="list small">{% for r in report.rows if r.outcome in ('skipped', 'already_imported') %}<li><span>Row {{ r.row }} · {{ r.name }}: {{ r.reason }}</span></li>{% endfor %}</ul>
+    </details>
+  {% endif %}
+  <form method="post" action="{{ url_for('admin.cutover_import') }}" enctype="multipart/form-data">{{ csrf_input() }}
+    <input type="hidden" name="action" value="check">
+    <div class="field"><label for="file">Enrollware export (.xlsx or .csv)</label><input type="file" id="file" name="file" accept=".xlsx,.csv" required></div>
+    <label class="check"><input type="checkbox" name="add_seats" value="1"{{ ' checked' if add_seats }}> When a class is full here, add an extra seat for each student Enrollware sold one to</label>
+    <label class="check"><input type="checkbox" name="send_to_ghl" value="1"{{ ' checked' if send_to_ghl }}> Also send the imported seats to GHL (only if Enrollware's students aren't in GHL already)</label>
+    <button class="pill plain" type="submit">Check the file</button>
+  </form>
+  <p class="muted small">Checking runs the whole import and undoes it, so you see exactly what would happen before anything changes.</p>
+</section>
+
+{% if imports %}
+<section class="panel" aria-labelledby="past-title">
+  <h2 id="past-title">Imports</h2>
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>When</th><th>File</th><th>Seats</th><th>Waiting list</th><th>Need a look</th><th>By</th></tr></thead>
+    <tbody>{% for i in imports %}{% set c = i.summary.get('counts', {}) if i.summary is mapping else {} %}
+      <tr><td class="num"><a href="{{ url_for('admin.cutover_import_detail', import_id=i.id) }}">{{ i.created_at|office_time }}</a></td>
+        <td>{{ i.file_name }}</td><td class="num">{{ c.get('imported', 0) }}</td><td class="num">{{ c.get('waitlisted', 0) }}</td>
+        <td class="num">{{ c.get('unmatched', 0) + c.get('refused', 0) }}</td><td>{{ i.by_name }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+</section>
+{% endif %}
+{% endblock %}

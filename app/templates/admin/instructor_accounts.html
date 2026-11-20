@@ -1,0 +1,64 @@
+{% extends "dash/layout.html" %}
+{% block title %}Instructor accounts{% endblock %}
+{% block heading %}Instructor <span class="accent">Accounts</span>{% endblock %}
+{% block subhead %}<p>Instructors come from Airtable's Instructors table. An instructor uses the portal once their account has the Instructor role: it's linked to their Airtable record by email, and their classes, certifications and pay show up.</p>{% endblock %}
+{% block panel %}
+<div class="stats">
+  <div class="stat"><strong class="num">{{ counts.in_airtable }}</strong><span>Instructors in Airtable</span></div>
+  <div class="stat"><strong class="num">{{ counts.with_portal }}</strong><span>Using the portal</span></div>
+  <div class="stat"><strong class="num">{{ waiting|length }}</strong><span>Waiting for the role</span></div>
+  <div class="stat"><strong class="num">{{ counts.no_email }}</strong><span>No usable email in Airtable</span></div>
+</div>
+
+<section class="panel" aria-labelledby="waiting-title">
+  <h2 id="waiting-title">Waiting for the instructor role</h2>
+  <p class="muted small">Accounts that signed up as instructors, or whose email matches an instructor in Airtable. Signing up gives nothing by itself: the role is given here.</p>
+  {% if waiting %}
+  {% set matching = waiting|selectattr('instructor_id')|rejectattr('instructor_status', 'equalto', 'inactive')|list %}
+  {% if matching %}
+  <form method="post" action="{{ url_for('admin.instructor_accounts_grant') }}" onsubmit="return confirm('Give the Instructor role to {{ matching|length }} account(s) that match an instructor in Airtable?');">{{ csrf_input() }}
+    <input type="hidden" name="all" value="1">
+    <button class="pill plain" type="submit">Give the role to all {{ matching|length }} that match Airtable</button>
+  </form>
+  {% endif %}
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>Account</th><th>Signed up as</th><th>In Airtable</th><th></th></tr></thead>
+    <tbody>
+    {% for w in waiting %}
+      <tr><td><a href="{{ url_for('admin.users_detail', uid=w.id) }}">{{ w.display_name }}</a><br><span class="small muted">{{ w.email }}</span></td>
+        <td>{{ (w.signup_intent or '—')|capitalize }}</td>
+        <td>{% if w.instructor_id %}{{ w.full_name }}{% if w.instructor_status == 'inactive' %} <span class="status off">Removed</span>{% else %} <span class="status ok">Match</span>{% endif %}
+            {% else %}<span class="status wait">No match</span><br><span class="small muted">No instructor in Airtable has this email</span>{% endif %}</td>
+        <td><form method="post" action="{{ url_for('admin.instructor_accounts_grant') }}">{{ csrf_input() }}
+          <input type="hidden" name="uid" value="{{ w.id }}">
+          <button class="btn-small primary" type="submit">Give instructor role</button></form></td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <div class="empty">Nobody is waiting. Instructors create an account at Sign in → Create account (choosing Instructor), or you add them under Add a person.</div>
+  {% endif %}
+</section>
+
+<section class="panel" aria-labelledby="all-title">
+  <h2 id="all-title">Instructors</h2>
+  <form class="toolbar" method="get" action="{{ url_for('admin.instructor_accounts_page') }}" role="search">
+    <div class="field"><label for="q">Name or email</label><input type="search" id="q" name="q" value="{{ q }}"></div>
+    <button class="pill plain" type="submit">Search</button>
+  </form>
+  <p class="muted small num">{{ rows|length }} shown{% if rows|length == 200 %} · the first 200: narrow the search{% endif %}</p>
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>Instructor</th><th>City areas</th><th>Certifications</th><th>Upcoming</th><th>Portal</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr><td>{{ r.full_name or (r.first_name ~ ' ' ~ r.last_name) }}{% if r.status == 'inactive' %} <span class="status off">Removed</span>{% endif %}<br><span class="small muted">{{ r.email or 'No email in Airtable' }}</span></td>
+        <td class="small">{{ r.areas or '—' }}</td>
+        <td>{{ r.cert_status or '—' }}</td>
+        <td class="num">{{ r.upcoming }}</td>
+        <td>{% if r.account_id %}<a href="{{ url_for('admin.users_detail', uid=r.account_id) }}">Account</a><br><span class="small muted num">{{ ('Last in ' ~ (r.last_sign_in_at|office_time)) if r.last_sign_in_at else 'Not signed in yet' }}</span>
+            {% elif r.email %}<span class="small muted">No account yet</span>{% else %}<span class="small muted">Needs an email in Airtable</span>{% endif %}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endblock %}
