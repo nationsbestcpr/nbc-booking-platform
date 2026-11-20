@@ -37,7 +37,7 @@
         <select id="city_id" name="city_id"><option value="">All cities</option>{% for c in cities %}<option value="{{ c.id }}">{{ c.name }}, {{ c.state_code }}</option>{% endfor %}</select></div>
       <button class="pill plain" type="submit">Give role</button>
     </form>
-    <p class="muted small">Student and User are given and kept automatically (every account is a user; booking a class makes a student), so they can't be removed here. Only an admin can give or remove the Admin role, and the last admin can't be removed. A city limits a staff role to that city's classes.</p>
+    <p class="muted small">Student and User are given and kept automatically (every account is a user; booking a class makes a student), so they can't be removed here. Only a Superadmin can give or remove the Superadmin role, and the last Superadmin can't be removed. A city limits a staff role to that city's classes.</p>
     {% if removed %}
     <h3>Removed roles</h3>
     <ul class="list">{% for g in removed %}

@@ -31,9 +31,12 @@ emails sent from the NBC sub-account's templates):
 Opportunity fields say who booked the seat (booked_by, booked_by_email,
 booking_type), its add-ons, and answers to booking questions mapped to a field.
 
-Incoming GHL webhooks (contact edits, messages, stage drags) need the
-Marketplace app from the launch plan (15.5); that's the next step and is not
-needed to create contacts and opportunities.
+GHL is only for messaging, and data goes one way: the engine sends GHL what
+emails and texts need and never reads data back from it (looking up GHL's own
+contact and opportunity ids so nothing is duplicated is the only read). No
+instructor data goes to GHL: instructors live in Airtable and the booking
+engine, and the old "Instructor" opportunity field is no longer filled.
+Incoming GHL webhooks (/webhooks/ghl) stay unbuilt.
 """
 
 from __future__ import annotations
@@ -163,7 +166,6 @@ FIELD_KEYS = {
     "course_date": "opportunity.course_date",
     "course_location": "opportunity.course_location",
     "hours": "opportunity.hours",
-    "instructor": "opportunity.instructor",
     "reg_type": "opportunity.reg_type",
     "class_price": "opportunity.class_price",
     "order_total": "opportunity.order_total",
@@ -229,7 +231,7 @@ def load_custom_fields() -> dict:
 # ("Booked By Email" -> opportunity.booked_by_email). Every field is Single Line text.
 FIELD_NAMES = {
     "class_id": "Class ID", "course": "Course", "course_date": "Course Date", "course_location": "Course Location",
-    "hours": "Hours", "instructor": "Instructor", "reg_type": "Reg Type", "class_price": "Class Price",
+    "hours": "Hours", "reg_type": "Reg Type", "class_price": "Class Price",
     "order_total": "Order Total", "delivery": "Delivery", "reg_date": "Reg Date", "booked_by": "Booked By",
     "booked_by_email": "Booked By Email", "booking_type": "Booking Type", "addons": "Addons",
     "contact_invite_link": "NBC Invite Link", "contact_booked_by": "NBC Booked By",
@@ -357,7 +359,6 @@ def _custom_fields(reg: dict, reg_type: str | None) -> list[dict]:
         "course": reg["product_name"],
         "delivery": reg["product_name"].split(" – ")[-1] if " – " in reg["product_name"]
                     else reg["delivery_mode"].capitalize(),
-        "instructor": reg["airtable_lead_instructor"],
         "reg_type": reg_type_text,
         "class_price": f"{reg['unit_price_cents'] / 100:.2f}",
         "order_total": f"{reg['order_total_cents'] / 100:.2f}",

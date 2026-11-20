@@ -26,8 +26,8 @@ def create_app(overrides: dict | None = None) -> Flask:
     filters.init_app(app)
     cli.init_app(app)
 
-    from .blueprints import (account, admin, admin_integrations, admin_records, admin_setup,  # noqa: F401
-                             book, console, health, me, public, seo, teach, waiting, webhooks)
+    from .blueprints import (account, admin, admin_integrations, admin_keys, admin_records, admin_setup,  # noqa: F401
+                             api, book, console, health, me, public, seo, teach, waiting, webhooks)
 
     seo.init_app(app)                      # address parts (/richmond-va/bls/...) before any rule uses them
 
@@ -41,6 +41,7 @@ def create_app(overrides: dict | None = None) -> Flask:
     app.register_blueprint(teach.bp)
     app.register_blueprint(admin.bp)
     app.register_blueprint(console.bp)
+    app.register_blueprint(api.bp)
     app.register_blueprint(seo.bp)
 
     def error_page(code: int, title: str, message: str):

@@ -291,7 +291,9 @@ def test_only_admins_set_up_questions_and_add_ons(client, sign_in):
     assert client.get("/admin/addons").status_code == 403
     sign_in("admin@example.test")
     page = text_of(client.get("/admin/booking-questions"))
-    assert "Booking questions" in page and "Add-ons" in page          # in the sidebar
+    assert "Booking questions" in page
+    overview = text_of(client.get("/admin"))                    # fallback pages, listed on the overview
+    assert "Booking questions" in overview and "Add-ons" in overview
 
 
 def test_admin_form_explains_mistakes(client, sign_in):
@@ -414,7 +416,8 @@ def test_missing_ghl_fields_are_created_once(fake, app, client, sign_in, q):
         out = ghl.create_missing_fields()
     made = {f["fieldKey"]: f for f in fake.ghl_created_fields[1:]}
     assert {"contact.nbc_invite_link", "contact.nbc_booked_by", "opportunity.class_price", "opportunity.delivery",
-            "opportunity.reg_date", "opportunity.instructor"} <= set(made)
+            "opportunity.reg_date"} <= set(made)
+    assert "opportunity.instructor" not in made                 # no instructor data in GHL
     assert made["contact.nbc_invite_link"]["dataType"] == "TEXT" and made["contact.nbc_invite_link"]["model"] == "contact"
     assert "opportunity.class_id" in out["existing"] and not out["failed"] and not out["renamed_by_ghl"]
     assert any(s.startswith("opportunity.hours (a field named “Hours”") for s in out["skipped"])

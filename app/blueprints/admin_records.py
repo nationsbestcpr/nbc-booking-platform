@@ -295,7 +295,8 @@ from ..integrations.ghl import CONTACT_FIELD_KEYS, DEFAULT_TAGS, FIELD_KEYS  # n
 
 # (The older names some saved values still carry are kept.)
 ID_MAP_SETTINGS = {"ghl_custom_field_ids": set(FIELD_KEYS) | set(CONTACT_FIELD_KEYS) | {
-                       "session_id", "registration_id", "site", "class_date", "class_time", "product", "city"},
+                       "session_id", "registration_id", "site", "class_date", "class_time", "product", "city",
+                       "instructor"},
                    "ghl_tags": set(DEFAULT_TAGS)}
 # Booking questions copied to a GHL field are saved in ghl_custom_field_ids under the field's key.
 ID_MAP_KEY_PATTERN = r"opportunity\.[a-z0-9_]+"

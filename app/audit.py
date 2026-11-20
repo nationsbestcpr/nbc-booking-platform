@@ -20,7 +20,13 @@ def record(conn: Connection, action: str, entity_type: str, entity_id: int | Non
            before: Any = None, after: Any = None, reason: str | None = None) -> None:
     user = auth.current_user()
     actor_id = user.id
-    viewing = auth.viewing_as()
+    key = getattr(user, "key", None)
+    if key is not None:
+        # A call to /api/v1 from another tool (the NBC Ops Hub), for this staff member.
+        mark = {"via_api": key.name, "api_key": key.prefix}
+        after = {**after, **mark} if isinstance(after, dict) else ({**mark, "value": after} if after is not None
+                                                                   else mark)
+    viewing = auth.viewing_as() if key is None else None
     if viewing:
         # An admin using "View as": the admin did it, from this account's role.
         actor_id = viewing["admin_id"]

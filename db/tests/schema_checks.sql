@@ -619,5 +619,23 @@ SELECT pg_temp.check((SELECT is_nullable = 'YES' FROM information_schema.columns
                        WHERE table_name = 'checkout_sessions' AND column_name = 'seat_hold_id'),
   'a page collecting a transfer''s price difference holds no seat');
 
+-- 0010: API keys for the NBC Ops Hub; the all-permissions role is the Superadmin.
+SELECT pg_temp.check((SELECT name = 'Superadmin' AND grants_all FROM roles WHERE code = 'admin'),
+  'the role holding every permission is called Superadmin');
+SELECT pg_temp.expect_error($q$INSERT INTO api_keys (name, prefix, secret_hash, created_by_user_id)
+                               SELECT 'Ops Hub', 'abcd1234', '\x01', id FROM user_accounts WHERE email = 'cs@example.test'$q$,
+  '42501', 'only someone who may manage API keys can make one');
+INSERT INTO user_accounts (email, display_name, status) VALUES ('super@example.test', 'Superadmin', 'active');
+INSERT INTO user_roles (user_account_id, role_code) SELECT id, 'admin' FROM user_accounts WHERE email = 'super@example.test';
+INSERT INTO api_keys (name, prefix, secret_hash, created_by_user_id)
+SELECT 'Ops Hub', 'abcd1234', '\x01', id FROM user_accounts WHERE email = 'super@example.test';
+SELECT pg_temp.expect_error($q$INSERT INTO api_key_permissions (api_key_id, permission_code)
+                               SELECT id, 'no.such_permission' FROM api_keys WHERE prefix = 'abcd1234'$q$,
+  '23503', 'an API key can only be given permissions that exist');
+SELECT pg_temp.expect_error($q$UPDATE api_keys SET revoked_at = now(),
+                                      revoked_by_user_id = (SELECT id FROM user_accounts WHERE email = 'cs@example.test')
+                                WHERE prefix = 'abcd1234'$q$,
+  '42501', 'only someone who may manage API keys can switch one off');
+
 \echo 'All schema checks passed.'
 ROLLBACK;

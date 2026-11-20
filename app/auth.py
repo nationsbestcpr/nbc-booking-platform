@@ -39,8 +39,9 @@ from . import db
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
-# Roles whose dashboard is the booking console (roles.dashboard_key).
-CONSOLE_DASHBOARDS = ("manager", "customer_service")
+# Staff who manage people, roles or API keys open the Superadmin's user management;
+# other staff open a page pointing them to the NBC Ops Hub, where the desk is.
+USER_MANAGEMENT = frozenset({"user.manage", "role.manage", "api_key.manage"})
 
 
 @dataclass
@@ -81,9 +82,9 @@ class CurrentUser:
         'admin' for admins and other staff roles, 'instructor' for a role whose
         dashboard is the instructor one, else 'student' (users and students)."""
         if self.is_staff:
-            if not self.is_admin and any(r.get("dashboard_key") in CONSOLE_DASHBOARDS for r in self.roles):
-                return "console"
-            return "admin"
+            if self.is_admin or self.permissions & USER_MANAGEMENT:
+                return "admin"
+            return "console"
         if any(r.get("dashboard_key") == "instructor" for r in self.roles):
             return "instructor"
         return "student"

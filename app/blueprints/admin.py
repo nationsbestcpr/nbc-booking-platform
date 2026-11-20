@@ -1,4 +1,5 @@
-"""Admin area: dashboard, Users, Roles & permissions, Integrations.
+"""Superadmin area: user management (Overview, Users, Add a person, Roles & permissions, API keys),
+plus the Integrations page (a fallback page; see areas.FALLBACK).
 
 Open to staff accounts; each tab needs its own permission:
   * Users: 'user.manage' (grant and revoke roles, suspend and reactivate).
@@ -14,7 +15,7 @@ from __future__ import annotations
 
 import os
 
-from flask import Blueprint, abort, flash, redirect, render_template, request, url_for
+from flask import Blueprint, abort, current_app, flash, redirect, render_template, request, url_for
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
@@ -31,10 +32,10 @@ def _refusal_message(exc: DBAPIError) -> str | None:
         if "granted automatically" in detail:
             return "Student and User are given automatically (a paid seat, a new account), not by hand."
         if "only an admin" in detail:
-            return "Only an admin can give or remove the Admin role."
+            return "Only a Superadmin can give or remove the Superadmin role."
         return "Your account isn't allowed to change roles."
     if state == "23001":
-        return "At least one active admin must remain. Make someone else an admin first."
+        return "At least one active Superadmin must remain. Make someone else a Superadmin first."
     if state == "23505":
         return "They already have that role."
     return None
@@ -83,6 +84,13 @@ def _describe(entry: dict, role_names: dict[str, str], account_name: str | None 
         return f"Started viewing the app as this account{who}"
     if action == "user.view_as_stop":
         return f"Stopped viewing as this account{who}" + (" (timed out)" if after.get("reason") == "timed out" else "")
+    if action == "user.create":
+        return f"Added the account{who}" + (f" with the {role_names.get(after.get('role'), after.get('role'))} role"
+                                             if after.get("role") else "")
+    if action == "api_key.create":
+        return f"Made the API key “{after.get('name', '')}” (nbc_{after.get('prefix', '')}…)"
+    if action == "api_key.revoke":
+        return f"Switched off the API key “{before.get('name', '')}” (nbc_{before.get('prefix', '')}…)"
     if action == "user.password_reset":
         return f"Reset the password{who}"
     return action.replace("_", " ").replace(".", ": ")
@@ -92,56 +100,49 @@ def _role_names() -> dict[str, str]:
     return {r["code"]: r["name"] for r in db.fetch_all("SELECT code, name FROM roles")}
 
 
-# --- Dashboard -----------------------------------------------------------------------
+# --- Overview: the Superadmin's user management ----------------------------------------
 
 @bp.get("")
 @auth.staff_required
 def home():
+    """Who has which role, the latest changes to people and keys, and the fallback pages."""
     user = auth.current_user()
-    stats = db.fetch_one("""
-        SELECT
-          (SELECT count(*) FROM user_accounts WHERE status = 'active') AS accounts,
-          (SELECT count(DISTINCT ur.user_account_id) FROM user_roles ur JOIN roles r ON r.code = ur.role_code
-            JOIN user_accounts a ON a.id = ur.user_account_id
-            WHERE ur.revoked_at IS NULL AND r.is_staff AND a.status = 'active') AS staff,
-          (SELECT count(*) FROM instructors WHERE status = 'active') AS instructors,
-          (SELECT count(DISTINCT ur.user_account_id) FROM user_roles ur
-            WHERE ur.revoked_at IS NULL AND ur.role_code = 'student') AS students,
-          (SELECT count(*) FROM sessions s JOIN metros m ON m.id = s.metro_id
-            WHERE s.status = 'scheduled' AND s.is_published AND s.starts_at > now()
-              AND m.booking_system = 'engine') AS classes_on_sale,
-          (SELECT count(*) FROM integration_issues WHERE resolved_at IS NULL) AS open_problems,
-          (SELECT count(*) FROM unsynced_items) AS unsynced
+    if not (user.is_admin or user.permissions & auth.USER_MANAGEMENT):
+        return redirect(url_for("console.home"))
+    by_role = db.fetch_all("""
+        SELECT r.code, r.name, r.is_staff, r.is_self_service, r.grants_all,
+               count(DISTINCT a.id) FILTER (WHERE a.status = 'active') AS people
+          FROM roles r
+          LEFT JOIN user_roles ur ON ur.role_code = r.code AND ur.revoked_at IS NULL
+          LEFT JOIN user_accounts a ON a.id = ur.user_account_id
+         GROUP BY r.code ORDER BY r.sort_order
     """)
-    next_classes = []
-    if user.has_permission("class.view"):
-        next_classes = db.fetch_all("""
-            SELECT s.id, s.starts_at, s.ends_at, s.time_zone, cf.name AS course_name, si.name AS site_name,
-                   av.sold_seats, av.seat_limit, av.waitlist_count,
-                   EXISTS (SELECT 1 FROM assignments a WHERE a.session_id = s.id AND a.role = 'lead'
-                             AND a.status = 'assigned') AS has_lead
-              FROM sessions s
-              JOIN sites si ON si.id = s.site_id
-              JOIN course_families cf ON cf.id = s.course_family_id
-              JOIN session_availability av ON av.session_id = s.id
-             WHERE s.status = 'scheduled' AND s.starts_at > now()
-               AND user_has_permission(:uid, 'class.view', s.metro_id)
-             ORDER BY s.starts_at LIMIT 6
-        """, uid=user.id)
+    stats = db.fetch_one("""
+        SELECT (SELECT count(*) FROM user_accounts WHERE status = 'active') AS active,
+               (SELECT count(*) FROM user_accounts WHERE status = 'suspended') AS suspended,
+               (SELECT count(*) FROM user_accounts a WHERE a.status = 'active'
+                   AND NOT EXISTS (SELECT 1 FROM user_identities i WHERE i.user_account_id = a.id)) AS not_signed_in,
+               (SELECT count(*) FROM api_keys WHERE revoked_at IS NULL
+                   AND (expires_at IS NULL OR expires_at > now())) AS live_keys
+    """)
     recent = []
-    if user.has_permission("audit.view"):
+    if user.has_permission("user.manage") or user.has_permission("audit.view"):
         recent = db.fetch_all("""
             SELECT l.occurred_at, l.action, l.entity_type, l.entity_id, l.before, l.after,
                    a.display_name AS actor, t.display_name AS target
               FROM audit_log l
               LEFT JOIN user_accounts a ON a.id = l.user_account_id
               LEFT JOIN user_accounts t ON l.entity_type = 'user_account' AND t.id = l.entity_id
-             ORDER BY l.occurred_at DESC LIMIT 8
+             WHERE l.action LIKE 'user.%' OR l.action LIKE 'role.%' OR l.action LIKE 'api_key.%'
+             ORDER BY l.occurred_at DESC LIMIT 10
         """)
         names = _role_names()
         for r in recent:
             r["text"] = describe(r, names, r["target"])
-    return render_template("admin/home.html", stats=stats, recent=recent, next_classes=next_classes,
+    live = current_app.config["APP_ENV"] == "production"
+    fallback = [(label, [(e, l) for e, l in items if not (live and e in areas.TEST_SITE_ONLY)])
+                for label, items in areas.FALLBACK] if areas.fallback_open(user) else []
+    return render_template("admin/home.html", by_role=by_role, stats=stats, recent=recent, fallback=fallback,
                            tabs=areas.tabs_for(user))
 
 
@@ -175,6 +176,58 @@ def users():
                             and u["status"] == "active" and not u["is_admin"])
     return render_template("admin/users.html", rows=rows[:200], more=len(rows) > 200, q=q, role=role,
                            status=status, roles=roles, back=request.full_path.rstrip("?"), tabs=areas.tabs_for(me))
+
+
+@bp.route("/users/new", methods=["GET", "POST"])
+@auth.permission_required("user.manage")
+def users_new():
+    """Add a staff member or instructor: the account, and the role it needs. They sign in with Microsoft or
+    Google using this email (nothing to send: the email is the invitation)."""
+    roles = db.fetch_all("SELECT code, name, description, is_scopable, grants_all FROM roles "
+                         "WHERE NOT is_self_service ORDER BY sort_order")
+    cities = db.fetch_all("SELECT id, name, state_code FROM metros WHERE is_active ORDER BY name")
+    form = {k: request.form.get(k, "").strip() for k in ("first_name", "last_name", "email", "role_code", "city_id")}
+    error = None
+    if request.method == "POST":
+        role = next((r for r in roles if r["code"] == form["role_code"]), None)
+        email = form["email"].lower()
+        existing = db.fetch_value("SELECT id FROM user_accounts WHERE email = :e", e=email)
+        if not (form["first_name"] and form["last_name"]):
+            error = "Enter their first and last name."
+        elif not auth.EMAIL_RE.match(email):
+            error = "Enter an email address like name@nationsbestcpr.com."
+        elif existing:
+            flash("That email already has an account: give the role here.", "error")
+            return redirect(url_for("admin.users_detail", uid=existing))
+        elif role is None:
+            error = "Choose the role they need."
+        elif form["city_id"] and not role["is_scopable"]:
+            error = f"{role['name']} can't be limited to one city."
+        else:
+            try:
+                with db.transaction() as conn:
+                    uid = conn.execute(text("""
+                        INSERT INTO user_accounts (email, display_name, status) VALUES (:e, :n, 'active') RETURNING id
+                    """), {"e": email, "n": f"{form['first_name']} {form['last_name']}"}).scalar_one()
+                    conn.execute(text("INSERT INTO user_roles (user_account_id, role_code) VALUES (:u, 'user')"),
+                                 {"u": uid})
+                    conn.execute(text("""
+                        INSERT INTO user_roles (user_account_id, role_code, scope_metro_id, granted_by_user_id)
+                        VALUES (:u, :r, :c, :by)
+                    """), {"u": uid, "r": role["code"], "c": form["city_id"] or None, "by": auth.current_user().id})
+                    audit.record(conn, "user.create", "user_account", uid,
+                                 after={"email": email, "role": role["code"], "city_id": form["city_id"] or None})
+            except DBAPIError as exc:
+                message = _refusal_message(exc)
+                if message is None:
+                    raise
+                error = message
+            else:
+                flash(f"Added {form['first_name']} {form['last_name']} as {role['name']}. They sign in with "
+                      f"Microsoft or Google using {email}.", "ok")
+                return redirect(url_for("admin.users_detail", uid=uid))
+    return render_template("admin/user_new.html", roles=roles, cities=cities, form=form, error=error,
+                           tabs=areas.tabs_for(auth.current_user())), (400 if error else 200)
 
 
 def _load_account(uid: int) -> dict:

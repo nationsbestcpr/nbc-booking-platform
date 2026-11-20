@@ -69,7 +69,7 @@ def as_admin(sign_in):
     ("cs@example.test", "/console"),
     ("manager@example.test", "/console"),
     ("opslead@example.test", "/console"),          # manager + operations: the desk first
-    ("ops@example.test", "/admin"),
+    ("ops@example.test", "/console"),              # staff who don't manage people: where the desk went
     ("admin@example.test", "/admin"),
 ])
 def test_dashboard_opens_the_area_for_the_account(client, sign_in, email, area):
@@ -88,11 +88,13 @@ def test_signed_out_people_are_sent_to_sign_in(client):
     ("alder1@example.test", ["/my", "/account/profile", "/account/settings"],
      ["/teach", "/admin", "/admin/users", "/admin/roles", "/admin/integrations"]),
     ("marcus.hale@example.test", ["/teach", "/my"], ["/admin", "/admin/users", "/admin/integrations"]),
-    ("cs@example.test", ["/admin", "/console"], ["/admin/users", "/admin/roles", "/admin/integrations", "/teach"]),
+    ("cs@example.test", ["/console"], ["/admin/users", "/admin/roles", "/admin/integrations", "/admin/api-keys",
+                                       "/teach"]),
     ("manager@example.test", ["/console", "/console/approvals"], ["/admin/integrations", "/admin/users"]),
-    ("ops@example.test", ["/admin"], ["/admin/integrations"]),
-    ("viewer@example.test", ["/admin"], ["/admin/integrations"]),
-    ("admin@example.test", ["/admin", "/admin/users", "/admin/roles", "/admin/roles/viewer", "/admin/integrations"], []),
+    ("ops@example.test", ["/console"], ["/admin/integrations", "/admin/users/new"]),
+    ("viewer@example.test", ["/console"], ["/admin/integrations", "/admin/api-keys"]),
+    ("admin@example.test", ["/admin", "/admin/users", "/admin/users/new", "/admin/roles", "/admin/roles/viewer",
+                            "/admin/api-keys", "/admin/integrations"], []),
 ])
 def test_each_page_needs_its_permission(client, sign_in, email, allowed, refused):
     sign_in(email)
@@ -218,7 +220,7 @@ def test_the_last_admin_cannot_remove_their_own_admin_role(client, sign_in, post
     if others:
         pytest.skip("another admin exists in this test database")
     res = post_action(f"/admin/users/{grant['user_account_id']}/roles/{grant['id']}/revoke", {}, follow_redirects=True)
-    assert "At least one active admin must remain" in text_of(res)
+    assert "At least one active Superadmin must remain" in text_of(res)
 
 
 def test_suspend_and_reactivate(client, new_account, sign_in, post_form, post_action):
@@ -259,8 +261,8 @@ def test_admin_changes_a_roles_permissions(client, sign_in, post_form, post_acti
         assert "audit.view" in {r["permission_code"] for r in query(
             "SELECT permission_code FROM role_permissions WHERE role_code = 'viewer'")}
         sign_in("viewer@example.test")
-        page = text_of(client.get("/admin"))       # the new permission works at once
-        assert "The action log is visible to roles" not in page and "Changed the Viewer role" in page
+        res = client.get("/admin/log")             # the new permission works at once
+        assert res.status_code == 200 and "Changed the Viewer role" in text_of(res)
     finally:
         sign_in("admin@example.test")
         post_form("/admin/roles/viewer", {"permissions": before})
@@ -331,13 +333,17 @@ def sidebar(page: str) -> str:
 
 
 def test_sidebar_sections_follow_permissions(client, sign_in):
-    sign_in("cs@example.test")
+    sign_in("cs@example.test")              # the desk is in the NBC Ops Hub: nothing of it in the sidebar
     nav = sidebar(client.get("/console").get_data(as_text=True))
-    for shown in (">Today</a>", ">Find a student</a>", ">Book by phone or invoice</a>", ">Classes</a>",
-                  ">All bookings</a>", ">Waiting lists</a>", ">Password</a>"):
-        assert shown in nav
-    for hidden in (">Refund approvals</a>", ">Integrations</a>", ">Users</a>", ">Instructors</a>",
+    assert ">Where your desk is</a>" in nav and ">Password</a>" in nav
+    for hidden in (">Find a student</a>", ">Refunds</a>", ">Classes</a>", ">Integrations</a>", ">Users</a>",
                    ">Action log</a>", ">Business settings</a>"):
+        assert hidden not in nav
+    sign_in("admin@example.test")           # the Superadmin: user management only
+    nav = sidebar(client.get("/admin").get_data(as_text=True))
+    for shown in (">Overview</a>", ">Users</a>", ">Add a person</a>", ">Roles &amp; permissions</a>", ">API keys</a>"):
+        assert shown in nav
+    for hidden in (">Find a student</a>", ">Classes</a>", ">Integrations</a>", ">Test data</a>"):
         assert hidden not in nav
     sign_in("marcus.hale@example.test")
     nav = sidebar(client.get("/teach").get_data(as_text=True))
@@ -349,9 +355,9 @@ def test_sidebar_sections_follow_permissions(client, sign_in):
 
 def test_current_page_is_marked_in_the_sidebar(client, sign_in, query):
     sign_in("admin@example.test")
-    sid = query("SELECT id FROM sessions WHERE slug = '2027-01-16-henrico' ORDER BY id LIMIT 1")[0]["id"]
-    nav = sidebar(client.get(f"/admin/classes/{sid}").get_data(as_text=True))
-    assert 'href="/admin/classes" aria-current="page"' in nav
+    uid = query("SELECT id FROM user_accounts WHERE email = 'cs@example.test'")[0]["id"]
+    nav = sidebar(client.get(f"/admin/users/{uid}").get_data(as_text=True))
+    assert 'href="/admin/users" aria-current="page"' in nav
 
 
 def test_classes_list_and_detail_come_from_the_schedule(client, sign_in, query):

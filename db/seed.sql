@@ -59,7 +59,7 @@ INSERT INTO app_settings (key, value, description) VALUES
 -- -----------------------------------------------------------------------------
 -- sort_order decides which role the app treats as someone's main one after sign-in.
 INSERT INTO roles (code, name, description, dashboard_key, sign_in_method, is_staff, is_self_service, grants_all, is_scopable, sort_order) VALUES
-  ('admin',             'Admin',                     'Everything, including people, roles, settings and billing items.',                 'admin',             'microsoft', true,  false, true,  false, 10),
+  ('admin',             'Superadmin',                'Everything: people and roles, API keys, and every desk action (through the API or the fallback pages).', 'admin',             'microsoft', true,  false, true,  false, 10),
   ('manager',           'Manager',                   'Customer service plus large refunds, extra seats over the limit and the audit log.', 'manager',           'microsoft', true,  false, false, true,  20),
   ('customer_service',  'Customer service',          'Find classes and students; book by phone or invoice; transfer, cancel, refund within policy.', 'customer_service', 'microsoft', true, false, false, true, 30),
   ('operations',        'Operations',                'Teaching side: post classes to instructors, approve who teaches, add helpers, coverage.',     'operations',       'microsoft', true, false, false, true, 40),
@@ -122,6 +122,7 @@ INSERT INTO permissions (code, area, description, own_records_only) VALUES
   ('self.bookings_view',       'My account',  'See my bookings, receipts and certificates', true),
   -- Administration
   ('user.manage',              'Admin',       'Invite people; grant and revoke roles', false),
+  ('api_key.manage',           'Admin',       'Create and switch off the keys other tools (the NBC Ops Hub) use to call the booking engine', false),
   ('role.manage',              'Admin',       'Change which permissions each role grants', false),
   ('user.impersonate',         'Admin',       'View the app as another account (read-only), to see what they see', false),
   ('settings.manage',          'Admin',       'Change business settings (hold minutes, alert days, ...)', false),

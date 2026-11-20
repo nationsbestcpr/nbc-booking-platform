@@ -46,7 +46,7 @@ def test_customer_service_and_managers_land_on_the_desk(client, sign_in):
 def test_admins_keep_their_dashboard_and_get_a_link_to_the_desk(client, sign_in):
     sign_in("admin@example.test")
     assert client.get("/dashboard").headers["Location"].endswith("/admin")
-    assert 'href="/console"' in client.get("/admin").get_data(as_text=True)
+    assert 'href="/console/desk"' in client.get("/admin").get_data(as_text=True)     # the fallback desk
     assert client.get("/console").status_code == 200
 
 
@@ -142,7 +142,7 @@ def test_refund_approvals_are_for_managers(client, sign_in):
     sign_in("manager@example.test")
     page = text_of(client.get("/console/approvals"))
     assert "need a manager" in page and "decided yet" in page
-    assert ">Refund approvals</a>" in client.get("/console").get_data(as_text=True)
+    assert 'href="/console/approvals"' in client.get("/console").get_data(as_text=True)
 
 
 def test_phone_booking_starts_from_the_class_search(client, sign_in, q):
@@ -212,7 +212,6 @@ def ask_refund(client, seat, amount: str, reason: str = "customer_cancel", note:
 
 def test_customer_service_refund_waits_for_a_manager_then_goes_through(client, sign_in, seat, q):
     sign_in("cs@example.test")
-    assert ">Refunds</a>" in client.get("/console").get_data(as_text=True)
     page = text_of(client.get(f"/console/bookings/{seat['public_id']}/refund"))
     assert "goes to a manager to approve first" in page and "Ask for refund" in page
     res = ask_refund(client, seat, "50")

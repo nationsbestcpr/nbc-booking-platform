@@ -1,4 +1,11 @@
-"""The booking console: the desk for customer service and managers (/console).
+"""The booking console's pages (/console): now a fallback while the NBC Ops Hub takes over the desk.
+
+Staff who open /console see where their desk is now (the NBC Ops Hub, which
+calls /api/v1). The pages below stay, open only to a Superadmin
+(areas.FALLBACK_OPEN_TO), until the Ops Hub's screens are live; the API reuses
+their queries (picture, roster, refund_rows).
+
+Originally: the desk for customer service and managers.
 
 Same sign-in page as everyone. Accounts whose roles open the console
 (roles.dashboard_key 'customer_service' or 'manager') land here after signing
@@ -76,8 +83,23 @@ def _ctx(**kw) -> dict:
 # --- Today ---------------------------------------------------------------------------
 
 @bp.get("")
-@auth.permission_required("student.view")
+@auth.staff_required
 def home():
+    """Staff land here. The desk is in the NBC Ops Hub now; a Superadmin (the fallback) still gets the old desk."""
+    user = auth.current_user()
+    if areas.fallback_open(user) and user.has_permission("student.view"):
+        return _desk_page()
+    return render_template("console/moved.html", **_ctx())
+
+
+@bp.get("/desk")
+@auth.permission_required("student.view")
+def desk_today():
+    """The old desk's first page (a fallback page)."""
+    return _desk_page()
+
+
+def _desk_page():
     """What the desk needs first thing: search, today's classes, what needs a look."""
     user = auth.current_user()
     stats = db.fetch_one(f"""
@@ -271,8 +293,13 @@ def _booking_or_404(public_id: str) -> dict:
 @auth.permission_required("student.view")
 def find_booking(public_id: str):
     """One seat, with everything around it."""
-    user = auth.current_user()
     r = _booking_or_404(public_id)
+    return render_template("console/booking.html", r=r, **picture(r), **_ctx())
+
+
+def picture(r: dict) -> dict:
+    """Everything around one seat, as this person may see it (the booking page and GET /api/v1/bookings/<id>)."""
+    user = auth.current_user()
     seats = db.fetch_all("""
         SELECT r.public_id, r.attendee_first_name, r.attendee_last_name, r.attendee_email, r.status
           FROM registrations r WHERE r.order_id = :o ORDER BY r.id
@@ -318,10 +345,9 @@ def find_booking(public_id: str):
     can_decide = user.can("refund.approve_large", r["metro_id"])
     for f in refunds:
         f["can_decide"] = can_decide and f["status"] == "requested"
-    return render_template("console/booking.html", r=r, seats=seats, payments=payments, refunds=refunds,
-                           transfers=transfers, notes=notes, history=history, actions=actions,
-                           show_money=show_money, can_note=user.can("student.note", r["metro_id"]),
-                           pay=_payment_state(r), **_ctx())
+    return {"seats": seats, "payments": payments, "refunds": refunds, "transfers": transfers, "notes": notes,
+            "history": history, "actions": actions, "show_money": show_money,
+            "can_note": user.can("student.note", r["metro_id"]), "pay": _payment_state(r)}
 
 
 def _payment_state(r: dict) -> dict:
@@ -792,8 +818,35 @@ def refunds_list():
     user = auth.current_user()
     tab = request.args.get("tab", "waiting")
     tab = tab if tab in {t[0] for t in REFUND_TABS} else "waiting"
-    states = dict((k, st) for k, _l, st in REFUND_TABS)[tab]
     q = request.args.get("q", "").strip()[:120]
+    rows, status_tabs = refund_rows(tab, q)
+    # Start a refund: find the paid seat by student, buyer, phone or booking number.
+    who = request.args.get("who", "").strip()[:120]
+    candidates = db.fetch_all(f"""
+        SELECT r.public_id, r.status, r.attendee_first_name, r.attendee_last_name, r.attendee_email,
+               r.amount_paid_cents, r.amount_refunded_cents, o.buyer_email,
+               s.starts_at, s.ends_at, s.time_zone, cf.name AS course_name, si.name AS site_name,
+               EXISTS (SELECT 1 FROM refunds f WHERE f.registration_id = r.id
+                        AND f.status IN ('requested', 'approved', 'processing')) AS refund_pending
+          FROM registrations r JOIN orders o ON o.id = r.order_id JOIN sessions s ON s.id = r.session_id
+          JOIN sites si ON si.id = s.site_id JOIN course_families cf ON cf.id = s.course_family_id
+         WHERE user_has_permission(:uid, 'refund.issue', s.metro_id)
+           AND r.amount_paid_cents > r.amount_refunded_cents
+           AND {_SEAT_WHERE}
+         ORDER BY r.status IN ('confirmed', 'awaiting_payment', 'displaced', 'completed') DESC,
+                  s.starts_at DESC, r.id DESC LIMIT 25
+    """, uid=user.id, status="all", channel="", q=who, digits=re.sub(r"\D", "", who),
+        ref=who.lower().replace("#", "").strip()) if len(who) >= 2 else []
+    return render_template("console/refunds.html", rows=rows, tab=tab, status_tabs=status_tabs, q=q, who=who,
+                           candidates=candidates, can_issue=user.has_permission("refund.issue"),
+                           reasons=refunds.REASONS, threshold=refunds.threshold_cents(), **_ctx())
+
+
+
+def refund_rows(tab: str, q: str = "") -> tuple[list[dict], list[dict]]:
+    """Refunds in this person's cities on one tab (and the count on every tab)."""
+    user = auth.current_user()
+    states = dict((k, st) for k, _l, st in REFUND_TABS)[tab]
     rows = db.fetch_all(f"""
         SELECT f.id, f.amount_cents, f.reason, f.note, f.status, f.source, f.requires_manager_approval,
                f.created_at, f.processed_at, f.failure_reason, f.stripe_refund_id,
@@ -821,26 +874,7 @@ def refunds_list():
                    for k, label, st in REFUND_TABS]
     for row in rows:
         row["can_decide"] = row["status"] == "requested" and user.can("refund.approve_large", row["metro_id"])
-    # Start a refund: find the paid seat by student, buyer, phone or booking number.
-    who = request.args.get("who", "").strip()[:120]
-    candidates = db.fetch_all(f"""
-        SELECT r.public_id, r.status, r.attendee_first_name, r.attendee_last_name, r.attendee_email,
-               r.amount_paid_cents, r.amount_refunded_cents, o.buyer_email,
-               s.starts_at, s.ends_at, s.time_zone, cf.name AS course_name, si.name AS site_name,
-               EXISTS (SELECT 1 FROM refunds f WHERE f.registration_id = r.id
-                        AND f.status IN ('requested', 'approved', 'processing')) AS refund_pending
-          FROM registrations r JOIN orders o ON o.id = r.order_id JOIN sessions s ON s.id = r.session_id
-          JOIN sites si ON si.id = s.site_id JOIN course_families cf ON cf.id = s.course_family_id
-         WHERE user_has_permission(:uid, 'refund.issue', s.metro_id)
-           AND r.amount_paid_cents > r.amount_refunded_cents
-           AND {_SEAT_WHERE}
-         ORDER BY r.status IN ('confirmed', 'awaiting_payment', 'displaced', 'completed') DESC,
-                  s.starts_at DESC, r.id DESC LIMIT 25
-    """, uid=user.id, status="all", channel="", q=who, digits=re.sub(r"\D", "", who),
-        ref=who.lower().replace("#", "").strip()) if len(who) >= 2 else []
-    return render_template("console/refunds.html", rows=rows, tab=tab, status_tabs=status_tabs, q=q, who=who,
-                           candidates=candidates, can_issue=user.has_permission("refund.issue"),
-                           reasons=refunds.REASONS, threshold=refunds.threshold_cents(), **_ctx())
+    return rows, status_tabs
 
 
 @bp.post("/refunds/<int:refund_id>/<decision>")

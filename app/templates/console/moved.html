@@ -1,0 +1,18 @@
+{% extends "dash/layout.html" %}
+{% block title %}Your desk{% endblock %}
+{% block heading %}Hi, {{ current_user.first_name }} <span class="accent">Your Desk Moved</span>{% endblock %}
+{% block subhead %}<p>Finding students, refunds, moving and cancelling seats, phone and invoice bookings, attendance and waiting lists are done in the NBC Ops Hub now.</p>{% endblock %}
+{% block panel %}
+<section class="panel" aria-labelledby="where-title">
+  <h2 id="where-title">Where to work</h2>
+  <p>Open the <strong>NBC Ops Hub</strong> for every customer service and class task. It reads and changes bookings here for you, under your name, with the same permissions and cities you have here.</p>
+  <p class="muted small">This booking app keeps three things: user management for the Superadmin, the instructor portal and the student portal. Your profile and password are in the sidebar.</p>
+</section>
+<section class="panel" aria-labelledby="access-title">
+  <h2 id="access-title">What your roles allow</h2>
+  <ul class="list">
+    {% for r in current_user.roles if r.is_staff %}<li><span><strong>{{ r.name }}</strong></span></li>{% else %}<li><span class="muted">No staff role.</span></li>{% endfor %}
+  </ul>
+  <p class="muted small">If something in the Ops Hub says you aren't allowed, ask a Superadmin to change your role.</p>
+</section>
+{% endblock %}

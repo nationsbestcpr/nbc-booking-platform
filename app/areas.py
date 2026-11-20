@@ -1,86 +1,56 @@
-"""Dashboard areas and their sidebar navigation.
+"""Dashboard areas and their sidebar navigation, and which pages the booking app still shows.
+
+The booking app keeps three things: user management (the Superadmin), the
+instructor portal and the student portal (with booking and checkout). The
+desk's work (finding students, refunds, moves, cancellations, phone and
+invoice bookings, attendance at the desk, waiting lists, class lists) is done
+in the NBC Ops Hub through the booking engine's API (/api/v1, docs/api.md).
 
 Each signed-in account opens one area, worked out from its roles
-(CurrentUser.area): customer service and managers -> console (the booking
-console), admins and other staff roles -> admin, the instructor role ->
-instructor, everyone else -> student. A sidebar item with permissions shows only to
-accounts holding at least one of them, and a section with no visible items
-is left out, so what each role sees is set by role data, not by code.
+(CurrentUser.area): people who manage users, roles or API keys -> admin (the
+Superadmin's user management), other staff -> console (a page pointing them
+to the Ops Hub), the instructor role -> instructor, everyone else -> student.
+A sidebar item with permissions shows only to accounts holding at least one
+of them, and a section with no visible items is left out.
 
-Detail pages light up their list's item: an endpoint 'admin.classes_detail'
-belongs to the 'admin.classes' item.
+The old desk and admin pages stay as a fallback until the Ops Hub's screens
+are live: off every sidebar and open only to a Superadmin (FALLBACK_OPEN_TO;
+the tests open them to staff to keep testing them). Superadmin → Overview
+lists them.
+
+Detail pages light up their list's item: an endpoint 'admin.users_detail'
+belongs to the 'admin.users' item.
 """
 
 from __future__ import annotations
 
-from flask import Flask, current_app, request
+from flask import Flask, abort, current_app, request
 
 from . import auth
 
 Item = tuple[str, str, tuple[str, ...]]          # (endpoint, label, any of these permissions)
 
 # area -> (title, home endpoint, [(section label, [items])])
+_MY_ACCOUNT: tuple[str, list[Item]] = ("My account", [
+    ("me.profile", "Profile", ()),
+    ("me.settings", "Password", ()),
+])
 AREAS: dict[str, tuple[str, str, list[tuple[str, list[Item]]]]] = {
-    "console": ("Booking console", "console.home", [
-        ("Desk", [
-            ("console.home", "Today", ()),
-            ("console.find", "Find a student", ("student.view",)),
-            ("console.new_booking", "Book by phone or invoice", ("booking.create_phone", "booking.create_invoice")),
-            ("console.refunds_list", "Refunds", ("refund.issue", "refund.approve_large")),
-            ("console.approvals", "Refund approvals", ("refund.approve_large",)),
-        ]),
-        ("Classes", [
-            ("admin.classes", "Classes", ("class.view",)),
-            ("admin.bookings", "All bookings", ("student.view",)),
-            ("admin.waitlists", "Waiting lists", ("waitlist.view",)),
-            ("admin.instructors", "Instructors", ("instructor.view",)),
-        ]),
-        ("System", [
-            ("admin.integrations", "Integrations", ("system.health_view",)),
-            ("admin.test_data", "Test data", ("system.health_view",)),
-            ("admin.log", "Action log", ("audit.view",)),
-        ]),
-        ("My account", [
-            ("me.profile", "Profile", ()),
-            ("me.settings", "Password", ()),
-        ]),
-    ]),
-    "admin": ("Admin", "admin.home", [
-        ("Overview", [
-            ("admin.home", "Dashboard", ()),
-        ]),
-        ("Booking console", [
-            ("console.home", "Today at the desk", ("student.view",)),
-            ("console.find", "Find a student", ("student.view",)),
-            ("console.new_booking", "Book by phone or invoice", ("booking.create_phone", "booking.create_invoice")),
-            ("console.refunds_list", "Refunds", ("refund.issue", "refund.approve_large")),
-            ("console.approvals", "Refund approvals", ("refund.approve_large",)),
-        ]),
-        ("Classes", [
-            ("admin.classes", "Classes", ("class.view",)),
-            ("admin.bookings", "Bookings", ("student.view",)),
-            ("admin.waitlists", "Waiting lists", ("waitlist.view",)),
-            ("admin.locations", "Locations", ("class.view",)),
-        ]),
-        ("Booking setup", [
-            ("admin.questions", "Booking questions", ("booking_setup.manage",)),
-            ("admin.addons", "Add-ons", ("booking_setup.manage",)),
-        ]),
-        ("People", [
+    "admin": ("Superadmin", "admin.home", [
+        ("User management", [
+            ("admin.home", "Overview", ()),
             ("admin.users", "Users", ("user.manage",)),
-            ("admin.instructors", "Instructors", ("instructor.view",)),
+            ("admin.users_new", "Add a person", ("user.manage",)),
             ("admin.roles", "Roles & permissions", ("user.manage", "role.manage")),
+            ("admin.api_keys", "API keys", ("api_key.manage",)),
         ]),
-        ("System", [
-            ("admin.integrations", "Integrations", ("system.health_view",)),
-            ("admin.test_data", "Test data", ("system.health_view",)),
-            ("admin.log", "Action log", ("audit.view",)),
-            ("admin.settings", "Business settings", ("settings.manage",)),
+        _MY_ACCOUNT,
+    ]),
+    "console": ("Staff", "console.home", [
+        ("Your work", [
+            ("console.home", "Where your desk is", ()),
         ]),
-        ("My account", [
-            ("me.profile", "Profile", ()),
-            ("me.settings", "Password", ()),
-        ]),
+        _MY_ACCOUNT,
     ]),
     "instructor": ("Instructor", "teach.home", [
         ("Teaching", [
@@ -88,21 +58,40 @@ AREAS: dict[str, tuple[str, str, list[tuple[str, list[Item]]]]] = {
             ("teach.certifications", "Certifications", ("own.certs_view",)),
             ("teach.pay", "Pay", ("own.pay_view",)),
         ]),
-        ("My account", [
-            ("me.profile", "Profile", ()),
-            ("me.settings", "Password", ()),
-        ]),
+        _MY_ACCOUNT,
     ]),
     "student": ("My account", "me.home", [
         ("My classes", [
             ("me.home", "Dashboard", ()),
         ]),
-        ("My account", [
-            ("me.profile", "Profile", ()),
-            ("me.settings", "Password", ()),
-        ]),
+        _MY_ACCOUNT,
     ]),
 }
+
+# Pages of the admin and console sections every account allowed by its
+# permissions keeps: user management and the staff page.
+KEPT = {
+    "admin.home", "admin.users", "admin.users_detail", "admin.users_grant", "admin.users_revoke",
+    "admin.users_status", "admin.users_new", "admin.view_as", "admin.view_as_stop", "admin.roles",
+    "admin.roles_detail", "admin.api_keys", "admin.api_keys_revoke", "console.home",
+}
+
+# The fallback pages (until the Ops Hub's screens are live), as the Superadmin's overview lists them.
+FALLBACK = [
+    ("Desk", [("console.desk_today", "Today at the desk"), ("console.find", "Find a student"),
+              ("console.new_booking", "Book by phone or invoice"), ("console.refunds_list", "Refunds"),
+              ("console.approvals", "Refund approvals")]),
+    ("Classes", [("admin.classes", "Classes"), ("admin.bookings", "Bookings"), ("admin.waitlists", "Waiting lists"),
+                 ("admin.locations", "Locations"), ("admin.instructors", "Instructors")]),
+    ("Set-up and system", [("admin.questions", "Booking questions"), ("admin.addons", "Add-ons"),
+                           ("admin.integrations", "Integrations"), ("admin.settings", "Business settings"),
+                           ("admin.log", "Action log"), ("admin.test_data", "Test data")]),
+]
+
+
+def fallback_open(user: auth.CurrentUser) -> bool:
+    """May this person open the fallback pages? A Superadmin always; staff only where the config says."""
+    return user.is_admin or (current_app.config.get("FALLBACK_OPEN_TO") == "staff" and user.is_staff)
 
 
 TEST_SITE_ONLY = {"admin.test_data"}          # never in the live site's sidebar
@@ -136,6 +125,20 @@ def tabs_for(user: auth.CurrentUser) -> list[dict]:
 
 
 def init_app(app: Flask) -> None:
+    app.config.setdefault("FALLBACK_OPEN_TO", "superadmin")
+
+    @app.before_request
+    def fallback_pages_only_for_superadmin():
+        """The desk and admin pages the Ops Hub replaces answer only a Superadmin (others: not found)."""
+        if request.blueprint not in ("admin", "console") or request.endpoint in KEPT:
+            return None
+        user = auth.current_user()
+        if user is None or not user.is_staff or auth.viewing_as():
+            return None                      # sign-in, permissions and View as answer as before
+        if not fallback_open(user):
+            abort(404)
+        return None
+
     @app.context_processor
     def inject_area():
         user = auth.current_user()

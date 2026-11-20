@@ -24,6 +24,20 @@ live from its owner when needed, or never needs it at all.
 Every mirror must have a named sync path. A mirror nobody refreshes becomes a
 second, wrong source of truth.
 
+## Which way data flows (decided 11/20)
+
+| Between the booking engine and | Direction | How |
+|---|---|---|
+| **NBC Ops Hub** | **Both ways** | The Ops Hub reads classes, students, bookings, refunds and waiting lists, and asks for every desk action (refunds and their approval, moves, cancellations, phone and invoice bookings, attendance, waiting-list changes) through the engine's API, `/api/v1` ([docs/api.md](api.md)). Each call names the staff member it is for; the engine checks their roles and cities and keeps the record. The Ops Hub keeps no copy of booking data. |
+| **GHL** | **One way: engine → GHL** | GHL is only for messaging. The engine sends what emails and texts need (contact, opportunity, stage, class details, tags) and never reads data back; the only reads are GHL's own contact and opportunity ids, so nothing is made twice. **No instructor data goes to GHL** (the opportunity's old "Instructor" field is no longer filled). GHL webhooks (`/webhooks/ghl`) stay unbuilt. |
+| **Airtable** | **Read only: Airtable → engine** | The schedule, locations, courses, prices and instructors come in by the Airtable sync. Nothing is written back for now: the write-back rows below stay off (`airtable_writeback_enabled` is false). |
+| **Stripe** | Both ways (money) | Checkout, refunds and invoices go out; payment webhooks come back. |
+
+The booking app itself keeps only user management (the Superadmin), the
+instructor portal and the student portal (with booking and checkout). The old
+desk and admin pages are a Superadmin-only fallback until the Ops Hub's
+screens are live (`app/areas.py`).
+
 ## Platform by platform
 
 ### Airtable (NBC Master Base) — owns locations, courses, prices, seat caps, schedule
@@ -37,8 +51,8 @@ second, wrong source of truth.
 | Class Schedule (date, time, site, course, status) | **Mirror** plus engine-owned capacity and status: `sessions` | The engine holds the seats, so it needs the class locally. | Airtable sync; `session_airtable_records` maps rows to sessions |
 | Test classes on the test site only (`sessions.slug` starting `nbc-test-`) | **Engine-made**, no Airtable row | Admin → Test data loads ready-made classes and bookings to try the desk on; the sync only touches classes mapped in `session_airtable_records`, so it leaves them alone. Refused on the live site and on a database labelled production. | Admin → Test data, or `flask --app wsgi testdata load` |
 | Instructor assigned / co-instructor (before the portal ships) | **Mirror**, display only: `sessions.airtable_lead_instructor`, `airtable_co_instructor` | CS console shows who teaches from launch. | Airtable sync |
-| Instructor assignment (after the portal ships) | **Owned**: `assignments`, written back to Airtable | Ops approves awards in the engine. | Outbox → Airtable write-back |
-| Enrollment counts for ops dashboards | Not stored separately; the engine computes them and **pushes** to Airtable Enrollment Snapshot | Engine owns the numbers. | Outbox → Airtable |
+| Instructor assignment (after the portal ships) | **Owned**: `assignments`. Written back to Airtable only once write-back is turned on (it's off: Airtable is read-only for now) | Ops approves awards in the engine. | Outbox → Airtable write-back (off) |
+| Enrollment counts for ops dashboards | Not stored separately; the engine computes them. The Ops Hub reads them through `/api/v1/classes`; pushing them to Airtable's Enrollment Snapshot waits for write-back (off) | Engine owns the numbers. | API; Outbox → Airtable (off) |
 | Rental fees, Location Payments, POC portal, Scheduling Trackers, POC approvals, Enrollware Export, Monthly KPI | **Not stored** | The engine never uses them. The sync doesn't even request these fields. | — |
 | Raw Airtable record contents | **Not stored** (hash only, in `airtable_records`) | One mirror is enough. A raw copy would duplicate the private fields outside their protected tables. | — |
 
@@ -56,15 +70,15 @@ second, wrong source of truth.
 | Invoices for corporate / PO bookings | **Reference**: `orders.stripe_invoice_id` | Status comes from Stripe webhooks. |
 | Stripe Customer objects | **Reference only** if Stripe creates one | No customer profile is kept in Stripe on purpose. |
 
-### GHL (HighLevel) — owns contact details, conversations, pipelines, workflows
+### GHL (HighLevel) — messaging only: conversations, pipelines, workflows. The engine sends; it never reads data back
 
 | Data | Engine stores | Why |
 |---|---|---|
 | Contact ID | **Reference**: `people.ghl_contact_id` | One contact per student. |
-| Contact name, email, phone | **Mirror**: `people` | Console search by name, email or phone has to join contacts to registrations. GHL's limit (100 requests per 10 s) can't serve every search and roster. Kept current by the ContactUpdate webhook and the nightly reconciliation. |
+| Contact name, email, phone | **Owned**: `people` (decided 11/16: the booking engine's database is the source of student data) | Sent to GHL for emails, texts and campaigns, never read back from it (11/20: one way). Changes are made here (or through the Ops Hub's API calls) and pushed to GHL. |
 | Name and details as booked | **Snapshot / owned**: `registrations.attendee_*`, `orders.buyer_*`, `waitlist_entries` name fields | The name on the certificate and the order as placed. Edited only through the console, then pushed to GHL. Live contact details are always read from `people`. |
 | Opportunity ID | **Reference**: `registrations.ghl_opportunity_id`, `waitlist_entries.ghl_opportunity_id` | One opportunity per enrollment. It follows the registration across transfers. |
-| Opportunity stage | **Not a source**. The engine owns the registration status and pushes the stage. It keeps `ghl_stage_pushed` only to spot drift. | Golden rule: never drag GHL stages. A dragged stage (OpportunityStageUpdate) becomes an `integration_issues` row, not a status change. |
+| Opportunity stage | **Not a source**. The engine owns the registration status and pushes the stage. It keeps `ghl_stage_pushed` only to spot drift. | Golden rule: never drag GHL stages. The engine doesn't read stages back (one way), so a dragged stage is simply overwritten on the next change. |
 | Pipeline and stage IDs | **Reference**: `ghl_stage_map` | They differ between Sandbox 2 and live, so they are data, not code. |
 | Custom field IDs | **Reference**: `app_settings.ghl_custom_field_ids` | Same reason. |
 | Conversations (texts, emails) | **Not stored**. Fetched live for the console's student view. Only `people.ghl_last_message_at` is kept, for a "new message" marker. | GHL is the system of record. Storing bodies would duplicate private messages. |
@@ -75,6 +89,14 @@ second, wrong source of truth.
 | Who booked a seat (booked by, their email, booking type), its add-ons, mapped question answers | **Not stored as a copy**. Pushed to opportunity custom fields from the engine's own `orders`, `order_addons` and `booking_answers`. | The engine owns the booking; GHL gets what its workflows and reports need. |
 | Attendee invite link (`contact.nbc_invite_link`) and booker's name (`contact.nbc_booked_by`) | **Not stored**. Written to the contact when an invite goes out; only a hash of the link's token is kept (`action_tokens`, purpose `account_invite`), and each send is a `notifications` row. | GHL sends the invitation email from its template; the engine checks the link when it's opened. |
 | OAuth tokens | **Ledger**, encrypted: `oauth_connections` | Each refresh returns a new refresh token, so it can't live in Replit Secrets. Used once the Marketplace app (webhooks) is built; until then contacts and opportunities are written with a Private Integration token kept in Secrets (`GHL_API_TOKEN`), which doesn't rotate. |
+
+### NBC Ops Hub — owns its own desk work (CS log, QC, KPIs, team tools); reads and changes bookings through the API
+
+| Data | Engine stores | Why |
+|---|---|---|
+| API keys the Ops Hub calls with | **Owned**: `api_keys` (a hash of the secret only), `api_key_permissions` | A Superadmin makes one key per tool (Superadmin → API keys). The key limits what the tool may do; the staff member named on each call (`X-Acting-User`) limits it further. |
+| Who did what through the Ops Hub | **Owned**: `audit_log`, under the staff member's account, marked `via_api` with the key's name | The same action log as the booking app's own actions. |
+| The Ops Hub's copy of classes, registrations and payments (the NBC Collector's Enrollware pulls) | **Not stored by the Ops Hub any more** (decided 11/16) | The Ops Hub calls `/api/v1` instead. |
 
 ### Microsoft (Entra ID) and Google — own their sign-in identities
 

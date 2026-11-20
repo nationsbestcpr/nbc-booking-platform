@@ -33,7 +33,11 @@ def database_url() -> str:
 
 @pytest.fixture()
 def app(database_url):
-    return create_app({"APP_ENV": "local", "DATABASE_URL": database_url, "TESTING": True})
+    # The old desk and admin pages are a Superadmin-only fallback now (app/areas.py); the tests
+    # open them to staff so the desk's rules keep being tested on them. tests/test_api.py checks the
+    # real setting and the same rules through /api/v1.
+    return create_app({"APP_ENV": "local", "DATABASE_URL": database_url, "TESTING": True,
+                       "FALLBACK_OPEN_TO": "staff"})
 
 
 @pytest.fixture()

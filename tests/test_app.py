@@ -130,7 +130,7 @@ def test_short_password_is_explained(post_form):
     ("alder1@example.test", "Student"),
     ("marcus.hale@example.test", "Instructor"),
     ("cs@example.test", "Customer service"),
-    ("admin@example.test", "Admin"),
+    ("admin@example.test", "Superadmin"),
 ])
 def test_sign_in_detects_the_role(client, sign_in, email, role):
     res = sign_in(email)

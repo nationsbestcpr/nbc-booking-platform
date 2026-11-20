@@ -10,7 +10,7 @@ from markupsafe import Markup
 
 _KEY = "_csrf"
 # Webhooks are signed by Stripe / GHL instead.
-_EXEMPT_PREFIXES = ("/webhooks/",)
+_EXEMPT_PREFIXES = ("/webhooks/", "/api/")    # the API is called with a key, never a browser session
 
 
 def csrf_token() -> str:

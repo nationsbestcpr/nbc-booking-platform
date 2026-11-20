@@ -1,0 +1,31 @@
+{% extends "dash/layout.html" %}
+{% block title %}Add a person{% endblock %}
+{% block heading %}Add a <span class="accent">Person</span>{% endblock %}
+{% block subhead %}<p>A staff member or instructor, with the role they need. They sign in with Microsoft or Google using this email; there's no password to send.</p>{% endblock %}
+{% block panel %}
+<p><a href="{{ url_for('admin.users') }}" style="color:var(--navy);font-weight:600">← All users</a></p>
+<section class="panel">
+  {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+  <form method="post" action="{{ url_for('admin.users_new') }}" class="stack">
+    {{ csrf_input() }}
+    <div class="toolbar">
+      <div class="field"><label for="first_name">First name</label><input id="first_name" name="first_name" value="{{ form.first_name }}" required autocomplete="off"></div>
+      <div class="field"><label for="last_name">Last name</label><input id="last_name" name="last_name" value="{{ form.last_name }}" required autocomplete="off"></div>
+      <div class="field"><label for="email">Work email</label><input id="email" name="email" type="email" value="{{ form.email }}" required autocomplete="off"></div>
+    </div>
+    <div class="toolbar">
+      <div class="field"><label for="role_code">Role</label>
+        <select id="role_code" name="role_code" required>
+          <option value="">Choose…</option>
+          {% for r in roles %}<option value="{{ r.code }}"{{ ' selected' if r.code == form.role_code }}>{{ r.name }}</option>{% endfor %}
+        </select></div>
+      <div class="field"><label for="city_id">City</label>
+        <select id="city_id" name="city_id"><option value="">All cities</option>{% for c in cities %}<option value="{{ c.id }}"{{ ' selected' if c.id|string == form.city_id }}>{{ c.name }}, {{ c.state_code }}</option>{% endfor %}</select></div>
+    </div>
+    <button class="pill" type="submit">Add person</button>
+  </form>
+  <h3>What each role is for</h3>
+  <dl class="kv">{% for r in roles %}<dt>{{ r.name }}</dt><dd>{{ r.description }}</dd>{% endfor %}</dl>
+  <p class="muted small">Customer service, managers and other staff do their work in the NBC Ops Hub, which acts for them through the booking engine's API with these same roles and cities.</p>
+</section>
+{% endblock %}

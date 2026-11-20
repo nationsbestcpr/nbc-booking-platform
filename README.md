@@ -16,12 +16,16 @@ app/                 Flask app
   security.py        form protection (CSRF token on every POST form)
   areas.py           which dashboard area each account opens, and its tabs
   audit.py           writes the action log (audit_log) inside the change's transaction
+  apikeys.py         API keys: make (shown once), check, switch off; the staff member a call acts for
   blueprints/
     public.py        landing page: classes on sale, greeting by role
     account.py       /sign-in, /create-account, /sign-out
     me.py            /dashboard (opens your area), /my (student area), /account/profile, /account/settings
     teach.py         /teach: instructor area (classes taught, certifications)
-    admin.py         /admin: dashboard, users, roles & permissions, integrations
+    admin.py         /admin: the Superadmin's user management (overview, users, add a person, roles)
+    admin_keys.py    /admin/api-keys: keys for the NBC Ops Hub, and the API access list
+    api.py           /api/v1: the desk's work for the NBC Ops Hub (docs/api.md)
+    console.py       /console: where staff are told their desk is; the old desk as a Superadmin fallback
     webhooks.py      /webhooks/stripe, /webhooks/ghl (stubs until phases 3 and 4)
     health.py        /healthz
   templates/, static/app.css   styled after nationsbestcpr.com
@@ -227,7 +231,7 @@ Notes:
 
 ## Test data on the test site
 
-Admin → **Test data** (test site only; the live site refuses it) loads seven invented classes at a
+Superadmin → Overview → **Test data** (a fallback page; test site only, the live site refuses it) loads seven invented classes at a
 real location from the schedule: full classes with people waiting, a full class with nobody
 waiting, an open class with card, group and invoice bookings and a refund waiting for approval, a
 later class to move to, a class running today (attendance) and a cancelled class to move. Attendees
@@ -249,35 +253,49 @@ Your `.venv`, secrets and databases aren't touched.
 
 ## Dashboards
 
+The booking app keeps three things: **user management** (the Superadmin),
+the **instructor portal** and the **student portal** (with booking and
+checkout). Everything the desk does is in the NBC Ops Hub, which calls the
+booking engine's API (`/api/v1`, [docs/api.md](docs/api.md)).
+
 `/dashboard` opens the area for the signed-in account, worked out from its
-roles (`app/areas.py`): staff roles → **Admin**, the instructor role →
-**Instructor**, everyone else → **My account** (students and users). Each area
-has a sidebar; an item shows only to accounts holding its permission, and a
-role limited to one city only sees that city's records.
+roles (`app/areas.py`): people who manage users, roles or API keys →
+**Superadmin**, other staff → **Staff** (a page pointing to the Ops Hub), the
+instructor role → **Instructor**, everyone else → **My account**.
 
 | Area | Sidebar | Permission |
 |---|---|---|
-| Admin | Dashboard (counts, next classes, recent actions) | any staff role |
-| | Classes, one class (class list, waiting list, prices, instructors) | `class.view`; contact details `student.view`; amounts `payment.view`; access codes `class.packet_view` |
-| | Bookings | `student.view` |
-| | Waiting lists | `waitlist.view` |
-| | Locations (cities, sites, rooms) | `class.view` |
-| | Users (give/remove roles, suspend) | `user.manage` |
-| | Instructors | `instructor.view` |
+| Superadmin | Overview (people by role, latest changes to people and keys, fallback pages) | `user.manage`, `role.manage` or `api_key.manage` |
+| | Users (find, give/remove roles, suspend, View as) | `user.manage` |
+| | Add a person (account and role in one step; they sign in with Microsoft or Google) | `user.manage` |
 | | Roles & permissions | view `user.manage` or `role.manage`; change `role.manage` |
-| | Integrations | `system.health_view` |
-| | Action log | `audit.view` |
-| | Business settings (`app_settings`) | `settings.manage` |
+| | API keys (make, switch off, the API access list) | `api_key.manage` |
+| Staff | Where your desk is (the NBC Ops Hub) | any other staff role |
 | Instructor | Dashboard, Certifications, Pay | `own.classes_view`, `own.certs_view`, `own.pay_view` |
 | My account | Dashboard (upcoming, waiting, past classes) | any account |
 | Every area | Profile, Password | any account |
 
-Everything is read live from the schema. The only changes made from these
-pages are role grants, account status, role permissions and business
-settings; each is written to the action log. The database refuses role
-grants by people who aren't allowed to make them, and never lets the last
-active admin be removed or suspended. `environment` and
-`airtable_writeback_enabled` can't be changed from the screen.
+**Fallback pages.** The old desk and admin pages (Find a student, refunds and
+approvals, phone and invoice bookings, classes, bookings, waiting lists,
+locations, instructors, booking questions, add-ons, integrations, business
+settings, action log, test data) are off every sidebar and answer only a
+Superadmin (others get "not found") until the Ops Hub's screens are live.
+Superadmin → Overview lists them. `FALLBACK_OPEN_TO` is `superadmin`; the
+tests set it to `staff` so the desk's rules keep being tested on those pages.
+
+The database refuses role grants by people who aren't allowed to make them,
+never lets the last active Superadmin be removed or suspended, and only lets
+someone with `api_key.manage` make or switch off an API key.
+
+## The API for the NBC Ops Hub
+
+See [docs/api.md](docs/api.md) for the access list and examples. In short: a
+Superadmin makes a key on **Superadmin → API keys** (shown once; it goes in
+the Ops Hub's Replit Secrets as `BOOKING_ENGINE_API_KEY`). Each call sends
+`Authorization: Bearer nbc_…` and `X-Acting-User: <staff email>`, and runs as
+that staff member, limited to the key's permissions. GHL is one-way (the
+engine sends, for messaging only, and no instructor data); Airtable is read
+only.
 
 ## Integrations: Airtable, Stripe, GHL, Google and Microsoft sign-in
 
